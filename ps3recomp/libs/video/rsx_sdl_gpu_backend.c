@@ -1246,7 +1246,7 @@ static const char* k_overlay_vertex_hlsl =
     "    float2 corner = float2(id & 1u, (id >> 1u) & 1u);\n"
     "    Output output;\n"
     "    output.position = float4(rect.xy + corner * rect.zw, 0.0f, 1.0f);\n"
-    "    output.uv = float2(corner.x, 1.0f - corner.y);\n"
+    "    output.uv = corner;\n"
     "    return output;\n"
     "}\n";
 
@@ -1333,7 +1333,9 @@ static int overlay_pipeline_ready(void)
 
 /* Upload when the pixels changed, then blit into the frame's top-left. */
 static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapchain,
-                         Uint32 swapchain_width, Uint32 swapchain_height)
+                         Uint32 swapchain_width, Uint32 swapchain_height,
+                         Uint32 frame_x, Uint32 frame_y,
+                         Uint32 frame_width, Uint32 frame_height)
 {
     int width = 0, height = 0;
     uint32_t version = 0;
@@ -1403,16 +1405,14 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
     }
     if (!s_overlay.uploaded || !overlay_pipeline_ready()) return;
 
-    /* A fixed share of the window, so it stays readable at any size, near the
-     * top where the cabinet shows it. */
-    float draw_w = (float)swapchain_width * 0.42f;
+    /* Sized and placed against the *presented frame*, not the window: the
+     * frame is letterboxed inside it, and an overlay measured in window pixels
+     * drifts outside the picture. 0.22 of the frame width is what the artwork
+     * covers on the cabinet's own 1280-wide screen. */
+    float draw_w = (float)frame_width * 0.22f;
     float draw_h = draw_w * (float)height / (float)width;
-    if (draw_h > (float)swapchain_height * 0.2f) {
-        draw_h = (float)swapchain_height * 0.2f;
-        draw_w = draw_h * (float)width / (float)height;
-    }
-    const float x = ((float)swapchain_width - draw_w) * 0.5f;
-    const float y = (float)swapchain_height * 0.06f;
+    const float x = (float)frame_x + ((float)frame_width - draw_w) * 0.5f;
+    const float y = (float)frame_y + (float)frame_height * 0.04f;
 
     /* Pixels -> normalised device coordinates (y grows downwards on screen). */
     const float rect[4] = {
@@ -1478,7 +1478,8 @@ static int present_display(void)
         blit.clear_color.a = 1.0f;
         blit.filter = SDL_GPU_FILTER_LINEAR;
         SDL_BlitGPUTexture(commands, &blit);
-        draw_overlay(commands, swapchain, width, height);
+        draw_overlay(commands, swapchain, width, height,
+                     blit.destination.x, blit.destination.y, draw_w, draw_h);
     }
     return submit_commands(commands);
 }

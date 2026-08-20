@@ -31,7 +31,9 @@ enum {
     COUNTDOWN_PIXELS = 26,
 };
 
-static const uint32_t COLOR_TEXT = 0xFF000000u;
+static const uint32_t COLOR_TEXT = 0xFFFFFFFFu;      /* fill */
+static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
+enum { TEXT_OUTLINE_RADIUS = 3 };
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t g_pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT];
@@ -124,12 +126,28 @@ static void draw_pill(void)
     }
 }
 
-static void draw_glyph(const FT_Bitmap* bitmap, int origin_x, int origin_y)
+/* The outline is the glyph's own coverage grown into a disc, which is what
+ * keeps the border even around the font's rounded strokes. */
+static void draw_glyph(const FT_Bitmap* bitmap, int origin_x, int origin_y,
+                       int outline)
 {
-    for (unsigned row = 0; row < bitmap->rows; row++)
-        for (unsigned column = 0; column < bitmap->width; column++)
-            put_pixel(origin_x + (int)column, origin_y + (int)row, COLOR_TEXT,
-                      bitmap->buffer[row * (unsigned)bitmap->pitch + column]);
+    for (unsigned row = 0; row < bitmap->rows; row++) {
+        for (unsigned column = 0; column < bitmap->width; column++) {
+            const unsigned coverage =
+                bitmap->buffer[row * (unsigned)bitmap->pitch + column];
+            if (!coverage) continue;
+            const int px = origin_x + (int)column;
+            const int py = origin_y + (int)row;
+            if (!outline) {
+                put_pixel(px, py, COLOR_TEXT, coverage);
+                continue;
+            }
+            for (int dy = -TEXT_OUTLINE_RADIUS; dy <= TEXT_OUTLINE_RADIUS; dy++)
+                for (int dx = -TEXT_OUTLINE_RADIUS; dx <= TEXT_OUTLINE_RADIUS; dx++)
+                    if (dx * dx + dy * dy <= TEXT_OUTLINE_RADIUS * TEXT_OUTLINE_RADIUS)
+                        put_pixel(px + dx, py + dy, COLOR_TEXT_OUTLINE, coverage);
+        }
+    }
 }
 
 static int text_width(const char* text, int pixels)
@@ -163,14 +181,18 @@ static void draw_text(const char* text, int pixels, int centre_x)
     }
     const int baseline = (OVERLAY_HEIGHT + bottom + top) / 2;
 
-    int pen_x = centre_x - text_width(text, pixels) / 2;
-    for (const char* c = text; *c; c++) {
-        if (FT_Load_Char(g_face, (FT_ULong)(unsigned char)*c, FT_LOAD_RENDER) != 0)
-            continue;
-        const FT_GlyphSlot glyph = g_face->glyph;
-        draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
-                   baseline - glyph->bitmap_top);
-        pen_x += (int)(glyph->advance.x >> 6);
+    /* Two passes, so every outline stays behind every fill. */
+    for (int pass = 0; pass < 2; pass++) {
+        int pen_x = centre_x - text_width(text, pixels) / 2;
+        if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return;
+        for (const char* c = text; *c; c++) {
+            if (FT_Load_Char(g_face, (FT_ULong)(unsigned char)*c, FT_LOAD_RENDER) != 0)
+                continue;
+            const FT_GlyphSlot glyph = g_face->glyph;
+            draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
+                       baseline - glyph->bitmap_top, pass == 0);
+            pen_x += (int)(glyph->advance.x >> 6);
+        }
     }
 }
 
