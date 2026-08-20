@@ -437,9 +437,57 @@ a lifter bump as its own project with a full re-lift and revalidation.
 
 ## Online
 
-Base online (ALL.Net + MUCHA) is planned in **`docs/online_base.md`**: current
-state, endpoints read out of the binary, staged work, and the open TLS-library
-decision. `cellHttp` is currently 0 of 19 imported NIDs implemented.
+Full details in **`docs/online_base.md`**. Summary: every arcade service is
+sent to one configured host and port over TLS.
+
+- Configure with `taiko_online.cfg` next to the executable, or the
+  `TAIKO_ONLINE_HOST` / `_PORT` / `_VERIFY` / `_CACERT` environment overrides.
+  **No host configured means offline**, exactly as before, and the cellHttp
+  transport hooks are not even installed.
+- TLS is mbedTLS 3.6.4, vendored by `scripts/build_mbedtls.sh` into
+  `third_party/mbedtls-{linux,mingw}` (needed before configuring, like the
+  FFmpeg and SDL bundles). `src/taiko_tls.c` wraps it; nothing else talks to
+  mbedTLS.
+- Two transports reach the server. cellHttp (MUCHA, game server) uses its own
+  native sockets and asks the title layer through the hook pointers in
+  `ps3recomp/libs/network/cellHttp.c`. The ALL.Net PowerOn POST is a raw
+  sys_net socket, retargeted and wrapped in `net_connect`
+  (`src/taiko_net.c`) -- the guest keeps writing plain HTTP into a TLS session.
+- **SNI and `Host:` must name the configured server, not the service the guest
+  asked for.** Measured against a live ALL.Net server: `sni=naominet.jp` gets a
+  fatal alert (-0x7780), and `Host: naominet.jp` gets a 403 from the CDN in
+  front of it while the same request with the server's own name returns
+  `stat=1`. Path and body are what the server routes on, and those are left
+  alone. The raw ALL.Net socket composes its own headers, so
+  `net_rewrite_host_header` patches that one line on the way out.
+- The title sets `SO_NBIO`, so its connect returns EINPROGRESS; the hook waits
+  for writability itself (5 s cap) and completes the handshake before returning
+  a connected socket. The mbedTLS BIO must answer `WANT_READ`/`WANT_WRITE` for
+  a would-block, not -1 -- returning -1 aborts the handshake with a generic
+  error, which is what happened first.
+- All 19 cellHttp and 26 sys_net imported NIDs are bound. `src/taiko_net.c`
+  maps the SDK names this title uses (`cellHttpResponseGetStatusCode`,
+  `cellHttpRequestSetHeader`, ...) onto the runtime implementations; the names
+  were recovered by hashing candidates with the PS3 NID algorithm
+  (SHA-1(name + suffix), see `ps3recomp/include/ps3emu/nid.h`).
+- `socketselect` and `socketpoll` were previously registered to a stub that
+  returned 0 without waiting. Both now marshal the guest big-endian
+  `fd_set`/`pollfd`/`timeval` and block for the real timeout;
+  `build-linux/net_select_tests` covers that marshalling and, with
+  `TAIKO_TLS_LIVE_HOST` set, performs a real handshake.
+- **The title reads a response through `cellHttpResponseGetStatusCode`, not
+  `cellHttpRecvResponse`** -- so that query blocks for the response head.
+  Getting this wrong looks like every arcade service retrying forever.
+- Four defects in the vendored `cellHttp`/`cellHttpUtil` only surfaced once a
+  real server answered: `ParseUri` took host pointers (segfault) and read
+  `path` from the `username` slot; client/transaction handles started at 0,
+  which the title reads as "invalid"; `CloseConnection` was aliased onto
+  `AbortTransaction`. All fixed, with the parsing covered by
+  `net_select_tests`.
+- Live-validated 2026-08-20 against a private ALL.Net server: PowerOn over TLS,
+  chassis startupauth 200, `online_state=2 ready=1`, and the whole chassis
+  service loop running.
+- `TAIKO_NET_TRACE=1` logs the first 40 socket operations.
 
 ## Repository layout and history
 

@@ -11,31 +11,53 @@ runs *on the PS3*: the title's own SSL is pinned at TLS 1.0 and the only way to
 reach a modern endpoint is to override the send/receive path in guest code.
 
 That constraint does not exist here. `cellHttp`, `cellSsl` and `cellHttpUtil`
-are HLE — ordinary host C — so host TLS gives 1.2/1.3 for free. We implement
+are HLE -- ordinary host C -- so host TLS gives 1.2/1.3 for free. We implement
 the library the game already calls instead of replacing the caller.
 
 Consequences:
 
 - no embedded TLS in guest memory, no guest patching, no replacement stack;
 - Zucchini's `allnet_proxy.c` (a loopback listener on `:18080` that catches the
-  raw-socket ALL.Net POST) is unnecessary — we own `sys_net_bnet_connect` and
-  can retarget the connection in place;
+  raw-socket ALL.Net POST) is unnecessary -- we own `sys_net_bnet_connect` and
+  retarget the connection in place;
 - the redirect is host-side and therefore configurable, which an EBOOT patch
   cannot be.
 
-## Current state
+## Configuration
 
-Measured, not assumed:
+Everything the title talks to is sent to **one** host and port over TLS. The
+settings live in `taiko_online.cfg` in the launcher's working directory, which
+is the repository root (override the path with `TAIKO_ONLINE_CONFIG`); every key also has an environment override, which
+wins:
+
+```
+host=127.0.0.1     # TAIKO_ONLINE_HOST   -- unset means offline, as before
+port=443           # TAIKO_ONLINE_PORT
+verify=0           # TAIKO_ONLINE_VERIFY -- 1 checks the server certificate
+cacert=ca.pem      # TAIKO_ONLINE_CACERT -- required when verify=1
+```
+
+A private arcade server presents its own certificate, so verification is off by
+default; refusing it would only mean no online at all.
+
+With a host configured, the `TAIKO_OFFLINE_COMPLETE` spoof in
+`src/taiko_usio.cpp` disables itself: forcing the "initial data unavailable"
+branch would cut the online check off before the server could answer it.
+
+`TAIKO_NET_TRACE=1` logs the first 40 socket operations (connect target,
+select/poll, send/recv, whether each went through TLS).
+
+## What is implemented
 
 | Component | State |
 |---|---|
-| `cellHttp` | **0 of 19** imported NIDs implemented; `src/gen/cellHttp_stubs.c` prints `UNIMPLEMENTED` |
-| `cellSsl` | 138 lines, error-code shells, **no TLS** |
-| `cellHttps` | 128 lines; the game imports **0** NIDs from it — HTTPS runs through `cellHttp` + `cellSsl` |
-| `cellHttpUtil` | 1 NID imported (`ParseUri`) |
-| `sys_net` | 26 NIDs; BSD sockets present. `select`/`poll` return instantly instead of blocking for the guest timeout |
+| `cellHttp` | all 19 imported NIDs bound (`src/taiko_net.c` maps the SDK names this title uses onto `ps3recomp/libs/network/cellHttp.c`) |
+| TLS | mbedTLS 3.6.4, vendored by `scripts/build_mbedtls.sh`, wrapped by `src/taiko_tls.c` |
+| Redirect | connection target, SNI **and** `Host:` swapped before DNS, on both transports; method, path, body and every other header untouched |
+| `sys_net` | 26 imported NIDs, 26 bound; `socketpoll`/`socketselect` honour the guest timeout |
+| `cellSsl` | 3 imported NIDs (Init, CertGetNotBefore/After); the handshake is host-side, so nothing more is needed |
+| `cellHttpUtil` | 1 NID (`ParseUri`) |
 | `cellNetCtl` | 6 NIDs, HLE |
-| `src/taiko_net.c` | DNS loopback only (`TAIKO_DNS_LOOPBACK`) |
 
 Endpoints, read out of the game binary via `ghidra_out/strings.json`:
 
@@ -48,76 +70,137 @@ Endpoints, read out of the game binary via `ghidra_out/strings.json`:
 0x00EC4988  ignore_mucha_invalid_enforced=
 ```
 
-This matches Zucchini's redirect model: **the hostname and port are swapped for
-every service and the path distinguishes them** (`http_client.c:883` — method,
-path, body and caller headers are left untouched, and the swap happens before
-DNS, SNI and the `Host:` header so the rewritten name goes end to end).
+## How the two transports reach the server
 
-## Stages
+**cellHttp** (MUCHA, the game server) owns its own native sockets. It asks the
+title layer for a target rewrite and, if one is given, hands the connected
+socket to `taiko_tls_open_socket`. Method, path and body are untouched, which
+is what the server routes on -- one endpoint serves every service because the
+paths differ (`/sys/servlet/PowerOn`, `/mucha/...`, the game routes).
 
-Each stage ends in something runnable; do not start the next until the current
-one is validated.
+**SNI and `Host:` must both name the configured server**, and this was measured,
+not assumed, against a live ALL.Net server:
 
-### 1. `select`/`poll` honour the guest timeout
+- `sni=naominet.jp` -> fatal alert `-0x7780`; the server terminates TLS for its
+  own name only.
+- `Host: naominet.jp` -> `403 Forbidden` from the CDN in front of it, while the
+  identical request with `Host: <server>` returns `stat=1`. Four hook pointers in `cellHttp.c`
+(`g_http_redirect_target`, `g_http_tls_open/send/recv/close`) keep the runtime
+library game-agnostic; `src/taiko_net.c` installs them only when a server is
+configured, so an unconfigured build behaves exactly as it did.
 
-`sys_net` currently returns instantly, so any polling loop above it spins.
-Prerequisite for everything below. Upstream ps3recomp has this fix; port it.
+**The ALL.Net PowerOn POST** does not use cellHttp: it opens a socket and
+writes HTTP itself. `net_connect` in `src/taiko_net.c` retargets that
+connection and wraps it in TLS, so the guest keeps writing plain HTTP into a
+TLS session without knowing. Because the guest composes those headers itself,
+`net_rewrite_host_header` replaces the single `Host:` line on the way out and
+changes nothing else. The socket is non-blocking, so the handshake is deferred
+to the first send or recv on it.
 
-*Validated by:* the existing headless gate, no behaviour change expected yet.
+`gethostbyname` hands out a distinct `127.1.0.N` per name so the connect hook
+can report which service a connection was meant for; the connection itself and
+its SNI go to the configured host either way.
 
-### 2. TLS transport under `cellSsl`
+## Defects this shook out of the vendored cellHttp
 
-Pick the library (see Open decisions), wire connect/handshake/read/write/close,
-and expose it to `cellHttp`. Certificate validation must be *configurable* —
-a private server will not present a chain the title would accept.
+All three were invisible until a real server answered:
 
-*Validated by:* a standalone host test that completes a handshake against the
-configured server, in `tests/`, following `fair_mutex_tests.cpp` — no game
-required.
+- `cellHttpUtilParseUri` took its arguments as host pointers and `memset` the
+  guest address -- an instant segfault the first time the title parsed the URL
+  ALL.Net returns. It now works in guest memory and writes the real
+  `CellHttpUri` layout (five pointers into the caller's pool, then the port).
+- `cellHttpCreateClient`/`CreateTransaction` handed out slot index **0** as the
+  first handle. The title tests handles against zero (`if (*transId != 0)`), so
+  it read that as "no transaction", skipped the request, and then walked the
+  header count it had never filled in -- an unbounded `[tty]` write and abort.
+  Slot 0 is now never allocated.
+- `CellHttpUri.path` was read from offset +8, which is `username`. Every
+  request would have gone to `/`.
 
-### 3. `cellHttp` over that transport
+- **The status query has to read the response.** The title never calls
+  `cellHttpRecvResponse` for these service requests: `FUN_0090E9F4` sends, asks
+  `cellHttpResponseGetStatusCode`, then closes the connection. On real firmware
+  that query blocks for the response head, so `cellHttpGetStatusCode` (and
+  `GetResponseContentLength`) now read and parse it on demand. Before that,
+  every service read status 0 and retried forever.
+- `cellHttpTransactionCloseConnection` was aliased onto `AbortTransaction`,
+  which marks the transaction aborted and would reject any later use of it. It
+  now closes the connection and leaves the transaction alive.
 
-Implement the 19 imported NIDs, driven by what the title actually calls rather
-than by the full API. Expect roughly: client/transaction create+destroy, URI
-set, method, header add/get, send request, read response, status code,
-content length, timeouts, abort. `cellHttpUtilParseUri` backs onto the same URI
-parser.
+Also added, because the arcade URIs need them: HTTP Basic credentials taken
+from the URI (`https://vschassis:...@host/v01r00/chassis/startupauth.php`), and
+a `cellHttpRequestGetAllHeaders` that writes its out-parameters instead of
+returning CELL_OK and leaving the caller's stack untouched.
 
-*Validated by:* the title's own log — `UNIMPLEMENTED` lines for cellHttp
-disappear and requests reach the server.
+## Chassis operator flags
 
-### 4. Redirect + configuration
+The dump's `data/config/S11100-1/chassisinfo.xml` is a list of `<Info>` records
+keyed by a numeric dongle serial; the cabinet's own serial (`ABDN0000000`, the
+constant the dongle bypass leaves in place) is `268410000000`, the first
+record. The loader copies the matching record into an 18-byte flag block whose
+address is `*(u32*)(TOC + 0x5F1C)`, byte 0 being `is_registered`.
 
-Host-side rule, matching Zucchini exactly: swap host and port, leave method,
-path, body and headers alone, apply before DNS/SNI/`Host:`. Configuration for
-enable, host, port — plus the dongle serial, which currently lives as a
-constant in `tools/recomp_hand_edits.json` and wants the same config file.
+`src/taiko_usio.cpp` dumps that block once per boot as `[taiko_chassis]` and
+can override it: with a server configured it clears `force_offline` (a cabinet
+talking to a server is not an offline cabinet), and `TAIKO_CHASSIS_FLAGS`
+overrides any flag by name, e.g.
+`TAIKO_CHASSIS_FLAGS=force_offline=0,ignore_network_connection=1`.
 
-### 5. ALL.Net raw-socket path
+**The override lands late**, though: it runs from the USIO poll, by which time
+MuchaMain has already read the flags at init. For anything the boot path reads
+once, edit the XML record instead -- the file is a Boost text archive, so keep
+the element order and change only the digit.
 
-The PowerOn POST bypasses `cellHttp` and speaks raw sockets to `naominet.jp:80`.
-Retarget it in `sys_net_bnet_connect` (`src/taiko_net.c`) rather than running a
-loopback proxy. Note the game may expect plain HTTP here while the backend is
-HTTPS — that upgrade happens in our connect hook.
+Measured on this dump: `is_registered=1`, `ignore_mucha_invalid_enforced=1`
+already (so that is *not* what fails the third boot network service), and
+`force_offline=1`, which is what has to be cleared for an online cabinet.
 
-*Validated by:* a live boot reaching the online-enabled state with the service
-threads progressing past their current stubbed answers (`[taiko_netstate]`).
+## Known gaps
 
-## Open decisions
+- The dongle serial is still a constant in `tools/recomp_hand_edits.json`
+  (`serial=ABDN0000000` in the PowerOn body); it belongs in `taiko_online.cfg`
+  with the rest.
+- The cab reports `ip=127.1.0.N` in its PowerOn body -- it takes that from the
+  address it resolved for `bbrouter.loc`, which is now a redirect placeholder.
+  Harmless unless a server keys sessions on it.
+- `_sys_net_errno_loc` publishes sysNet's single global errno, not a per-thread
+  one.
+- `cellHttpRequestGetAllHeaders` and `cellHttpClientCloseAllConnections` return
+  CELL_OK without doing anything; nothing reads their results before the first
+  request.
 
-- **TLS library.** Recommendation: **mbedTLS** — it is what the server already
-  speaks, vendors cleanly, and gives one code path for Linux and MinGW. A
-  handshake bug that reproduces on only one platform is expensive to chase.
-  Alternatives: OpenSSL (already on the Linux host, but another cross-build to
-  maintain like FFmpeg), or Schannel on Windows plus OpenSSL on Linux (no
-  vendored dependency, two code paths through the most delicate layer).
-- **Config format.** A file is needed for server host/port and the dongle
-  serial. `config.toml` is build-time metadata, so this should be a separate
-  runtime file next to the executable.
+## Validation
+
+- `build-linux/net_select_tests` -- guest big-endian pollfd/fd_set/timeval
+  marshalling, the `CellHttpHeader` unpack, `inet_ntop`. Setting
+  `TAIKO_TLS_LIVE_HOST` (and optionally `TAIKO_TLS_LIVE_PORT`) adds a real
+  handshake against that server, which is the only way to prove the mbedTLS
+  wrapper moves bytes.
+- `scripts/test-linux-headless.sh` -- three boots to attract with online
+  unset, to catch a regression in the offline path.
+- A live boot with `TAIKO_ONLINE_HOST` set and `TAIKO_NET_TRACE=1`.
+
+Measured on a live boot against a private ALL.Net server (2026-08-20):
+
+```
+[taiko_online] socket 0 connect 127.1.0.3:80 (naominet.jp) -> <server>:443 over TLS
+[taiko_online] socket 0 TLS session established (sni=<server>)
+[taiko_net]    send fd=0 len=340 over TLS      (POST /sys/servlet/PowerOn)
+[taiko_net]    recv fd=0 297 bytes: stat=1&uri=...&host=...&place_id=...
+[cellHttpUtil] ParseUri('https://vschassis:...@127.0.0.1:54430/v01r00/chassis/startupauth.php')
+[cellHttp]     redirect 127.0.0.1:54430 -> <server>:443
+[cellHttp]     GetStatusCode(trans=1) -> 200
+[taiko_netstate] auth=00000067 online_state=00000002 ready=1
+```
+
+`online_state=2 ready=1` is the success state the title's own initial-data
+callback leaves behind, and the chassis loop (startupauth, playresult,
+initialdatacheck, tournamentcheck, heartbeat, bookkeeping) then runs against
+the server, each returning 200.
 
 ## Reference
 
-Zucchini's implementation, for behaviour comparison only — do not port its
+Zucchini's implementation, for behaviour comparison only -- do not port its
 structure: `/home/silvaluca/Documents/git/Zucchini/TaikoZucchini/network/`,
 chiefly `http_client.c` (the redirect at line 883), `allnet_proxy.c` and
 `uri.c`.

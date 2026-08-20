@@ -6,6 +6,7 @@
  */
 
 #include "cellHttpUtil.h"
+#include "../../runtime/ppu/ppu_memory.h"
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -36,118 +37,114 @@ static int is_unreserved(u8 c)
  * URL parsing
  * -----------------------------------------------------------------------*/
 
+/* cellHttpUtilParseUri(uri, str, pool, poolSize, required)
+ *
+ * Every argument is a guest effective address, and the guest CellHttpUri is
+ * *pointers into the caller's pool*, not inline buffers:
+ *
+ *     struct CellHttpUri { be32 scheme, hostname, username, password, path;
+ *                          be32 port; u8 reserved[4]; };   // 28 bytes
+ *
+ * The previous version took the arguments as host pointers and memset the
+ * guest address directly, which segfaults the moment the title parses the URL
+ * ALL.Net hands back. `uri` null means "only tell me how much pool I need".
+ */
 s32 cellHttpUtilParseUri(CellHttpUtilUri* uri, const char* url,
                           void* pool, u32 poolSize, u32* required)
 {
-    (void)pool;
-    (void)poolSize;
-    (void)required;
+    const uint32_t uri_ea      = (uint32_t)(uintptr_t)uri;
+    const uint32_t url_ea      = (uint32_t)(uintptr_t)url;
+    const uint32_t pool_ea     = (uint32_t)(uintptr_t)pool;
+    const uint32_t required_ea = (uint32_t)(uintptr_t)required;
 
-    if (!uri || !url)
+    if (!url_ea)
         return (s32)CELL_HTTP_UTIL_ERROR_INVALID_PARAM;
 
-    memset(uri, 0, sizeof(CellHttpUtilUri));
-    uri->port = 0;
+    const char* text = (const char*)vm_translate(url_ea);
+    const char* p = text;
 
-    const char* p = url;
-
-    /* Scheme (http, https, etc.) */
+    /* scheme://[user[:pass]@]host[:port][/path...] */
+    const char* scheme = NULL; u32 scheme_len = 0;
     const char* colon = strstr(p, "://");
     if (colon) {
-        u32 scheme_len = (u32)(colon - p);
-        if (scheme_len >= sizeof(uri->scheme))
-            scheme_len = sizeof(uri->scheme) - 1;
-        memcpy(uri->scheme, p, scheme_len);
-        uri->scheme[scheme_len] = '\0';
+        scheme = p;
+        scheme_len = (u32)(colon - p);
         p = colon + 3;
     }
 
-    /* User info (user:pass@) */
-    const char* at = strchr(p, '@');
+    const char* username = NULL; u32 username_len = 0;
+    const char* password = NULL; u32 password_len = 0;
     const char* slash = strchr(p, '/');
+    const char* at = strchr(p, '@');
     if (at && (!slash || at < slash)) {
-        const char* user_colon = strchr(p, ':');
-        if (user_colon && user_colon < at) {
-            u32 ulen = (u32)(user_colon - p);
-            if (ulen >= sizeof(uri->username)) ulen = sizeof(uri->username) - 1;
-            memcpy(uri->username, p, ulen);
-
-            u32 plen = (u32)(at - user_colon - 1);
-            if (plen >= sizeof(uri->password)) plen = sizeof(uri->password) - 1;
-            memcpy(uri->password, user_colon + 1, plen);
-        } else {
-            u32 ulen = (u32)(at - p);
-            if (ulen >= sizeof(uri->username)) ulen = sizeof(uri->username) - 1;
-            memcpy(uri->username, p, ulen);
+        const char* sep = memchr(p, ':', (size_t)(at - p));
+        username = p;
+        username_len = (u32)((sep ? sep : at) - p);
+        if (sep) {
+            password = sep + 1;
+            password_len = (u32)(at - sep - 1);
         }
         p = at + 1;
     }
 
-    /* Hostname and port */
     const char* host_end = p;
     while (*host_end && *host_end != '/' && *host_end != '?' && *host_end != '#')
         host_end++;
 
-    /* Check for port */
     const char* port_colon = NULL;
-    for (const char* c = p; c < host_end; c++) {
+    for (const char* c = p; c < host_end; c++)
         if (*c == ':') port_colon = c;
-    }
 
+    const char* hostname = p;
+    u32 hostname_len = (u32)((port_colon ? port_colon : host_end) - p);
+    u32 port = 0;
     if (port_colon) {
-        u32 hlen = (u32)(port_colon - p);
-        if (hlen >= sizeof(uri->hostname)) hlen = sizeof(uri->hostname) - 1;
-        memcpy(uri->hostname, p, hlen);
-
-        uri->port = 0;
         for (const char* c = port_colon + 1; c < host_end; c++)
-            uri->port = uri->port * 10 + (*c - '0');
+            if (*c >= '0' && *c <= '9') port = port * 10 + (u32)(*c - '0');
+    } else if (scheme && scheme_len == 5 && !strncmp(scheme, "https", 5)) {
+        port = 443;
     } else {
-        u32 hlen = (u32)(host_end - p);
-        if (hlen >= sizeof(uri->hostname)) hlen = sizeof(uri->hostname) - 1;
-        memcpy(uri->hostname, p, hlen);
-
-        /* Default ports */
-        if (strcmp(uri->scheme, "https") == 0)
-            uri->port = 443;
-        else if (strcmp(uri->scheme, "http") == 0)
-            uri->port = 80;
+        port = 80;
     }
 
-    p = host_end;
-
-    /* Path */
-    if (*p == '/') {
-        const char* path_end = p;
-        while (*path_end && *path_end != '?' && *path_end != '#')
-            path_end++;
-        u32 plen = (u32)(path_end - p);
-        if (plen >= sizeof(uri->path)) plen = sizeof(uri->path) - 1;
-        memcpy(uri->path, p, plen);
-        p = path_end;
-    } else {
-        strcpy(uri->path, "/");
+    /* The path keeps its query and fragment: it is the request target the
+     * caller sends on the wire. */
+    const char* path = host_end;
+    u32 path_len = (u32)strlen(host_end);
+    if (path_len == 0) {
+        path = "/";
+        path_len = 1;
     }
 
-    /* Query */
-    if (*p == '?') {
-        p++;
-        const char* q_end = strchr(p, '#');
-        if (!q_end) q_end = p + strlen(p);
-        u32 qlen = (u32)(q_end - p);
-        if (qlen >= sizeof(uri->query)) qlen = sizeof(uri->query) - 1;
-        memcpy(uri->query, p, qlen);
-        p = q_end;
-    }
+    const u32 needed = (scheme ? scheme_len + 1 : 0) +
+                       (username ? username_len + 1 : 0) +
+                       (password ? password_len + 1 : 0) +
+                       hostname_len + 1 + path_len + 1;
+    if (required_ea)
+        vm_write32(required_ea, needed);
+    if (!uri_ea)
+        return CELL_OK;
+    if (!pool_ea || poolSize < needed)
+        return (s32)CELL_HTTP_UTIL_ERROR_NO_MEMORY;
 
-    /* Fragment */
-    if (*p == '#') {
-        p++;
-        u32 flen = (u32)strlen(p);
-        if (flen >= sizeof(uri->fragment)) flen = sizeof(uri->fragment) - 1;
-        memcpy(uri->fragment, p, flen);
-    }
+    uint32_t cursor = pool_ea;
+    #define HTTP_URI_STORE(src, len) (                                        \
+        memcpy(vm_translate(cursor), (src), (len)),                           \
+        *((char*)vm_translate(cursor) + (len)) = '\0',                        \
+        cursor += (len) + 1,                                                  \
+        cursor - ((len) + 1))
 
+    vm_write32(uri_ea + 0,  scheme   ? HTTP_URI_STORE(scheme, scheme_len)     : 0);
+    vm_write32(uri_ea + 4,  HTTP_URI_STORE(hostname, hostname_len));
+    vm_write32(uri_ea + 8,  username ? HTTP_URI_STORE(username, username_len) : 0);
+    vm_write32(uri_ea + 12, password ? HTTP_URI_STORE(password, password_len) : 0);
+    vm_write32(uri_ea + 16, HTTP_URI_STORE(path, path_len));
+    vm_write32(uri_ea + 20, port);
+    vm_write32(uri_ea + 24, 0);
+    #undef HTTP_URI_STORE
+
+    printf("[cellHttpUtil] ParseUri('%s') -> host='%.*s' port=%u path='%.*s'\n",
+           text, (int)hostname_len, hostname, port, (int)path_len, path);
     return CELL_OK;
 }
 

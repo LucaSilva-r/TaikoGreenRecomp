@@ -38,6 +38,17 @@ typedef int http_socket_t;
  * Internal state
  * -----------------------------------------------------------------------*/
 
+/* Optional secure transport, supplied by the title layer (src/taiko_tls.c).
+ * The arcade services are HTTPS and the redirect target is configurable, but
+ * neither is this library's business: it asks for a target rewrite, then, if a
+ * session is opened for the connected socket, reads and writes through it.
+ * All four hooks NULL keeps cellHttp on plain HTTP, exactly as before. */
+int   (*g_http_redirect_target)(char* host, u32 host_size, u32* port);
+void* (*g_http_tls_open)(int fd, const char* sni);
+int   (*g_http_tls_send)(void* session, const void* buf, u32 len);
+int   (*g_http_tls_recv)(void* session, void* buf, u32 len);
+void  (*g_http_tls_close)(void* session);
+
 static int s_http_initialized = 0;
 #ifdef _WIN32
 static int s_wsa_initialized = 0;
@@ -67,6 +78,7 @@ typedef struct {
     char                 url[1024];
     char                 hostname[256];
     char                 path[512];
+    char                 userinfo[192];    /* "user:password" from the URI */
     u32                  port;
     s32                  status_code;
     u64                  content_length;
@@ -81,6 +93,7 @@ typedef struct {
 
     /* Socket and recv state */
     http_socket_t        sock;
+    void*                tls;          /* secure session for `sock`, or NULL */
     int                  headers_parsed;
     u32                  body_received;
     int                  conn_close;       /* server sent Connection: close */
@@ -137,6 +150,10 @@ static void http_apply_timeout(http_socket_t sock, int send, u32 usec)
 /* Close the socket in a transaction slot if open, reset state. */
 static void http_close_slot_socket(HttpTransSlot* t)
 {
+    if (t->tls) {
+        if (g_http_tls_close) g_http_tls_close(t->tls);
+        t->tls = NULL;
+    }
     if (t->sock != HTTP_INVALID_SOCKET) {
         http_closesocket(t->sock);
         t->sock = HTTP_INVALID_SOCKET;
@@ -154,9 +171,11 @@ static void http_close_slot_socket(HttpTransSlot* t)
 }
 
 /* Send all bytes on a socket, handling partial sends. Returns 0 on success. */
-static int http_send_all(http_socket_t sock, const char* data, u32 len)
+static int http_send_all(http_socket_t sock, void* tls, const char* data, u32 len)
 {
     u32 total = 0;
+    if (tls)
+        return g_http_tls_send(tls, data, len);
     while (total < len) {
         int n = send(sock, data + total, (int)(len - total), 0);
         if (n <= 0)
@@ -164,6 +183,35 @@ static int http_send_all(http_socket_t sock, const char* data, u32 len)
         total += (u32)n;
     }
     return 0;
+}
+
+static int http_recv_some(HttpTransSlot* t, char* buf, u32 len)
+{
+    if (t->tls)
+        return g_http_tls_recv(t->tls, buf, len);
+    return recv(t->sock, buf, (int)len, 0);
+}
+
+/* Standard base64, for the Authorization header built from the URI's
+ * credentials. Returns the encoded length, or 0 if it would not fit. */
+static u32 http_base64(const char* in, u32 in_len, char* out, u32 out_size)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    u32 out_len = ((in_len + 2) / 3) * 4;
+    if (out_len + 1 > out_size) return 0;
+    u32 o = 0;
+    for (u32 i = 0; i < in_len; i += 3) {
+        u32 bits = (u32)(unsigned char)in[i] << 16;
+        if (i + 1 < in_len) bits |= (u32)(unsigned char)in[i + 1] << 8;
+        if (i + 2 < in_len) bits |= (u32)(unsigned char)in[i + 2];
+        out[o++] = alphabet[(bits >> 18) & 0x3F];
+        out[o++] = alphabet[(bits >> 12) & 0x3F];
+        out[o++] = (i + 1 < in_len) ? alphabet[(bits >> 6) & 0x3F] : '=';
+        out[o++] = (i + 2 < in_len) ? alphabet[bits & 0x3F] : '=';
+    }
+    out[o] = '\0';
+    return o;
 }
 
 /* Find "\r\n\r\n" in a buffer, return pointer to start of body or NULL. */
@@ -272,6 +320,45 @@ static int http_parse_response_headers(HttpTransSlot* t, const char* hdr_end)
  * API implementations
  * -----------------------------------------------------------------------*/
 
+/* Read and parse the response head if it has not been read yet.
+ *
+ * The title never calls cellHttpRecvResponse for these service requests: it
+ * sends, then asks for the status code, then closes the connection (see
+ * FUN_0090E9F4). On real firmware the status query is what blocks for the
+ * response head, so it has to be here too -- otherwise every arcade service
+ * reads status 0 and retries forever. Returns 0 once the head is parsed. */
+static int http_ensure_headers(HttpTransSlot* t)
+{
+    if (t->headers_parsed)
+        return 0;
+    if (t->sock == HTTP_INVALID_SOCKET || t->aborted)
+        return -1;
+
+    while (t->hdr_buf_len < HTTP_HDR_BUF_SIZE - 1) {
+        int n = http_recv_some(t, t->hdr_buf + t->hdr_buf_len,
+                               HTTP_HDR_BUF_SIZE - 1 - t->hdr_buf_len);
+        if (n <= 0) {
+            printf("[cellHttp]   recv() failed during header read (n=%d)\n", n);
+            http_close_slot_socket(t);
+            return -1;
+        }
+        t->hdr_buf_len += (u32)n;
+
+        const char* hdr_end = http_find_header_end(t->hdr_buf, t->hdr_buf_len);
+        if (!hdr_end)
+            continue;
+        if (http_parse_response_headers(t, hdr_end) != 0) {
+            http_close_slot_socket(t);
+            return -1;
+        }
+        return 0;
+    }
+
+    printf("[cellHttp]   Header buffer overflow, no \\r\\n\\r\\n found\n");
+    http_close_slot_socket(t);
+    return -1;
+}
+
 s32 cellHttpInit(void* pool, u32 poolSize)
 {
     printf("[cellHttp] Init(pool=%p, poolSize=%u)\n", pool, poolSize);
@@ -343,7 +430,11 @@ s32 cellHttpCreateClient(CellHttpClientId* clientId)
     if (!clientId)
         return CELL_HTTP_ERROR_INVALID_PARAMETER;
 
-    for (u32 i = 0; i < CELL_HTTP_MAX_CLIENTS; i++) {
+    /* Slot 0 is deliberately never handed out: the title tests its handles
+     * against 0 (`if (*transId != 0)`), so an id of 0 reads as "no client /
+     * no transaction" and it silently skips the request -- then walks the
+     * uninitialised header count it never filled in. */
+    for (u32 i = 1; i < CELL_HTTP_MAX_CLIENTS; i++) {
         if (!s_clients[i].in_use) {
             s_clients[i].in_use = 1;
             s_clients[i].resolve_timeout = 30000000; /* 30s default */
@@ -392,7 +483,7 @@ s32 cellHttpCreateTransaction(CellHttpTransId* transId, CellHttpClientId clientI
     if (clientId >= CELL_HTTP_MAX_CLIENTS || !s_clients[clientId].in_use)
         return CELL_HTTP_ERROR_NOT_FOUND;
 
-    for (u32 i = 0; i < CELL_HTTP_MAX_TRANSACTIONS; i++) {
+    for (u32 i = 1; i < CELL_HTTP_MAX_TRANSACTIONS; i++) {   /* id 0 = invalid */
         if (!s_transactions[i].in_use) {
             HttpTransSlot* t = &s_transactions[i];
             memset(t, 0, sizeof(*t));
@@ -410,8 +501,15 @@ s32 cellHttpCreateTransaction(CellHttpTransId* transId, CellHttpClientId clientI
                 (const char*)(uintptr_t)vm_read32(uri_ea + 0));
             const char* hostname = http_guest_string(
                 (const char*)(uintptr_t)vm_read32(uri_ea + 4));
+            /* CellHttpUri: scheme, hostname, username, password, path,
+             * port -- path is at +16, not +8 (that is username, normally
+             * null, which silently made every request target "/"). */
             const char* path = http_guest_string(
+                (const char*)(uintptr_t)vm_read32(uri_ea + 16));
+            const char* username = http_guest_string(
                 (const char*)(uintptr_t)vm_read32(uri_ea + 8));
+            const char* password = http_guest_string(
+                (const char*)(uintptr_t)vm_read32(uri_ea + 12));
             uint32_t port = vm_read32(uri_ea + 20);
 
             strncpy(t->method, host_method, sizeof(t->method) - 1);
@@ -428,7 +526,15 @@ s32 cellHttpCreateTransaction(CellHttpTransId* transId, CellHttpClientId clientI
                     sizeof(t->path) - 1);
             t->path[sizeof(t->path) - 1] = '\0';
 
-            t->port = port ? port : 80;
+            /* The arcade services put HTTP Basic credentials in the URI
+             * (e.g. https://vschassis:...@host/v01r00/chassis/startupauth.php),
+             * and the server answers 401 without them. */
+            if (username && username[0])
+                snprintf(t->userinfo, sizeof(t->userinfo), "%s:%s",
+                         username, password ? password : "");
+
+            t->port = port ? port
+                            : ((scheme && !strcmp(scheme, "https")) ? 443 : 80);
 
             /* Build URL string for logging */
             snprintf(t->url, sizeof(t->url), "%s://%s:%u%s",
@@ -481,9 +587,23 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
     /* Close any previously open socket (re-send scenario) */
     http_close_slot_socket(t);
 
-    /* ---- Resolve hostname ---- */
+    /* ---- Resolve hostname ----
+     * The redirect is applied before DNS, SNI and the `Host:` header: a server
+     * reached through a proxy or CDN answers an unexpected `Host:` with 403
+     * (measured: Host naominet.jp -> Cloudflare 403, Host <server> -> stat=1).
+     * Method, path, body and the caller's headers are untouched, which is what
+     * a server routes on. */
+    char target_host[256];
+    u32  target_port = t->port;
+    snprintf(target_host, sizeof(target_host), "%s", t->hostname);
+    if (g_http_redirect_target &&
+        g_http_redirect_target(target_host, (u32)sizeof(target_host), &target_port)) {
+        printf("[cellHttp]   redirect %s:%u -> %s:%u\n",
+               t->hostname, t->port, target_host, target_port);
+    }
+
     char port_str[8];
-    snprintf(port_str, sizeof(port_str), "%u", t->port);
+    snprintf(port_str, sizeof(port_str), "%u", target_port);
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -492,9 +612,9 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
     hints.ai_protocol = IPPROTO_TCP;
 
     struct addrinfo* result = NULL;
-    int gai = getaddrinfo(t->hostname, port_str, &hints, &result);
+    int gai = getaddrinfo(target_host, port_str, &hints, &result);
     if (gai != 0 || !result) {
-        printf("[cellHttp]   getaddrinfo failed for '%s': %d\n", t->hostname, gai);
+        printf("[cellHttp]   getaddrinfo failed for '%s': %d\n", target_host, gai);
         if (result) freeaddrinfo(result);
         if (sent) vm_write32(http_guest_ea(sent), 0);
         return CELL_HTTP_ERROR_CONNECTION_FAILED;
@@ -516,7 +636,7 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
     http_apply_timeout(sock, 0, c->recv_timeout);
 
     if (connect(sock, result->ai_addr, (int)result->ai_addrlen) != 0) {
-        printf("[cellHttp]   connect() failed to %s:%u\n", t->hostname, t->port);
+        printf("[cellHttp]   connect() failed to %s:%u\n", target_host, target_port);
         http_closesocket(sock);
         freeaddrinfo(result);
         if (sent) vm_write32(http_guest_ea(sent), 0);
@@ -524,14 +644,37 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
     }
 
     freeaddrinfo(result);
-    printf("[cellHttp]   Connected to %s:%u\n", t->hostname, t->port);
+    printf("[cellHttp]   Connected to %s:%u\n", target_host, target_port);
+
+    void* tls = NULL;
+    if (g_http_tls_open) {
+        /* SNI names the server we actually connect to; `Host:` below keeps
+         * the service name the guest asked for. */
+        tls = g_http_tls_open((int)sock, target_host);
+        if (!tls) {
+            printf("[cellHttp]   TLS handshake failed with %s:%u\n",
+                   target_host, target_port);
+            http_closesocket(sock);
+            if (sent) vm_write32(http_guest_ea(sent), 0);
+            return CELL_HTTP_ERROR_CONNECTION_FAILED;
+        }
+    }
 
     /* ---- Format HTTP request ---- */
     char req_buf[4096];
     int req_len = snprintf(req_buf, sizeof(req_buf),
                            "%s %s HTTP/1.1\r\n"
                            "Host: %s\r\n",
-                           t->method, t->path, t->hostname);
+                           t->method, t->path, target_host);
+
+    /* Credentials the URI carried, as HTTP Basic. */
+    if (t->userinfo[0]) {
+        char encoded[264];
+        if (http_base64(t->userinfo, (u32)strlen(t->userinfo),
+                        encoded, sizeof(encoded)))
+            req_len += snprintf(req_buf + req_len, sizeof(req_buf) - (u32)req_len,
+                                "Authorization: Basic %s\r\n", encoded);
+    }
 
     /* Content-Length header if body provided or explicitly set */
     if (size > 0) {
@@ -556,8 +699,9 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
                         "\r\n");
 
     /* ---- Send header ---- */
-    if (http_send_all(sock, req_buf, (u32)req_len) != 0) {
+    if (http_send_all(sock, tls, req_buf, (u32)req_len) != 0) {
         printf("[cellHttp]   Failed to send request headers\n");
+        if (tls && g_http_tls_close) g_http_tls_close(tls);
         http_closesocket(sock);
         if (sent) vm_write32(http_guest_ea(sent), 0);
         return CELL_HTTP_ERROR_SEND_FAILED;
@@ -565,8 +709,9 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
 
     /* ---- Send body if provided ---- */
     if (buf && size > 0) {
-        if (http_send_all(sock, (const char*)vm_translate(http_guest_ea(buf)), size) != 0) {
+        if (http_send_all(sock, tls, (const char*)vm_translate(http_guest_ea(buf)), size) != 0) {
             printf("[cellHttp]   Failed to send request body\n");
+            if (tls && g_http_tls_close) g_http_tls_close(tls);
             http_closesocket(sock);
             if (sent) vm_write32(http_guest_ea(sent), 0);
             return CELL_HTTP_ERROR_SEND_FAILED;
@@ -578,6 +723,7 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
 
     /* Store socket for recv */
     t->sock           = sock;
+    t->tls            = tls;
     t->headers_parsed = 0;
     t->body_received  = 0;
     t->hdr_buf_len    = 0;
@@ -616,41 +762,9 @@ s32 cellHttpRecvResponse(CellHttpTransId transId, void* buf, u32 size,
     }
 
     /* ---- Parse response headers on first call ---- */
-    if (!t->headers_parsed) {
-        printf("[cellHttp] RecvResponse(trans=%u) - reading response headers\n",
-               transId);
-
-        /* Read until we find \r\n\r\n */
-        while (t->hdr_buf_len < HTTP_HDR_BUF_SIZE - 1) {
-            int n = recv(t->sock, t->hdr_buf + t->hdr_buf_len,
-                         (int)(HTTP_HDR_BUF_SIZE - 1 - t->hdr_buf_len), 0);
-            if (n <= 0) {
-                printf("[cellHttp]   recv() failed during header read (n=%d)\n", n);
-                http_close_slot_socket(t);
-                if (received) vm_write32(http_guest_ea(received), 0);
-                return (n == 0) ? CELL_HTTP_ERROR_RECV_FAILED
-                                : CELL_HTTP_ERROR_RECV_FAILED;
-            }
-            t->hdr_buf_len += (u32)n;
-
-            const char* hdr_end = http_find_header_end(t->hdr_buf,
-                                                       t->hdr_buf_len);
-            if (hdr_end) {
-                if (http_parse_response_headers(t, hdr_end) != 0) {
-                    http_close_slot_socket(t);
-                    if (received) vm_write32(http_guest_ea(received), 0);
-                    return CELL_HTTP_ERROR_RECV_FAILED;
-                }
-                break;
-            }
-        }
-
-        if (!t->headers_parsed) {
-            printf("[cellHttp]   Header buffer overflow, no \\r\\n\\r\\n found\n");
-            http_close_slot_socket(t);
-            if (received) vm_write32(http_guest_ea(received), 0);
-            return CELL_HTTP_ERROR_RECV_FAILED;
-        }
+    if (http_ensure_headers(t) != 0) {
+        if (received) vm_write32(http_guest_ea(received), 0);
+        return CELL_HTTP_ERROR_RECV_FAILED;
     }
 
     /* ---- Return body data ---- */
@@ -708,9 +822,8 @@ s32 cellHttpRecvResponse(CellHttpTransId transId, void* buf, u32 size,
         if (want == 0)
             break;
 
-        int n = recv(t->sock,
-                     (char*)vm_translate(http_guest_ea(buf)) + filled,
-                     (int)want, 0);
+        int n = http_recv_some(t,
+                     (char*)vm_translate(http_guest_ea(buf)) + filled, want);
         if (n < 0) {
             /* Error - if we already have some data, return it */
             if (filled > 0)
@@ -740,6 +853,7 @@ s32 cellHttpRecvResponse(CellHttpTransId transId, void* buf, u32 size,
     return CELL_OK;
 }
 
+
 s32 cellHttpGetResponseContentLength(CellHttpTransId transId, u64* length)
 {
     if (!s_http_initialized)
@@ -750,6 +864,9 @@ s32 cellHttpGetResponseContentLength(CellHttpTransId transId, u64* length)
 
     if (!length)
         return CELL_HTTP_ERROR_INVALID_PARAMETER;
+
+    if (http_ensure_headers(&s_transactions[transId]) != 0)
+        return CELL_HTTP_ERROR_RECV_FAILED;
 
     vm_write64(http_guest_ea(length), s_transactions[transId].content_length);
     return CELL_OK;
@@ -766,6 +883,11 @@ s32 cellHttpGetStatusCode(CellHttpTransId transId, s32* code)
     if (!code)
         return CELL_HTTP_ERROR_INVALID_PARAMETER;
 
+    if (http_ensure_headers(&s_transactions[transId]) != 0)
+        return CELL_HTTP_ERROR_RECV_FAILED;
+
+    printf("[cellHttp] GetStatusCode(trans=%u) -> %d\n",
+           transId, s_transactions[transId].status_code);
     vm_write32(http_guest_ea(code), (uint32_t)s_transactions[transId].status_code);
     return CELL_OK;
 }
@@ -884,6 +1006,20 @@ s32 cellHttpAddRequestHeader(CellHttpTransId transId, const char* name,
 
     printf("[cellHttp] AddRequestHeader(trans=%u, '%s: %s')\n",
            transId, host_name, host_value);
+    return CELL_OK;
+}
+
+/* cellHttpTransactionCloseConnection: drop the connection but leave the
+ * transaction usable. Aliasing it onto AbortTransaction marked the transaction
+ * aborted, which would reject any later use of it. */
+s32 cellHttpCloseConnection(CellHttpTransId transId)
+{
+    if (!s_http_initialized)
+        return CELL_HTTP_ERROR_NOT_INITIALIZED;
+    if (transId >= CELL_HTTP_MAX_TRANSACTIONS || !s_transactions[transId].in_use)
+        return CELL_HTTP_ERROR_NOT_FOUND;
+
+    http_close_slot_socket(&s_transactions[transId]);
     return CELL_OK;
 }
 

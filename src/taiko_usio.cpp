@@ -11,6 +11,7 @@
  * addresses; callbacks are guest OPDs and are dispatched through ppu_guest_call.
  */
 
+#include "taiko_tls.h"   /* online redirect state */
 #include "ppu_recomp.h"
 
 #include <algorithm>
@@ -159,6 +160,7 @@ struct UsioState {
     unsigned input_poll_count{};
     unsigned online_trace_tick{};
     bool offline_state_applied{};
+    bool chassis_flags_applied{};
 };
 
 UsioState g_usio;
@@ -743,6 +745,98 @@ void trace_online_state()
                  context_ready);
 }
 
+extern "C" uint32_t g_main_toc;   /* set by the loader from the ELF's TOC */
+
+/* The chassis operator flags, as the game holds them at runtime.
+ *
+ * `data/config/S11100-1/chassisinfo.xml` is a list of <Info> records keyed by
+ * a numeric dongle serial; the loader (FUN_001ABF4C) copies the record that
+ * matches this cabinet into an 18-byte flag block and sets byte 0 to 1. The
+ * block's address is a TOC global, and the byte order is the XML element
+ * order, which the game's own [ChassisInfo] dump confirms.
+ *
+ * `ignore_mucha_invalid_enforced` (byte 12) is the one that matters here: with
+ * it clear, the boot network check enforces a valid MUCHA licence and fails on
+ * a private server that only answers boardauth. Zucchini defaults the same
+ * flag on, and does it by synthesising the XML; we have the parsed block. */
+constexpr uint32_t kChassisFlagsTocOffset = 0x5F1Cu;
+constexpr int kChassisFlagCount = 18;
+constexpr int kChassisForceOffline = 2;
+
+const char* const kChassisFlagNames[kChassisFlagCount] = {
+    "is_registered", "is_promotion", "force_offline", "force_freeplay",
+    "force_autoplay", "force_serious", "force_musicinfo_allrelease",
+    "force_burst_mode", "ignore_network_authentication",
+    "ignore_network_connection", "ignore_closetime", "ignore_nblinepoint",
+    "ignore_mucha_invalid_enforced", "disable_countdowntimer",
+    "anytime_tokkun", "anytime_dani", "force_dani", "anytime_ghostbattle",
+};
+
+uint32_t chassis_flags_ea()
+{
+    if (!g_main_toc) return 0;
+    return vm_read32(g_main_toc + kChassisFlagsTocOffset);
+}
+
+void settle_chassis_flags()
+{
+    if (g_usio.chassis_flags_applied)
+        return;
+
+    const uint32_t flags = chassis_flags_ea();
+    if (!flags || vm_read8(flags) == 0)       /* byte 0: no record loaded yet */
+        return;
+
+    /* A cabinet that is talking to a server is not an offline cabinet, and the
+     * dump's record for this dongle sets force_offline. Everything else is
+     * left as the operator's XML has it. TAIKO_CHASSIS_FLAGS overrides any of
+     * them by name, e.g. "force_offline=0,ignore_network_connection=1". */
+    uint8_t wanted[kChassisFlagCount];
+    for (int i = 0; i < kChassisFlagCount; ++i)
+        wanted[i] = static_cast<uint8_t>(vm_read8(flags + i) & 1);
+    if (taiko_online_enabled())
+        wanted[kChassisForceOffline] = 0;
+
+    if (const char* overrides = std::getenv("TAIKO_CHASSIS_FLAGS")) {
+        std::string spec(overrides);
+        size_t pos = 0;
+        while (pos < spec.size()) {
+            size_t comma = spec.find(',', pos);
+            if (comma == std::string::npos) comma = spec.size();
+            const std::string item = spec.substr(pos, comma - pos);
+            pos = comma + 1;
+            const size_t eq = item.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string name = item.substr(0, eq);
+            const uint8_t value = item.substr(eq + 1) != "0" ? 1 : 0;
+            bool matched = false;
+            for (int i = 0; i < kChassisFlagCount; ++i) {
+                if (name == kChassisFlagNames[i]) { wanted[i] = value; matched = true; break; }
+            }
+            if (!matched)
+                std::fprintf(stderr, "[taiko_chassis] unknown flag '%s'\n", name.c_str());
+        }
+    }
+
+    std::string dump;
+    for (int i = 0; i < kChassisFlagCount; ++i) {
+        const uint8_t was = static_cast<uint8_t>(vm_read8(flags + i) & 1);
+        if (was != wanted[i])
+            vm_write8(flags + i, wanted[i]);
+        dump += kChassisFlagNames[i];
+        dump += '=';
+        dump += static_cast<char>('0' + wanted[i]);
+        if (was != wanted[i]) {
+            dump += "(was ";
+            dump += static_cast<char>('0' + was);
+            dump += ')';
+        }
+        dump += ' ';
+    }
+    std::fprintf(stderr, "[taiko_chassis] block=%08X %s\n", flags, dump.c_str());
+    g_usio.chassis_flags_applied = true;
+}
+
 void settle_offline_network_state()
 {
     /* The real initial-data callback leaves OnlineCheck in state 2 on success
@@ -753,7 +847,9 @@ void settle_offline_network_state()
      * Downstream scene code polls that global bit, not just OnlineCheck::state. */
     static const char* setting = std::getenv("TAIKO_OFFLINE_COMPLETE");
     static const bool enabled = setting && std::strcmp(setting, "0") != 0;
-    if (!enabled || g_usio.offline_state_applied)
+    /* With a server configured the real callback can arrive, so forcing the
+     * failure branch would cut the online path off before it starts. */
+    if (!enabled || taiko_online_enabled() || g_usio.offline_state_applied)
         return;
 
     constexpr uint32_t kOnlineCheckPtr = 0x01028F1Cu;
@@ -851,6 +947,7 @@ void build_input_frames()
 #endif
 
     settle_offline_network_state();
+    settle_chassis_flags();
     trace_online_state();
     trace_input_poll_rate();
     g_usio.previous_action[0] = actions[0];

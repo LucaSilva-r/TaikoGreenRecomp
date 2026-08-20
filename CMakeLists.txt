@@ -304,6 +304,7 @@ add_executable(taiko_boot
     "${PS3RECOMP_DIR}/runtime/host/frame_driver.cpp"     # shared vblank/FIFO clock
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_init.c"       # title id + unbuffered log
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"        # cellHttp NID aliases
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"        # host TLS + online redirect
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"    # in-process ATRAC3plus -> game/SPU PCM ring
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_spu.c"  # raw lifted bnusCore mixer
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sail.cpp"     # cellSail async callback shim
@@ -364,6 +365,34 @@ if(TAIKO_INPROCESS_ATRAC)
         PROPERTIES
             COMPILE_DEFINITIONS TAIKO_HAVE_FFMPEG=1
             INCLUDE_DIRECTORIES "${TAIKO_FFMPEG_INCLUDE_DIRS}")
+endif()
+
+# Static mbedTLS (scripts/build_mbedtls.sh) backs the online path: the arcade
+# services are HTTPS and the title's own cellSsl is a lifecycle shell. Vendored
+# rather than taken from the host so Linux and MinGW run one code path.
+if(WIN32)
+    set(TAIKO_MBEDTLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-mingw")
+else()
+    set(TAIKO_MBEDTLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-linux")
+endif()
+find_library(TAIKO_MBEDTLS_SSL    mbedtls    PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_library(TAIKO_MBEDTLS_X509   mbedx509   PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_library(TAIKO_MBEDTLS_CRYPTO mbedcrypto PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+if(NOT TAIKO_MBEDTLS_SSL OR NOT TAIKO_MBEDTLS_X509 OR NOT TAIKO_MBEDTLS_CRYPTO)
+    message(FATAL_ERROR
+        "mbedTLS not found under ${TAIKO_MBEDTLS_ROOT}. Run scripts/build_mbedtls.sh, "
+        "then configure again.")
+endif()
+set(TAIKO_MBEDTLS_LIBS "${TAIKO_MBEDTLS_SSL}" "${TAIKO_MBEDTLS_X509}" "${TAIKO_MBEDTLS_CRYPTO}")
+# Source-local include dir: adding it to the target would rebuild every lifted
+# chunk. taiko_tls.c is the only file that talks to mbedTLS directly.
+set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"
+    PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_MBEDTLS_ROOT}/include")
+target_link_libraries(taiko_boot PRIVATE ${TAIKO_MBEDTLS_LIBS})
+if(WIN32)
+    target_link_libraries(taiko_boot PRIVATE bcrypt)
 endif()
 
 # Build the runtime from source rather than expecting a prebuilt .lib -- we are
@@ -504,6 +533,21 @@ if(BUILD_TESTING AND NOT WIN32)
         "${PS3RECOMP_DIR}/include"
         "${PS3RECOMP_DIR}/libs/video")
     add_test(NAME rsx_render_batch_tests COMMAND rsx_render_batch_tests)
+
+    # Guest big-endian pollfd/fd_set/timeval marshalling for sys_net.
+    add_executable(net_select_tests "tests/net_select_tests.c" "src/taiko_tls.c"
+        "${PS3RECOMP_DIR}/libs/network/cellHttpUtil.c")
+    target_include_directories(net_select_tests PRIVATE
+        "${PS3RECOMP_DIR}/libs/network"
+        "${PS3RECOMP_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${TAIKO_MBEDTLS_ROOT}/include")
+    target_link_libraries(net_select_tests PRIVATE ${TAIKO_MBEDTLS_LIBS})
+    if(NOT WIN32)
+        find_package(Threads REQUIRED)
+        target_link_libraries(net_select_tests PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME net_select_tests COMMAND net_select_tests)
 
     add_executable(taiko_host_input_tests
         "tests/taiko_host_input_tests.cpp"
