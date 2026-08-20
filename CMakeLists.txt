@@ -209,7 +209,7 @@ endif()
 
 set(TAIKO_EMBEDDED_IMAGE_SOURCES)
 if(TAIKO_EMBED_PPU_IMAGE)
-    set(TAIKO_EBOOT_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/game/EBOOT.recomp.elf"
+    set(TAIKO_EBOOT_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/game/EBOOT.elf"
         CACHE FILEPATH "Patched PPU ELF used to generate the embedded process image")
     if(NOT EXISTS "${TAIKO_EBOOT_IMAGE}")
         message(FATAL_ERROR

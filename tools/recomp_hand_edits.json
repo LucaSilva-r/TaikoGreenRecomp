@@ -1,0 +1,710 @@
+{
+ "preamble": [
+  "#include <mutex>",
+  "",
+  "/* The PS3 Dinkumware allocator is protected by guest synchronization that the",
+  " * recomp does not yet model reliably across its preemptive host threads.  Keep",
+  " * its exported operations atomic while allowing allocator-internal recursion. */",
+  "static std::recursive_mutex g_taiko_guest_heap_mutex;",
+  "",
+  "/* The XML tokenizer keeps its current token and scratch buffers in the",
+  " * process-wide object at TOC-0x7284.  The game normally serializes access via",
+  " * lightweight synchronization; until that path is fully faithful, concurrent",
+  " * song/config loads can overwrite the active token and trip the parser's",
+  " * fatal token-state check.  Serialize a complete tokenizer invocation. */",
+  "extern \"C\" int rsx_dbg_trace_armed(void);",
+  "extern \"C\" uint32_t rsx_dbg_draw_seq(void);",
+  "extern \"C\" void (*g_spurs_job_submit)(uint32_t job);",
+  "static std::recursive_mutex g_taiko_xml_tokenizer_mutex;",
+  "",
+  "/* The small-object allocator at 0x005c0f34 maintains a process-wide fallback",
+  " * pool (TOC-0x6b70) and allocation bookkeeping (TOC-0x6b68).  Protecting only",
+  " * the underlying mspace calls is insufficient: two recompiled host threads can",
+  " * race the pool bitmap/refcounts around those calls and later hand mspace a",
+  " * corrupted chunk.  Keep the complete allocator/bookkeeping operations atomic.",
+  " * Recursive locking is required because allocate/release call the lazy global",
+  " * accessor at 0x005c159c. */",
+  "static std::recursive_mutex g_taiko_small_object_mutex;",
+  ""
+ ],
+ "declarations": [
+  {
+   "symbol": "taiko_lumen_trace_shape",
+   "text": "extern \"C\" void taiko_lumen_trace_shape(ppu_context* ctx);",
+   "function": "func_003DAAD4"
+  },
+  {
+   "symbol": "rsx_dbg_trace_armed",
+   "text": "extern \"C\" int rsx_dbg_trace_armed(void);",
+   "function": "func_00581F5C"
+  },
+  {
+   "symbol": "rsx_dbg_draw_seq",
+   "text": "extern \"C\" uint32_t rsx_dbg_draw_seq(void);",
+   "function": "func_00581F5C"
+  },
+  {
+   "symbol": "ppu_dump_guest_stack",
+   "text": "extern \"C\" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag);",
+   "function": "func_005A93CC"
+  },
+  {
+   "symbol": "ppu_note_free",
+   "text": "extern \"C\" void ppu_note_free(uint32_t ptr, uint32_t lr, uint32_t tid);",
+   "function": "func_005A93CC"
+  }
+ ],
+ "functions": {
+  "func_003DAAD4": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_lumen_trace_shape(ctx);"
+    ]
+   }
+  ],
+  "func_00581F5C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        /* Probe: guest libc qsort. The logo screen's two quads tie on depth",
+     "         * (both z=1000), so whatever orders equal-key nodes decides which one",
+     "         * is submitted last -- and we submit them opposite to real hardware.",
+     "         * Log base/count/size/comparator, stamped with the draw sequence, only",
+     "         * while the RTT trace is armed. */",
+     "        {",
+     "            if (rsx_dbg_trace_armed())",
+     "                fprintf(stderr,",
+     "                        \"[QSORT] base=%08llX n=%llu size=%llu cmp=%08llX seq=%u\\n\",",
+     "                        (unsigned long long)ctx->gpr[3],",
+     "                        (unsigned long long)ctx->gpr[4],",
+     "                        (unsigned long long)ctx->gpr[5],",
+     "                        (unsigned long long)ctx->gpr[6],",
+     "                        rsx_dbg_draw_seq());",
+     "        }"
+    ]
+   }
+  ],
+  "func_005A5E24": [
+   {
+    "anchor": "loc_005A6050:",
+    "replaces": [],
+    "lines": [
+     "        fprintf(stderr,",
+     "                     \"[heap-fatal] free ptr=%08X heap=%08X block=%08X \"",
+     "                     \"hdr=%08X/%08X bounds=%08X/%08X/%08X lr=%08X sp=%08X\\n\",",
+     "                     (uint32_t)ctx->gpr[26], (uint32_t)ctx->gpr[30],",
+     "                     (uint32_t)ctx->gpr[31],",
+     "                     vm_read32(((uint32_t)ctx->gpr[31]) + 0),",
+     "                     vm_read32(((uint32_t)ctx->gpr[31]) + 4),",
+     "                     vm_read32(((uint32_t)ctx->gpr[30]) + 0x10),",
+     "                     vm_read32(((uint32_t)ctx->gpr[30]) + 0x14),",
+     "                     vm_read32(((uint32_t)ctx->gpr[30]) + 0x18),",
+     "                     (uint32_t)ctx->lr, (uint32_t)ctx->gpr[1]);"
+    ]
+   }
+  ],
+  "func_005A928C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A92B4": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A92F4": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A9324": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A935C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A9394": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A93CC": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);",
+     "        const uint32_t free_candidate = static_cast<uint32_t>(ctx->gpr[3]);",
+     "        const uint32_t free_heap = vm_read32(((2) ? ctx->gpr[2] : 0) + -0x7288);",
+     "        const uint32_t free_lower = free_heap ? vm_read32(free_heap + 0x10) : 0;",
+     "        const uint32_t free_upper = free_heap ? vm_read32(free_heap + 0x18) : 0;",
+     "        if (free_candidate && free_lower &&",
+     "            (free_candidate < free_lower || free_candidate >= free_upper)) {",
+     "            static unsigned invalid_free_budget = 32;",
+     "            if (invalid_free_budget) {",
+     "                --invalid_free_budget;",
+     "                fprintf(stderr,",
+     "                        \"[heap] ignored impossible free ptr=%08X arena=%08X-%08X lr=%08X\\n\",",
+     "                        free_candidate, free_lower, free_upper,",
+     "                        static_cast<uint32_t>(ctx->lr));",
+     "                ppu_dump_guest_stack(ctx, \"invalid-free\");",
+     "            }",
+     "            return;",
+     "        }",
+     "        /* Feed the runtime's free ledger so a later use-after-free can be traced",
+     "         * back to the call site that released the block (see ppu_note_free). */",
+     "        ppu_note_free(free_candidate, static_cast<uint32_t>(ctx->lr),",
+     "                      static_cast<uint32_t>(ctx->thread_id));"
+    ]
+   }
+  ],
+  "func_005A93F8": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A9428": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A944C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005A9474": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> heap_guard(g_taiko_guest_heap_mutex);"
+    ]
+   }
+  ],
+  "func_005AB5BC": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> xml_guard(g_taiko_xml_tokenizer_mutex);"
+    ]
+   }
+  ],
+  "func_005AB8A8": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        fprintf(stderr,",
+     "                \"[xml-fatal] token=%lld lr=%08llX sp=%08llX r28=%08llX r29=%08llX r30=%08llX r31=%08llX\\n\",",
+     "                (long long)(int32_t)ctx->gpr[3],",
+     "                (unsigned long long)ctx->lr,",
+     "                (unsigned long long)ctx->gpr[1],",
+     "                (unsigned long long)ctx->gpr[28],",
+     "                (unsigned long long)ctx->gpr[29],",
+     "                (unsigned long long)ctx->gpr[30],",
+     "                (unsigned long long)ctx->gpr[31]);"
+    ]
+   }
+  ],
+  "func_005ABB14": [
+   {
+    "anchor": "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0xC50, ctx->gpr[0]);",
+    "replaces": [
+     "        ctx->lr = 0x005ABC00; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            /* Same hazard as the func_005ABE50 call sites below: the",
+     "             * tokenizer fragment tail-returns continuations, so its own",
+     "             * lock_guard drops while tokenizing is still in flight and the",
+     "             * trampoline chain runs unlocked. Another PPU loader thread",
+     "             * then mutates the process-global tokenizer mid-token and the",
+     "             * parser aborts ([xml-fatal] token=5). Hold the lock across the",
+     "             * whole chain. */",
+     "            std::lock_guard<std::recursive_mutex> xml_token_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005ABC00; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   }
+  ],
+  "func_005ABE50": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        /* This is the complete callback-driven XML parse operation.  Its",
+     "         * tokenizer object is process-global, so keep other PPU loader threads",
+     "         * out until every token callback and cleanup step has completed. */",
+     "        std::lock_guard<std::recursive_mutex> xml_parse_guard(g_taiko_xml_tokenizer_mutex);"
+    ]
+   },
+   {
+    "anchor": "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0xEC8, ctx->gpr[9]);",
+    "replaces": [
+     "        ctx->lr = 0x005ABF60; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            /* Same hazard as the func_005ABE50 call sites below: the",
+     "             * tokenizer fragment tail-returns continuations, so its own",
+     "             * lock_guard drops while tokenizing is still in flight and the",
+     "             * trampoline chain runs unlocked. Another PPU loader thread",
+     "             * then mutates the process-global tokenizer mid-token and the",
+     "             * parser aborts ([xml-fatal] token=5). Hold the lock across the",
+     "             * whole chain. */",
+     "            std::lock_guard<std::recursive_mutex> xml_token_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005ABF60; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   }
+  ],
+  "func_005AC288": [
+   {
+    "anchor": "        ctx->gpr[3] = ctx->gpr[8] | ctx->gpr[8];",
+    "replaces": [
+     "        ctx->lr = 0x005AC37C; func_005ABE50(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            /* Hold the tokenizer lock across the complete trampoline chain.",
+     "             * A guard inside func_005ABE50 is released if that lifted fragment",
+     "             * tail-returns a continuation, even though parsing is not done. */",
+     "            std::lock_guard<std::recursive_mutex> xml_operation_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005AC37C;",
+     "            func_005ABE50(ctx);",
+     "            DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   },
+   {
+    "anchor": "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x548, ctx->gpr[0]);",
+    "replaces": [
+     "        ctx->lr = 0x005AC470; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            /* Same hazard as the func_005ABE50 call sites below: the",
+     "             * tokenizer fragment tail-returns continuations, so its own",
+     "             * lock_guard drops while tokenizing is still in flight and the",
+     "             * trampoline chain runs unlocked. Another PPU loader thread",
+     "             * then mutates the process-global tokenizer mid-token and the",
+     "             * parser aborts ([xml-fatal] token=5). Hold the lock across the",
+     "             * whole chain. */",
+     "            std::lock_guard<std::recursive_mutex> xml_token_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005AC470; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   }
+  ],
+  "func_005AC4C8": [
+   {
+    "anchor": "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x558, ctx->gpr[0]);",
+    "replaces": [
+     "        ctx->lr = 0x005AC5DC; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            /* Same hazard as the func_005ABE50 call sites below: the",
+     "             * tokenizer fragment tail-returns continuations, so its own",
+     "             * lock_guard drops while tokenizing is still in flight and the",
+     "             * trampoline chain runs unlocked. Another PPU loader thread",
+     "             * then mutates the process-global tokenizer mid-token and the",
+     "             * parser aborts ([xml-fatal] token=5). Hold the lock across the",
+     "             * whole chain. */",
+     "            std::lock_guard<std::recursive_mutex> xml_token_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005AC5DC; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   }
+  ],
+  "func_005AC708": [
+   {
+    "anchor": "loc_005AC80C:",
+    "replaces": [
+     "        ctx->lr = 0x005AC810; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            /* Same hazard as the func_005ABE50 call sites below: the",
+     "             * tokenizer fragment tail-returns continuations, so its own",
+     "             * lock_guard drops while tokenizing is still in flight and the",
+     "             * trampoline chain runs unlocked. Another PPU loader thread",
+     "             * then mutates the process-global tokenizer mid-token and the",
+     "             * parser aborts ([xml-fatal] token=5). Hold the lock across the",
+     "             * whole chain. */",
+     "            std::lock_guard<std::recursive_mutex> xml_token_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005AC810; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   }
+  ],
+  "func_005C0F34": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C1064": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C1090": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C1164": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C12A0": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C1408": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C14EC": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C1528": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C159C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        std::lock_guard<std::recursive_mutex> small_object_guard(g_taiko_small_object_mutex);"
+    ]
+   }
+  ],
+  "func_005C2514": [
+   {
+    "anchor": "        vm_write64(((9) ? ctx->gpr[9] : 0) + 0x30, ctx->gpr[0]);",
+    "replaces": [
+     "        ctx->lr = 0x005C257C; func_005ABE50(ctx); DRAIN_TRAMPOLINE(ctx);"
+    ],
+    "lines": [
+     "        {",
+     "            std::lock_guard<std::recursive_mutex> xml_operation_guard(",
+     "                g_taiko_xml_tokenizer_mutex);",
+     "            ctx->lr = 0x005C257C;",
+     "            func_005ABE50(ctx);",
+     "            DRAIN_TRAMPOLINE(ctx);",
+     "        }"
+    ]
+   }
+  ],
+  "func_009B8D3C": [
+   {
+    "anchor": "loc_009B8F44:",
+    "replaces": [],
+    "lines": [
+     "        {",
+     "            const uint32_t actual_len = vm_read32(ctx->gpr[1] + 0x8C);",
+     "            const uint32_t actual_cap = vm_read32(ctx->gpr[1] + 0x90);",
+     "            const uint32_t actual_addr = actual_cap < 0x10",
+     "                ? (uint32_t)(ctx->gpr[1] + 0x7C)",
+     "                : vm_read32(ctx->gpr[1] + 0x7C);",
+     "            const uint32_t expected_addr = (uint32_t)ctx->gpr[31];",
+     "            const uint32_t expected_len = (uint32_t)ctx->gpr[28];",
+     "            fprintf(stderr,",
+     "                    \"[boost-archive] invalid signature actual_len=%u \"",
+     "                    \"actual_addr=%08X expected_len=%u expected_addr=%08X \"",
+     "                    \"actual='\",",
+     "                    actual_len, actual_addr, expected_len, expected_addr);",
+     "            for (uint32_t i = 0; i < actual_len && i < 64; ++i) {",
+     "                const unsigned char ch = vm_read8(actual_addr + i);",
+     "                fputc(ch >= 0x20 && ch < 0x7F ? ch : '.', stderr);",
+     "            }",
+     "            fprintf(stderr, \"' actual_hex=\");",
+     "            for (uint32_t i = 0; i < actual_len && i < 64; ++i)",
+     "                fprintf(stderr, \"%02X\", vm_read8(actual_addr + i));",
+     "            fprintf(stderr, \" expected='\");",
+     "            for (uint32_t i = 0; i < expected_len && i < 64; ++i) {",
+     "                const unsigned char ch = vm_read8(expected_addr + i);",
+     "                fputc(ch >= 0x20 && ch < 0x7F ? ch : '.', stderr);",
+     "            }",
+     "            fprintf(stderr, \"'\\n\");",
+     "        }"
+    ]
+   }
+  ]
+ },
+ "security": {
+  "func_00926F8C": [
+   {
+    "anchor": "        { int64_t a = (int32_t)ctx->gpr[3]; int64_t b = (int64_t)0; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }",
+    "replaces": [
+     "        if (((ctx->cr >> 0) & 2)) goto loc_009270D0;"
+    ],
+    "lines": [
+     "        goto loc_009270D0;"
+    ]
+   }
+  ],
+  "func_00927748": [
+   {
+    "anchor": "        { int64_t a = (int32_t)ctx->gpr[3]; int64_t b = (int64_t)0; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }",
+    "replaces": [
+     "        if (((ctx->cr >> 0) & 2)) goto loc_00927890;"
+    ],
+    "lines": [
+     "        goto loc_00927890;"
+    ]
+   }
+  ],
+  "func_009287F4": [
+   {
+    "anchor": "        ctx->gpr[27] = ctx->gpr[1] + (int64_t)(0x120);",
+    "replaces": [
+     "        ctx->gpr[3] = ctx->gpr[29] | ctx->gpr[29];",
+     "        ctx->gpr[4] = ctx->gpr[27] | ctx->gpr[27];",
+     "        ctx->lr = 0x00928904; func_00A1D810(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        ctx->gpr[2] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x28);"
+    ],
+    "lines": [
+     "        ctx->gpr[0] = vm_read32(((1) ? ctx->gpr[1] : 0) + 0x70);",
+     "        { int64_t a = (int32_t)ctx->gpr[0]; int64_t b = (int64_t)0; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }",
+     "        if ((!((ctx->cr >> 0) & 2))) goto loc_00928870;",
+     "        goto loc_00928948;"
+    ]
+   },
+   {
+    "anchor": "        if (((ctx->cr >> 0) & 4)) goto loc_00928870;",
+    "replaces": [],
+    "lines": [
+     "loc_00928948:"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[29] = ppc_rldicl(ctx->gpr[3], 0, 32);",
+    "replaces": [
+     "        ctx->gpr[4] = ctx->gpr[27] | ctx->gpr[27];",
+     "        ctx->gpr[3] = ctx->gpr[29] | ctx->gpr[29];",
+     "        ctx->lr = 0x00928AA0; func_00A1D810(ctx); DRAIN_TRAMPOLINE(ctx);",
+     "        ctx->gpr[2] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x28);"
+    ],
+    "lines": [
+     "        ctx->gpr[0] = vm_read32(((1) ? ctx->gpr[1] : 0) + 0x70);",
+     "        { int64_t a = (int32_t)ctx->gpr[0]; int64_t b = (int64_t)0; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }",
+     "        if ((!((ctx->cr >> 0) & 2))) goto loc_00928A10;",
+     "        goto loc_00928AE4;"
+    ]
+   },
+   {
+    "anchor": "        if (((ctx->cr >> 0) & 4)) goto loc_00928A10;",
+    "replaces": [],
+    "lines": [
+     "loc_00928AE4:"
+    ]
+   }
+  ],
+  "func_00939454": [
+   {
+    "anchor": null,
+    "replaces": [
+     "        { int64_t a = (int64_t)ctx->gpr[3]; int64_t b = (int64_t)0; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 28)) | (cr_val << 28); }"
+    ],
+    "lines": []
+   },
+   {
+    "anchor": "        ctx->gpr[0] = ctx->lr;",
+    "replaces": [
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + -0x130, ctx->gpr[1]); ctx->gpr[1] += -0x130;",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x120, ctx->gpr[30]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x140, ctx->gpr[0]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0xE0, ctx->gpr[22]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0xE8, ctx->gpr[23]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0xF0, ctx->gpr[24]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0xF8, ctx->gpr[25]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x100, ctx->gpr[26]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x108, ctx->gpr[27]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x110, ctx->gpr[28]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x118, ctx->gpr[29]);",
+     "        vm_write64(((1) ? ctx->gpr[1] : 0) + 0x128, ctx->gpr[31]);",
+     "        ctx->gpr[0] = ctx->gpr[3] | ctx->gpr[3];",
+     "        ctx->gpr[30] = ctx->gpr[4] | ctx->gpr[4];",
+     "        if ((!((ctx->cr >> 28) & 2))) goto loc_009394DC;",
+     "loc_00939498:",
+     "        ctx->gpr[28] = (int64_t)(int32_t)((uint32_t)0x8001 << 16);",
+     "        ctx->gpr[0] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x140);",
+     "        ctx->gpr[22] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0xE0);",
+     "        ctx->gpr[28] = ctx->gpr[28] | 0xD;",
+     "        ctx->gpr[23] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0xE8);",
+     "        ctx->gpr[24] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0xF0);",
+     "        ctx->lr = ctx->gpr[0];",
+     "        ctx->gpr[3] = (int64_t)(int32_t)ctx->gpr[28];",
+     "        ctx->gpr[25] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0xF8);",
+     "        ctx->gpr[26] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x100);",
+     "        ctx->gpr[27] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x108);",
+     "        ctx->gpr[28] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x110);",
+     "        ctx->gpr[29] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x118);",
+     "        ctx->gpr[30] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x120);",
+     "        ctx->gpr[31] = vm_read64(((1) ? ctx->gpr[1] : 0) + 0x128);",
+     "        ctx->gpr[1] = ctx->gpr[1] + (int64_t)(0x130);"
+    ],
+    "lines": [
+     "        ctx->gpr[5] = (int64_t)(int32_t)((uint32_t)0x92 << 16);",
+     "        ctx->gpr[5] = ctx->gpr[5] | 0x7748;",
+     "        { uint64_t a = (uint32_t)ctx->gpr[0]; uint64_t b = (uint32_t)ctx->gpr[5]; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 28)) | (cr_val << 28); }",
+     "        if ((!((ctx->cr >> 28) & 8))) goto loc_009394A4;",
+     "        ctx->gpr[0] = (int64_t)(int32_t)(0x13FE);",
+     "        vm_write16(((4) ? ctx->gpr[4] : 0) + 0x0, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)(0x4100);",
+     "        vm_write16(((4) ? ctx->gpr[4] : 0) + 0x2, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)(0);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x4, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x8, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0xC, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x10, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x14, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x18, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x1C, ctx->gpr[0]);",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x20, ctx->gpr[0]);",
+     "        ctx->gpr[3] = (int64_t)(int32_t)(0);"
+    ]
+   },
+   {
+    "anchor": "        return;",
+    "replaces": [
+     "loc_009394DC:",
+     "        { int64_t a = (int32_t)ctx->gpr[4]; int64_t b = (int64_t)0; uint32_t cr_val = (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }",
+     "        if (((ctx->cr >> 0) & 2)) goto loc_00939498;",
+     "        ctx->gpr[22] = vm_read32(((2) ? ctx->gpr[2] : 0) + 0x3EE4);",
+     "        ctx->gpr[24] = ctx->gpr[1] + (int64_t)(0x70);",
+     "        ctx->gpr[23] = vm_read32(((2) ? ctx->gpr[2] : 0) + 0x3EDC);",
+     "        ctx->gpr[25] = ctx->gpr[0] | ctx->gpr[0];",
+     "        ctx->gpr[27] = ppc_rldicl(ctx->gpr[24], 0, 32);",
+     "        vm_write32(((1) ? ctx->gpr[1] : 0) + 0x70, ctx->gpr[23]);",
+     "        ctx->gpr[31] = ctx->gpr[0] | ctx->gpr[0];",
+     "        ctx->gpr[9] = vm_read32(((22) ? ctx->gpr[22] : 0) + 0x14);",
+     "        ctx->gpr[3] = ctx->gpr[27] | ctx->gpr[27];",
+     "        ctx->gpr[26] = (int64_t)(int32_t)(0);"
+    ],
+    "lines": [
+     "loc_009394A4:",
+     "        ctx->gpr[0] = (int64_t)(int32_t)(0xB9A);",
+     "        vm_write16(((4) ? ctx->gpr[4] : 0) + 0x0, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)(0xC00);",
+     "        vm_write16(((4) ? ctx->gpr[4] : 0) + 0x2, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)((uint32_t)0x32 << 16);",
+     "        ctx->gpr[0] = ctx->gpr[0] | 0x36;",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x4, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)((uint32_t)0x38 << 16);",
+     "        ctx->gpr[0] = ctx->gpr[0] | 0x34;",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x8, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)((uint32_t)0x31 << 16);",
+     "        ctx->gpr[0] = ctx->gpr[0] | 0x30;",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0xC, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)((uint32_t)0x30 << 16);",
+     "        ctx->gpr[0] = ctx->gpr[0] | 0x30;",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x10, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)((uint32_t)0x30 << 16);",
+     "        ctx->gpr[0] = ctx->gpr[0] | 0x30;",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x14, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)((uint32_t)0x30 << 16);",
+     "        ctx->gpr[0] = ctx->gpr[0] | 0x30;",
+     "        vm_write32(((4) ? ctx->gpr[4] : 0) + 0x18, ctx->gpr[0]);",
+     "        ctx->gpr[0] = (int64_t)(int32_t)(0);",
+     "        vm_write16(((4) ? ctx->gpr[4] : 0) + 0x1C, ctx->gpr[0]);",
+     "        ctx->gpr[3] = (int64_t)(int32_t)(0);",
+     "        return;"
+    ]
+   }
+  ]
+ }
+}

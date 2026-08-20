@@ -15,7 +15,7 @@ cmake --build build --target taiko_release
 ```
 
 `TAIKO_EMBED_PPU_IMAGE` is enabled by default. During the build,
-`tools/embed_ppu_image.py` reads `game/EBOOT.recomp.elf`, retains its exact two
+`tools/embed_ppu_image.py` reads `game/EBOOT.elf`, retains its exact two
 loadable process-image ranges plus entry/TLS/OPD metadata, and embeds the result
 as a Windows resource. To make an old developer-only build instead, configure
 with `-DTAIKO_EMBED_PPU_IMAGE=OFF`; that executable still requires an ELF path
@@ -88,7 +88,7 @@ Embedding is a packaging change, not a copyright transformation. The current
 resource contains about 16.9 MiB copied from the user's patched EBOOT `PT_LOAD`
 ranges, including executable bytes that the title reads as data. Consequently,
 `TaikoRecomp.exe` currently contains game-derived copyrighted material even
-though no separate `EBOOT.recomp.elf` is shipped.
+and no separate patched ELF exists any more -- the security bypass lives in the lifted code.
 
 Use this mode for private builds from a legitimately obtained dump. Do not
 describe the current executable as free of game code or assume it is suitable

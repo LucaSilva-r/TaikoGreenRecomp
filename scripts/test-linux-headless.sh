@@ -33,7 +33,7 @@ for boot in 1 2 3; do
     FLOW_NOSPILL=1 TAIKO_DNS_LOOPBACK=1 TAIKO_OFFLINE_COMPLETE=1 \
     TAIKO_FS_YIELD=0 PS3RECOMP_NULL_RSX=1 PS3RECOMP_NULL_AUDIO=1 \
     TAIKO_AUDIO_DECODE=0 TAIKO_AUDIO_SPU=0 \
-        "${binary}" "${repo_dir}/game/EBOOT.recomp.elf" >"${log}" 2>&1 &
+        "${binary}" "${repo_dir}/game/EBOOT.elf" >"${log}" 2>&1 &
     pid=$!
     trap 'terminate_pid "${pid:-0}"' EXIT INT TERM
 

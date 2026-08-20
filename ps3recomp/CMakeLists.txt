@@ -64,9 +64,6 @@ file(GLOB_RECURSE HLE_SOURCES
 )
 # Exclude test harnesses (e.g. libs/video/tests/*): they define their own main().
 list(FILTER HLE_SOURCES EXCLUDE REGEX "/tests/")
-# The legacy renderer is retained in the source tree for history while the
-# portable migration settles, but is no longer part of any runtime build.
-list(FILTER HLE_SOURCES EXCLUDE REGEX "/rsx_d3d12_backend\\.c$")
 
 # Runtime core (syscalls, PPU, SPU, memory)
 file(GLOB_RECURSE RUNTIME_SOURCES

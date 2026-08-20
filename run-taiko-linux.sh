@@ -27,7 +27,7 @@ export TAIKO_AUDIO_SPU="${TAIKO_AUDIO_SPU:-1}"
 export TAIKO_AUDIO_OFFSET_MS=60
 
 command=("${repo_dir}/build-linux/taiko_boot"
-    "${repo_dir}/game/EBOOT.recomp.elf" "$@")
+    "${repo_dir}/game/EBOOT.elf" "$@")
 
 cd "${repo_dir}"
 if [[ "${TAIKO_CONSOLE_LOG:-0}" == "1" ]]; then

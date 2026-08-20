@@ -16,7 +16,7 @@ Hand-written host code only:
 No game code, no game assets, no PS3 firmware, and no bytes derived from
 either. Specifically absent, and refused by `.gitignore`:
 
-- the game executable (`EBOOT.elf` / `EBOOT.recomp.elf`) and any data from the
+- the game executable (`EBOOT.elf`) and any data from the
   dump;
 - lifted PowerPC or SPU source generated from that executable (`src/recomp/`,
   `src/spu_gen/`);

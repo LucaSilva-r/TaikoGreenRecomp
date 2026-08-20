@@ -5,7 +5,8 @@ when investigating later Lumen screens.
 
 ## General renderer fixes
 
-The RSX backend fixes in `ps3recomp/libs/video/rsx_d3d12_backend.c` are general:
+The RSX backend fixes (made in the since-removed D3D12 backend, and carried
+forward into `rsx_sdl_gpu_backend.c`) are general:
 
 - deswizzle non-linear A8R8G8B8 and R8 textures;
 - avoid the obsolete SRV heap-slot collision that made the timer alternate

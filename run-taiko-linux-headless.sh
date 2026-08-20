@@ -15,4 +15,4 @@ export TAIKO_AUDIO_DECODE="${TAIKO_AUDIO_DECODE:-0}"
 export TAIKO_AUDIO_SPU="${TAIKO_AUDIO_SPU:-0}"
 
 exec "${repo_dir}/build-linux/taiko_boot" \
-    "${repo_dir}/game/EBOOT.recomp.elf" "$@"
+    "${repo_dir}/game/EBOOT.elf" "$@"

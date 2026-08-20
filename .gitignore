@@ -10,9 +10,9 @@ game/
 # ps3recomp/tools/ghidra_analyze.py and no build step reads it.
 ghidra_out/strings.json
 gamedata/
-# lifted PPU code
-src/recomp/
-src/recomp.newlift/
+# lifted PPU code -- every variant: working snapshot, pristine baselines kept
+# for re-deriving hand edits, and any experimental lift
+src/recomp*/
 # lifted SPU images
 src/spu_gen/
 

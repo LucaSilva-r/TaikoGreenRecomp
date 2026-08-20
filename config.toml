@@ -8,7 +8,7 @@
 #      security dongle. All three are ours to reimplement or stub.
 
 [input]
-elf_path = "game/EBOOT.recomp.elf"
+elf_path = "game/EBOOT.elf"
 title    = "Taiko no Tatsujin (Green)"
 title_id = "SCEEXE001"
 notes    = "PARAM.SFO says 'Taiko no Tatsujin(S111)', PS3_SYSTEM_VER 04.7000"

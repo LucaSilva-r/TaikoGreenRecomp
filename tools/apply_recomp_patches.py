@@ -2,157 +2,231 @@
 """Re-apply hand fixes to the generated PPU code in src/recomp/.
 
 src/recomp/ is gitignored (millions of generated lines), so hand edits there are
-lost whenever the lifter is re-run. This script re-applies them idempotently.
+lost whenever the lifter is re-run.  This script re-applies them idempotently.
 Run it after regenerating, before building.
 
-    python3 tools/apply_recomp_patches.py
+    python3 tools/apply_recomp_patches.py [--check] [--recomp-dir DIR]
 
-Only *functional fixes* belong here. Debug probes are deliberately not
-preserved -- re-add them ad hoc when investigating.
+The edits live in tools/recomp_hand_edits.json, which stores only the
+hand-written lines plus the generated line each one anchors to -- never any
+lifted code, so the data file carries nothing derived from the executable.
+
+Covered:
+  * the guest heap / small-object / XML tokenizer recursive mutexes and the
+    lock_guards that keep those guest-global structures atomic across host
+    threads (the fix for the random heap corruption and "[xml-fatal] token=5");
+  * the invalid-free guard and free ledger in the guest free() (func_005A93CC);
+  * the Boost archive signature diagnostic and the Lumen shape trace;
+  * the Green dongle/VU security bypass (--no-security to leave it out).
+
+The bypass is the same set of changes Taiko Zucchini installs into the live PS3
+text segment, expressed against the lifted code instead of the executable.  It
+is applied here rather than to game/EBOOT.elf so that nobody has to modify their
+own dump: lift the ELF exactly as it came out of unfself.py and run this script.
+
+Only *functional fixes and their diagnostics* belong here.  Ad-hoc probes do
+not -- re-add those by hand when investigating.
 """
 
+from __future__ import annotations
+
+import argparse
+import json
+import os
 import pathlib
+import re
 import sys
+import time
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-TARGET = REPO / "src" / "recomp" / "ppu_recomp_002.cpp"
-ARCHIVE_TARGET = REPO / "src" / "recomp" / "ppu_recomp_004.cpp"
-
-# The guest's XML tokenizer object is process-global and several PPU loader
-# threads parse fumen composition.xml concurrently during the boot scan.
-#
-# Lifted fragments tail-return continuations via g_trampoline_fn, driven by
-# DRAIN_TRAMPOLINE at the call site. A std::lock_guard scoped to the C++
-# function body therefore releases the moment the fragment returns a
-# continuation -- while tokenizing is still in flight -- and the remainder of
-# the chain runs unlocked. Another loader thread then mutates the tokenizer
-# mid-token and the parser aborts with "[xml-fatal] token=5".
-#
-# The guard must span call + DRAIN_TRAMPOLINE at every call site. An earlier
-# session did this for func_005ABE50; these are the five func_005AB5BC
-# (tokenizer) call sites that were missed.
-TOKENIZER_CALL_SITES = [
-    "0x005ABC00",
-    "0x005ABF60",
-    "0x005AC470",
-    "0x005AC5DC",
-    "0x005AC810",
-]
-
-GUARD_COMMENT = """\
-            /* Tokenizer fragment tail-returns continuations, so its own
-             * lock_guard drops while tokenizing is still in flight and the
-             * trampoline chain runs unlocked. Another PPU loader thread then
-             * mutates the process-global tokenizer mid-token and the parser
-             * aborts ([xml-fatal] token=5). Hold the lock across the chain. */
-"""
+DATA = REPO / "tools" / "recomp_hand_edits.json"
+FUNC_RE = re.compile(r"^void (func_[0-9A-F]+)\(ppu_context\* ctx\) \{")
 
 
-def patch_tokenizer_locks(text):
-    applied = skipped = 0
-    for lr in TOKENIZER_CALL_SITES:
-        # Anchor on the newline: an already-wrapped site is indented deeper, and
-        # the 8-space form is a substring of the 12-space one, so an unanchored
-        # match happily wraps the call a second time.
-        bare = "\n        ctx->lr = %s; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);" % lr
-        if bare not in text:
-            # Already wrapped (or the lifter emitted something different).
-            skipped += 1
-            continue
-        wrapped = (
-            "\n        {\n"
-            + GUARD_COMMENT
-            + "            std::lock_guard<std::recursive_mutex> xml_token_guard(\n"
-            "                g_taiko_xml_tokenizer_mutex);\n"
-            "            ctx->lr = %s; func_005AB5BC(ctx); DRAIN_TRAMPOLINE(ctx);\n"
-            "        }" % lr
-        )
-        text = text.replace(bare, wrapped, 1)
-        applied += 1
-    return text, applied, skipped
+def load_chunks(recomp_dir: pathlib.Path) -> list[pathlib.Path]:
+    chunks = sorted(recomp_dir.glob("ppu_recomp_*.cpp"))
+    if not chunks:
+        sys.exit(f"no generated chunks in {recomp_dir} -- lift src/recomp/ first")
+    return chunks
 
 
-ARCHIVE_SIGNATURE_MARKER = "[boost-archive] invalid signature"
+def find_function(lines: list[str], name: str) -> tuple[int, int] | None:
+    """Return (body_start, body_end_exclusive) for `name`, or None."""
+    for i, line in enumerate(lines):
+        m = FUNC_RE.match(line)
+        if m and m.group(1) == name:
+            for j in range(i + 1, len(lines)):
+                if lines[j].rstrip() == "}":
+                    return i + 1, j + 1
+            sys.exit(f"{name}: unterminated body")
+    return None
 
 
-def patch_archive_signature_diagnostic(text):
-    """Make Boost XML archive failures identify the bytes it actually saw.
+def apply_ops(body: list[str], ops: list[dict], name: str) -> tuple[list[str], bool]:
+    """Apply this function's edits in order.
 
-    The guest throws archive_exception(code=3) at 0x009B8FAC when the archive
-    signature differs from boost::archive::BOOST_ARCHIVE_SIGNATURE().  The
-    exception later reaches the guest unwinder and used to surface only as the
-    misleading ``[xml-fatal] token=5`` message.  Logging here preserves the
-    first useful state without adding any normal-path release-build chatter.
+    Idempotent by construction: each edit is identified by the generated line it
+    anchors to, and is considered already applied when its replacement text sits
+    immediately after that anchor.  Membership tests are not enough -- generated
+    lines repeat throughout a body, so a substring match elsewhere would hide a
+    missing edit.
     """
-    if ARCHIVE_SIGNATURE_MARKER in text:
-        return text, False
+    out = list(body)
+    changed = False
+    cursor = 0
+    for op in ops:
+        anchor = op["anchor"]
+        if anchor is None:
+            at = 0
+        else:
+            try:
+                at = out.index(anchor, cursor) + 1
+            except ValueError:
+                sys.exit(
+                    f"{name}: anchor line not found at or after line {cursor}, "
+                    f"the lifted body has moved:\n  {anchor.strip()}\n"
+                    "Re-derive tools/recomp_hand_edits.json against the new lift."
+                )
+        wanted = op["lines"]
+        replaces = op.get("replaces") or []
+        if wanted and out[at:at + len(wanted)] == wanted:
+            cursor = at + len(wanted)          # already applied
+            continue
+        if not wanted and out[at:at + len(replaces)] != replaces:
+            continue                           # pure deletion already applied
+        if replaces:
+            if out[at:at + len(replaces)] != replaces:
+                sys.exit(
+                    f"{name}: the lines this edit replaces are not where they "
+                    f"were, at body line {at}:\n"
+                    f"  expected: {replaces[0].strip() if replaces else ''}\n"
+                    f"  found:    {out[at].strip() if at < len(out) else '<eof>'}\n"
+                    "Re-derive tools/recomp_hand_edits.json against the new lift."
+                )
+            del out[at:at + len(replaces)]
+        out[at:at] = wanted
+        cursor = at + len(wanted)
+        changed = True
+    return out, changed
 
-    anchor = "loc_009B8F44:\n        ctx->gpr[31] = ctx->gpr[1] + (int64_t)(0x94);"
-    if anchor not in text:
-        raise RuntimeError("Boost archive signature throw site not found")
 
-    diagnostic = r'''loc_009B8F44:
-        {
-            const uint32_t actual_len = vm_read32(ctx->gpr[1] + 0x8C);
-            const uint32_t actual_cap = vm_read32(ctx->gpr[1] + 0x90);
-            const uint32_t actual_addr = actual_cap < 0x10
-                ? (uint32_t)(ctx->gpr[1] + 0x7C)
-                : vm_read32(ctx->gpr[1] + 0x7C);
-            const uint32_t expected_addr = (uint32_t)ctx->gpr[31];
-            const uint32_t expected_len = (uint32_t)ctx->gpr[28];
-            fprintf(stderr,
-                    "[boost-archive] invalid signature actual_len=%u "
-                    "actual_addr=%08X expected_len=%u expected_addr=%08X "
-                    "actual='",
-                    actual_len, actual_addr, expected_len, expected_addr);
-            for (uint32_t i = 0; i < actual_len && i < 64; ++i) {
-                const unsigned char ch = vm_read8(actual_addr + i);
-                fputc(ch >= 0x20 && ch < 0x7F ? ch : '.', stderr);
-            }
-            fprintf(stderr, "' actual_hex=");
-            for (uint32_t i = 0; i < actual_len && i < 64; ++i)
-                fprintf(stderr, "%02X", vm_read8(actual_addr + i));
-            fprintf(stderr, " expected='");
-            for (uint32_t i = 0; i < expected_len && i < 64; ++i) {
-                const unsigned char ch = vm_read8(expected_addr + i);
-                fputc(ch >= 0x20 && ch < 0x7F ? ch : '.', stderr);
-            }
-            fprintf(stderr, "'\n");
-        }
-        ctx->gpr[31] = ctx->gpr[1] + (int64_t)(0x94);'''
-    return text.replace(anchor, diagnostic, 1), True
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--recomp-dir", type=pathlib.Path,
+                    default=REPO / "src" / "recomp")
+    ap.add_argument("--check", action="store_true",
+                    help="report what is missing without writing")
+    ap.add_argument("--no-security", action="store_true",
+                    help="skip the dongle/VU bypass (the game will fail its "
+                         "security check without it)")
+    args = ap.parse_args()
 
+    data = json.loads(DATA.read_text())
+    preamble, functions = data["preamble"], dict(data["functions"])
+    declarations = data.get("declarations", [])
+    security = data.get("security", {})
+    if not args.no_security:
+        for name, ops in security.items():
+            functions[name] = functions.get(name, []) + ops
+    chunks = load_chunks(args.recomp_dir)
 
-def main():
-    if not TARGET.exists():
-        sys.exit("missing %s -- generate src/recomp/ first" % TARGET)
+    # Locate every function first, so a partial application is impossible.
+    text = {p: p.read_text(encoding="utf-8", errors="surrogateescape").split("\n")
+            for p in chunks}
+    where: dict[str, pathlib.Path] = {}
+    for name in functions:
+        for path in chunks:
+            if find_function(text[path], name):
+                where[name] = path
+                break
+        else:
+            sys.exit(f"{name} is not present in {args.recomp_dir} -- wrong lift?")
 
-    text = original = TARGET.read_text()
+    # The mutexes the guards refer to must be declared in the chunk that uses
+    # them; they are static, so every guard user has to share one chunk.
+    guard_chunks = {where[n] for n, ops in functions.items()
+                    if any("lock_guard" in l for o in ops for l in o["lines"])}
+    if len(guard_chunks) != 1:
+        sys.exit(f"lock_guard users span {len(guard_chunks)} chunks; the static "
+                 "mutex declarations can no longer cover them all")
+    decl_chunk = guard_chunks.pop()
 
-    if "g_taiko_xml_tokenizer_mutex" not in text:
-        sys.exit(
-            "g_taiko_xml_tokenizer_mutex not declared in %s.\n"
-            "The mutex and the func_005AB5BC / func_005ABE50 body guards are "
-            "themselves hand edits from an earlier session and are not "
-            "reproduced here; restore them before running this script." % TARGET.name
-        )
+    applied = skipped = 0
+    for name, ops in functions.items():
+        path = where[name]
+        lines = text[path]
+        start, end = find_function(lines, name)
+        body, changed = apply_ops(lines[start:end], ops, name)
+        if changed:
+            text[path] = lines[:start] + body + lines[end:]
+            applied += 1
+        else:
+            skipped += 1
 
-    text, applied, skipped = patch_tokenizer_locks(text)
+    # Helpers called by the edits are declared per chunk: the lifter splits
+    # functions across translation units, so the chunk holding the caller is
+    # the one that needs the extern.
+    decls_added = 0
+    for decl in declarations:
+        owner = where.get(decl["function"])
+        if owner is None:
+            continue
+        lines = text[owner]
+        if any(decl["text"] == l for l in lines):
+            continue
+        if any(f" {decl['symbol']}(" in l and l.startswith("extern")
+               for l in lines):
+            continue
+        # Place it immediately above the function that calls it.  Anchoring on
+        # the includes is wrong: the last #include in a generated chunk sits
+        # inside "#ifdef _MSC_VER", so a declaration put after it disappears on
+        # every other compiler.
+        for i, l in enumerate(lines):
+            if FUNC_RE.match(l) and FUNC_RE.match(l).group(1) == decl["function"]:
+                lines[i:i] = [decl["text"]]
+                text[owner] = lines
+                decls_added += 1
+                break
+        else:
+            sys.exit(f"{decl['function']}: not found while placing "
+                     f"declaration of {decl['symbol']}")
 
-    if text != original:
-        TARGET.write_text(text)
-    print("tokenizer call sites: %d wrapped, %d already-wrapped/not-found"
-          % (applied, skipped))
+    pre_changed = False
+    lines = text[decl_chunk]
+    if "#include <mutex>" not in lines:
+        anchor = "#include <math.h>"
+        if anchor not in lines:
+            sys.exit(f"{decl_chunk.name}: no {anchor} to anchor the preamble to")
+        at = lines.index(anchor) + 1
+        lines[at:at] = preamble
+        text[decl_chunk] = lines
+        pre_changed = True
 
-    if not ARCHIVE_TARGET.exists():
-        sys.exit("missing %s -- generate src/recomp/ first" % ARCHIVE_TARGET)
-    archive_text = archive_original = ARCHIVE_TARGET.read_text()
-    archive_text, archive_applied = patch_archive_signature_diagnostic(archive_text)
-    if archive_text != archive_original:
-        ARCHIVE_TARGET.write_text(archive_text)
-    print("archive signature diagnostic: %s"
-          % ("applied" if archive_applied else "already present"))
+    if args.check:
+        print(f"would apply: {applied} function(s), {decls_added} declaration(s), "
+              f"preamble {'missing' if pre_changed else 'present'}")
+        return 1 if (applied or pre_changed or decls_added) else 0
+
+    for path, lines in text.items():
+        path.write_text("\n".join(lines), encoding="utf-8", errors="surrogateescape")
+
+    # A re-lift moves functions between chunks, and ninja decides by mtime.  A
+    # freshly lifted chunk can look older than the object built from the
+    # previous lift, so ninja keeps the stale object and the link then fails
+    # with undefined references to func_*.  Stamp every chunk to now, whether or
+    # not this run changed it, so any existing objects are unambiguously older.
+    now = time.time()
+    for path in chunks:
+        os.utime(path, (now, now))
+
+    print(f"hand edits: {applied} function(s) patched, {skipped} already present")
+    print(f"helper declarations: {decls_added} added")
+    print("security bypass: %s"
+          % ("skipped (--no-security)" if args.no_security
+             else "included (%d function(s))" % len(security)))
+    print(f"preamble ({decl_chunk.name}): {'inserted' if pre_changed else 'already present'}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -40,7 +40,7 @@ export WINEDEBUG="${WINEDEBUG:--all}"
 export TAIKO_GPU_DRIVER="${TAIKO_GPU_DRIVER:-vulkan}"
 
 command=(wine "${repo_dir}/build/taiko_boot.exe"
-    "${repo_dir}/game/EBOOT.recomp.elf" "$@")
+    "${repo_dir}/game/EBOOT.elf" "$@")
 
 cd "${repo_dir}"
 

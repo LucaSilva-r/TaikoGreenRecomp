@@ -9,7 +9,9 @@ Windows executables. SDL3 provides the portable graphical host. Uses the
 
 ## How it works
 
-- `game/EBOOT.recomp.elf` — the game's PPU ELF, pre-processed for the lifter.
+- `game/EBOOT.elf` — the game's PPU ELF, straight out of `unfself.py`. It is
+  never patched: the Green dongle/VU bypass is applied to the lifted code by
+  `tools/apply_recomp_patches.py` instead.
 - `src/recomp/ppu_recomp_*.cpp` — ~8 chunks of lifted PPU code (millions of
   lines, generated; each guest function is `func_00XXXXXX(ppu_context*)`).
   Grep here to inspect guest code by address.
@@ -59,14 +61,29 @@ cmake --build build-linux
 **Parallelism is capped on purpose** (`TAIKO_COMPILE_JOBS`, default 4, via a
 ninja job pool). Each lifted chunk is a 600k–800k line TU needing several GB at
 `-O2`; ninja's default of one job per core meant 16 concurrent multi-GB compiles,
-which exhausts RAM and wedges the machine rather than merely being slow. Budget
-~3 GB per job before raising it.
+which exhausts RAM and wedges the machine rather than merely being slow.
+
+Budget **~3 GB per job** and set it from available RAM, not core count:
+
+```sh
+cmake -S . -B build -DTAIKO_COMPILE_JOBS=8 ...   # ~24 GB peak, needs 32 GB+
+```
+
+The default stays at 4 so a 16 GB machine builds unattended. On a 46 GB box 8
+is comfortable and roughly halves a full rebuild; going to `nproc` is what
+caused the original wedging. It is a cache variable — pass it at configure
+time, or edit the cache and re-run cmake.
 
 Changing the chunk count (a re-lift) needs a **re-configure**, not just a build —
-`file(GLOB)` is evaluated at configure time. And delete the stale objects:
-`rm -f build/CMakeFiles/taiko_boot.dir/src/recomp/*.obj`, since ninja compares
-mtimes and freshly-lifted sources can look older than the objects built from the
-previous lift (symptom: undefined references to `func_*` at link).
+`file(GLOB)` is evaluated at configure time.
+
+Stale objects used to be a second trap here: ninja compares mtimes, and a
+freshly lifted chunk can look older than the object built from the previous
+lift, so the link fails with undefined references to `func_*` (a re-lift moves
+functions between chunks). `apply_recomp_patches.py` now stamps every chunk to
+the current time, so this resolves itself. If you ever lift *without* running
+it, `rm -f build*/CMakeFiles/taiko_boot.dir/src/recomp/*.obj` is the manual
+fix.
 
 ## Run
 
@@ -98,42 +115,39 @@ The script sets everything needed. Notable pieces:
 - Boot takes ~1–2 min: security/test screen → Bandai Namco logo → credits →
   attract. The fumen `composition.xml` scan (~850 files) is the long pause.
 
-## Debugging tools (all in `rsx_d3d12_backend.c` unless noted)
+## Debugging tools
 
-- **F9 in the game window** — dumps the next 120 presented frames as
-  `frame_*.bmp` (into cwd or `CELLMARK_DUMP_DIR`) and traces 5 frames of
-  per-draw `[RTT]` lines (op order, RT, texture offset/fmt/dims, blend, depth,
-  z math) plus `[TEXUP]` texture-upload bytes and per-vertex dumps. This is
-  the main capture tool — ask the user to press it at the broken screen.
-- `CELLMARK_DUMP=N` + `CELLMARK_DUMP_DIR=dir` — dump first N presents from
-  boot. `CELLMARK_DUMP_CONTENT=1` skips empty presents. **The dir must exist**
-  — fopen failures still burn the budget silently.
-- `RTT_DUMP=N` — trace N frames of draws from boot; `RTT_VERTS=1` adds vertex
-  data; `RTT_PASS=n` draws only up to vp-draw n (isolate a layer);
-  `RTT_VIEWRT=<hexoff>` shows an offscreen RT fullscreen; `RTT_SAVERT` writes
-  one RT to `rt_save.bmp`.
-- `TEXDROP=1` — the *first* thing to try when something renders as a flat
-  colour or not at all. `[TEXDROP]` prints every texture binding the backend
-  silently discards (zero dims, or a format missing from the supported list),
-  one line per distinct `(format,w,h)`; `[NOTEX]` prints every VP draw that
-  reaches the fragment shader with nothing on unit 0, together with what the
-  guest last said about that unit. "Bound, then dropped by us" and "never
-  textured" look identical in an `[RTT]` trace without this.
-- `TEX_RAW_DUMP=1` — writes one `tex_<off>_<w>x<h>_<fmt>_p<pitch>.bin` per
-  distinct texture offset (BC and ARGB, width ≥ 256), straight from guest
-  memory before upload. `python3 tools/bc_decode.py <file>` turns one into a
-  BMP; decoding the whole set and building a montage is the fastest way to
-  find out which asset a broken draw is *supposed* to be showing.
-- `CLEAR_DBG=1` — clears the backbuffer to magenta instead of the guest's
-  clear colour, which separates "the guest cleared to this colour" from "a
-  draw painted this colour". The `[RING]` line also prints the guest `cc=`.
-- `FP_NOWHITE=1` — disables the neutral-white fallback for an unset texture
-  unit, so such draws go back to transparent. Use it to see what an opaque
-  overlay is covering.
-- `D3D12_IQ=1` — drain the D3D12 debug layer message queue per frame.
-- `VP_LEQUAL_LESS` — presence (any value!) forces depth LEQUAL→LESS. Was a
-  wrong workaround for the layer flicker; leave unset.
-- `PS3RECOMP_NULL_RSX=1` — headless null backend.
+Everything here exists in the **shipping SDL_GPU backend**
+(`ps3recomp/libs/video/rsx_sdl_gpu_backend.c`) and the portable recorder. The
+old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
+`CELLMARK_DUMP`, `TEX_RAW_DUMP`, `CLEAR_DBG`, `FP_NOWHITE`, `D3D12_IQ`,
+`VP_LEQUAL_LESS`) are **gone** -- do not document or reach for them.
+
+- `RSX_BATCH_CAPTURE=<file>` + `RSX_BATCH_CAPTURE_FRAMES=N` — record N frames
+  of backend-neutral render batches to a `.rsxb`. This replaces the old F9
+  capture and is the main tool: it captures what the recorder saw, so a bad
+  frame can be replayed offline, repeatedly, without the game running.
+- `build-linux/rsx_replay --backend=sdl_gpu <file.rsxb>` — replay a capture.
+  Deterministic, and the fastest way to tell a recorder bug from a renderer
+  bug: if the capture replays correctly in a fresh process, the defect is in
+  what was recorded, not in how it was drawn.
+- `RSX_RESOURCE_TRACE=1` — per-frame resource accounting; prints
+  `[SDL_GPU-SLOWPREP]` with new shader/pipeline/texture/sampler counts whenever
+  preparation exceeds 5 ms. This is what identified the Go-Go slowdown.
+- `RSX_FPS_LOG=1`, `RSX_FRAME_PACING_TRACE=1` — frame rate and pacing.
+- `RSX_TEXTURE_CACHE_LIMIT=16..1024` — shrink the sampled-texture cache to
+  force continuous eviction; how the long-session white-rectangle bug was
+  reproduced on demand.
+- `SDL_GPU_DEBUG=1` — SDL_GPU validation layers.
+- `SDL_GPU_DUMP_SHADERS=1`, `SDL_GPU_DUMP_TEXTURES=1` — dump translated
+  shaders and uploaded textures. `python3 tools/bc_decode.py <file>` turns a
+  raw BC/ARGB texture into a BMP.
+- `SDL_GPU_VIEW_SURFACE=<hexoff>` — show one offscreen render target
+  fullscreen (the replacement for `RTT_VIEWRT`).
+- `TAIKO_PRESENT_MODE`, `TAIKO_FRAMES_IN_FLIGHT`, `TAIKO_GPU_DRIVER` —
+  presentation and driver selection.
+- `PS3RECOMP_NULL_RSX=1` / `PS3RECOMP_NULL_AUDIO=1` — headless backends, used
+  by `scripts/test-linux-headless.sh`.
 - Guest-side: `[WAIT]`, `[fs]`, `[taiko_usio]`, `[taiko_netstate]` lines in
   the log; `sys_memory` allocs log caller `lr`.
 - **Free ledger** (`ppu_note_free` / `[freelog]` in `ppu_loader.cpp`) — the
@@ -167,10 +181,10 @@ The script sets everything needed. Notable pieces:
   display sampling the DXT23 font atlas at RSX-local offset `0xCC0300`;
   suspicion: the game fills this local-memory texture via a path the backend
   doesn't emulate (CPU write into mapped local memory, or an RSX 2D-engine
-  transfer — `NV0039/NV309E/NV3089` are stubbed in `cellGcmSys.c`). Use F9
-  `[TEXUP]` bytes to check whether the atlas has content at draw time. Check
-  `TEXDROP=1` first — an unsupported texture format was exactly what hid the
-  transition rainbow; see "Transition rainbow" below.
+  transfer — `NV0039/NV309E/NV3089` are stubbed in `cellGcmSys.c`). Capture the
+  frame with `RSX_BATCH_CAPTURE` and check whether the atlas has content at
+  draw time; an unsupported texture format was exactly what hid the transition
+  rainbow, so verify the binding survives before theorising.
 - Transition wipes render the rainbow again (fixed 2026-08-13, `0x9E` /
   D8R8G8B8 was being dropped at bind time).
 - **Player Entry graphics are repaired.** The texture deswizzle, SRV collision,
@@ -373,6 +387,47 @@ This tree was re-founded as a clean, publishable repository. Its history begins
 at a single commit; the previous working repository is kept locally as
 `TaikoRecomp-archive` and holds the full development history plus the
 experimental `src/recomp.newlift/` snapshot (see "Lifter" below).
+
+### Regenerating the lifted snapshot
+
+`src/recomp/` is a *generated snapshot plus hand fixes*, and the hand fixes are
+not optional -- a raw lift is missing the guest-heap, small-object and XML
+tokenizer mutexes, the invalid-free guard and free ledger, and the dongle/VU
+security bypass. Reproduce it with:
+
+```sh
+python3 ps3recomp/tools/ppu_lifter.py game/EBOOT.elf \
+    --functions game/functions.json --code-end 0xa1f890 \
+    --names meta/names.json --hle-stubs meta/EBOOT.imports.json \
+    --extra-targets meta/jt_seeds.json -o src/recomp -j $(nproc)
+python3 tools/apply_recomp_patches.py
+```
+
+The edits live in `tools/recomp_hand_edits.json`: 32 hand-edit functions
+(186 lines), 4 security functions (57 lines), 5 helper declarations, and the
+chunk preamble that declares the three recursive mutexes. It stores only
+hand-written lines plus the generated line each anchors to -- never a lifted
+body, so nothing derived from the executable is tracked. `apply_recomp_patches.py`
+is idempotent and fails closed; `--no-security` omits the bypass.
+
+To recapture the edits after a lifter change, lift once into a scratch
+directory with no patches applied and run
+`tools/derive_recomp_hand_edits.py --baseline <scratch> --patched src/recomp`.
+It ignores functions whose only differences are lifter codegen drift.
+
+**The ELF is never patched.** `tools/patch_taiko_security.py` and
+`game/EBOOT.recomp.elf` are gone; the Zucchini dongle/VU bypass is applied to
+the lifted code at five sites in `func_009287F4`, `func_00926F8C`,
+`func_00927748` and `func_00939454`.
+
+`tools/fix_vmrghw_snapshot.py` is retained but is a **no-op against the current
+lifter**, which emits `vmrghw` correctly (it reports 0 rewrites on fresh
+output). It only matters if you lift with an older tools checkout.
+
+Validated 2026-08-20 on a full re-lift: 36/36 patched functions byte-identical
+to the previous known-good snapshot, three headless boots at 1330 file opens
+with zero fault markers, and a live boot reaching attract with the security
+screen reporting OK.
 
 `ps3recomp/` is **vendored, not a submodule** — flattened at upstream `82a1f96`
 plus local changes. There is no gitlink and no `.gitmodules`; edit it in place
@@ -1066,8 +1121,8 @@ lifted TUs), with all tracing/profile/capture switches unset. The normal
 **Performance remains open.** The traced 8 FPS run is not representative—it
 hashed every job/vertex buffer and scanned indexed triangles—but the clean run
 is still slow enough to require a separate profiling pass. Do not enable
-`RSX_PROFILE`, `PPU_SAMPLE_PROFILE`, `TAIKO_VERTEX_RACE_TRACE`, F9 capture, or
-RenderDoc when establishing the clean baseline.
+`RSX_PROFILE`, `PPU_SAMPLE_PROFILE`, `TAIKO_VERTEX_RACE_TRACE`, batch capture,
+or RenderDoc when establishing the clean baseline.
 
 RenderDoc workflow retained for future GPU bugs:
 
@@ -1128,11 +1183,12 @@ SRV format, hash size) with alpha forced to `0xFF`.
 
 Reusable lessons:
 
-- **A dropped binding is invisible in an `[RTT]` trace.** It shows `t0=0x0
-  t0fmt=0x0 t0dim=0x0`, exactly like a draw the guest never textured. Run
-  `TEXDROP=1` before theorising; it named this bug in one line
-  (`[NOTEX] draw=37 lastbind#53242 off=0x718F600 fmt=0x9E 128x8 ctl0=0x80000000`
-  — unit enabled, dims valid, discarded by us).
+- **A dropped binding looks identical to a draw that was never textured.**
+  The lesson generalises past the tooling that found it: when something renders
+  as a flat colour or not at all, first establish whether the backend was
+  *given* a texture and discarded it, rather than assuming the guest never
+  bound one. An unsupported format silently dropped at bind time was the cause
+  here.
 - **Do not make an unset texture unit sample white.** That workaround was
   tried first and produced the white square: it converted an invisible draw
   into an opaque full-screen one. It is retained only as a fallback (a null

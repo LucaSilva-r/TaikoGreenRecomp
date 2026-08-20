@@ -61,7 +61,7 @@ PS3_VFS_ROOT=game/vfs \
 PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38 \
 FLOW_NOSPILL=1 \
 TAIKO_DNS_LOOPBACK=1 \
-wine build/taiko_boot.exe game/EBOOT.recomp.elf
+wine build/taiko_boot.exe game/EBOOT.elf
 ```
 
 `FLOW_NOSPILL=1` is **required**, not a debug option -- see *The TOC spill* below.
@@ -79,9 +79,8 @@ cmake --build build --target taiko_release
 Copy `build/TaikoRecomp.exe` into the dumped game's `USRDIR` directory, beside
 `EBOOT.BIN`, `data`, `cache`, `hash`, `install`, `logs`, and `updates`, then run
 it without arguments. The executable directory becomes the VFS root directly;
-no `game/vfs` tree, symlinks, `PS3_VFS_ROOT`, or separate
-`EBOOT.recomp.elf`, Python helper, FFmpeg executable/DLL, or decoded-audio cache
-is needed. Cabinet backup SRAM is written as `USRDIR/usiobackup.bin`.
+no `game/vfs` tree, symlinks, `PS3_VFS_ROOT`, separate ELF, Python helper,
+FFmpeg executable/DLL, or decoded-audio cache is needed. Cabinet backup SRAM is written as `USRDIR/usiobackup.bin`.
 
 The development invocation with an explicit ELF argument remains supported and
 continues to use the legacy VFS layout.
@@ -205,12 +204,11 @@ Then lift and build:
 ```sh
 sudo dnf install mingw64-gcc-c++          # Fedora; adjust per distro
 python3 ps3recomp/tools/unfself.py "<game>/USRDIR/EBOOT_ORIGINAL.BIN" -o game/EBOOT.elf
-python3 tools/patch_taiko_security.py game/EBOOT.elf game/EBOOT.recomp.elf
 cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 mkdir -p game/vfs/game && ln -s "<game dir>" game/vfs/game/SCEEXE001
 PS3_VFS_ROOT=game/vfs PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38 FLOW_NOSPILL=1 TAIKO_DNS_LOOPBACK=1 \\
-    wine build/taiko_boot.exe game/EBOOT.recomp.elf
+    wine build/taiko_boot.exe game/EBOOT.elf
 ```
 
 Regenerating the lifted source (`src/recomp/`, gitignored):
@@ -218,11 +216,18 @@ Regenerating the lifted source (`src/recomp/`, gitignored):
 ```sh
 python3 ps3recomp/tools/find_functions.py game/EBOOT.elf --call-graph -o game/functions.raw.json
 # then clip to code_end -- see config.toml [lift]
-python3 ps3recomp/tools/ppu_lifter.py game/EBOOT.recomp.elf \
+python3 ps3recomp/tools/ppu_lifter.py game/EBOOT.elf \
     --functions game/functions.json --code-end 0xa1f890 \
-    --hle-stubs meta/EBOOT.imports.json \
+    --names meta/names.json --hle-stubs meta/EBOOT.imports.json \
     --extra-targets meta/jt_seeds.json -o src/recomp -j $(nproc)
+python3 tools/apply_recomp_patches.py
 ```
+
+**`apply_recomp_patches.py` is not optional.** A raw lift is missing the hand
+fixes that make the title stable -- the guest heap, small-object and XML
+tokenizer mutexes, the invalid-free guard and free ledger -- and the dongle/VU
+security bypass. It is idempotent, so running it twice is harmless, and it
+fails loudly rather than half-applying if the lifted code has moved.
 
 Both flags matter. Without `--code-end` the boundary detector promotes 1,441
 rodata blobs into "functions" spanning 2.9 MB. Without `--hle-stubs` the 326
@@ -295,11 +300,15 @@ but the PN53x request/response transport at `0x7000`/`0x7400` is not emulated
 yet. Taiko Zucchini's `hooks/bpreader_hook.c` is the working reference.
 
 Zucchini normally applies its dongle/VU patches to the live PS3 instruction
-stream. That cannot alter code ps3recomp has already translated, so
-`tools/patch_taiko_security.py` ports the relevant Green patches to a separate
-`EBOOT.recomp.elf` before lifting: forced USB candidates, authenticate-time
-stat bypasses, and the caller-aware VID/PID/serial mock. The original ELF stays
-untouched, and the Zucchini SPRX loader patch is deliberately not included.
+stream. That cannot alter code ps3recomp has already translated, so the
+equivalent changes are applied to the *lifted* code by
+`tools/apply_recomp_patches.py`: forced USB candidates, authenticate-time stat
+bypasses, and the caller-aware VID/PID/serial mock. Five sites in four
+functions. The Zucchini SPRX loader patch is deliberately not included.
+
+**Your dump is never modified.** Lift `game/EBOOT.elf` exactly as `unfself.py`
+produced it; there is no patched second copy. `--no-security` skips the bypass,
+in which case the title fails its security check.
 
 **4. cellSpurs Taskset2 / JobChain APIs missing.** The game creates its own
 tasksets and job chains, and ships 5 SPU images. Nothing dispatches them yet.
