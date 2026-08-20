@@ -11,6 +11,7 @@
  * addresses; callbacks are guest OPDs and are dispatched through ppu_guest_call.
  */
 
+#include "taiko_card.h"  /* virtual BanaPassport on the reader */
 #include "taiko_tls.h"   /* online redirect state */
 #include "ppu_recomp.h"
 
@@ -403,6 +404,13 @@ size_t process_reader_request(const uint8_t* rx, size_t rx_length,
     if (rx_length < 7 || rx[0] != 0x00 || rx[1] != 0x00 ||
         rx[2] != 0xFF || rx[5] != 0xD4)
         return 0;
+
+    /* Card-dependent commands first: with a card on the reader they answer
+     * with it, and without one they fall through to the "empty field"
+     * replies below. */
+    if (const size_t card_length =
+            taiko_card_process(rx, rx_length, tx, tx_capacity))
+        return card_length;
 
     const uint8_t command = rx[6];
     switch (command) {

@@ -53,3 +53,6 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# Runtime online configuration; holds the pairing token.
+taiko_online.cfg

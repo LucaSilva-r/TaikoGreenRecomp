@@ -36,6 +36,14 @@ taiko_tls* taiko_tls_open(taiko_tls_send_fn send_fn, taiko_tls_recv_fn recv_fn,
 /* Same, over a connected native socket. */
 taiko_tls* taiko_tls_open_socket(int fd, const char* sni);
 
+/* Resolve, connect and handshake in one step; closes the socket on failure.
+ * The socket is closed by taiko_tls_close. */
+taiko_tls* taiko_tls_connect(const char* host, int port);
+
+/* Pairing configuration, alongside the redirect. */
+const char* taiko_online_pairing_token(void);
+const char* taiko_online_cabinet_id(void);
+
 /* Sends every byte or fails. Returns 0 on success, -1 on error. */
 int  taiko_tls_send(taiko_tls* tls, const void* buf, size_t len);
 /* Bytes read, 0 at end of stream, -1 on error. */

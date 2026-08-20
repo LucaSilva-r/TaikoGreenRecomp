@@ -155,8 +155,47 @@ Measured on this dump: `is_registered=1`, `ignore_mucha_invalid_enforced=1`
 already (so that is *not* what fails the third boot network service), and
 `force_offline=1`, which is what has to be cleared for an online cabinet.
 
+## Card login without a reader
+
+The card reader is part of the USIO bulk stream, so it is emulated in the same
+place: `src/taiko_usio.cpp` frames PN53x traffic on channel 0 register 0x7000,
+and `src/taiko_card.c` owns the card itself -- the MIFARE image an access code
+encodes to, plus the poll (0x4A) and read (0x40) commands that serve it.
+
+A BanaPassport's block 1 carries the card id encrypted with a Blowfish variant
+whose per-profile keys and cipher seeds are constants **inside the game image**,
+so a card is only accepted when it is encoded with the tables the running build
+carries. `taiko_card.c` finds them by their own `NBGIC0`..`NBGIC7` tags in guest
+memory (measured: `0x00CC9640` in this build) and inverts the printed access
+code back to the card id, rejecting any code no profile issued.
+
+Two ways to get a card onto the reader:
+
+```sh
+# 1. A code you already know: swiped the first time the game polls the reader.
+TAIKO_CARD_CODE=00000000000000000000 ./run-taiko-linux.sh
+
+# 2. Six-digit pairing, the way Zucchini does it: the server hands out a code,
+#    whoever types it into the web UI picks the card.
+TAIKO_PAIRING_TOKEN=<token> ./run-taiko-linux.sh
+#   [taiko_pairing] pairing code 163388 -- enter it on <server> within 30s
+```
+
+`pairing_token` and `cabinet_id` can also live in `taiko_online.cfg`. The
+cabinet id defaults to eight hex digits derived from the host name, so it is
+stable without a state file.
+
+Pairing polls `POST /api/zucchini/pairing` (`cabinet_id`, `state`, `accepting`,
+and the session/ack tokens) only while the game is actually polling the reader
+and no card is on it -- the same gate Zucchini takes from the reader's own
+"waiting for a card" signal. `state` is always `unknown`: the recomp has no
+scene classifier, and the server documents that value for exactly that case.
+Anything else, including `shop` in the wrong case, comes back `status=closed`.
+
 ## Known gaps
 
+- The pairing code is printed to the log, not drawn on screen. The overlay
+  Zucchini renders would need a text renderer in the SDL_GPU backend.
 - The dongle serial is still a constant in `tools/recomp_hand_edits.json`
   (`serial=ABDN0000000` in the PowerOn body); it belongs in `taiko_online.cfg`
   with the rest.

@@ -8,7 +8,12 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#define closesocket_compat closesocket
 #else
+#include <netdb.h>
+#include <unistd.h>
+#define closesocket_compat close
 #include <sys/socket.h>
 #include <errno.h>
 #include <time.h>
@@ -43,6 +48,8 @@ static struct {
     int  port;
     int  verify;
     char cacert[512];
+    char pairing_token[128];
+    char cabinet_id[32];
 } g_cfg;
 
 static pthread_mutex_t g_tls_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -53,6 +60,10 @@ static void cfg_assign(const char* key, const char* value)
     else if (!strcmp(key, "port"))   g_cfg.port = atoi(value);
     else if (!strcmp(key, "verify")) g_cfg.verify = atoi(value);
     else if (!strcmp(key, "cacert")) snprintf(g_cfg.cacert, sizeof(g_cfg.cacert), "%s", value);
+    else if (!strcmp(key, "pairing_token"))
+        snprintf(g_cfg.pairing_token, sizeof(g_cfg.pairing_token), "%s", value);
+    else if (!strcmp(key, "cabinet_id"))
+        snprintf(g_cfg.cabinet_id, sizeof(g_cfg.cabinet_id), "%s", value);
 }
 
 static void cfg_load_file(const char* path)
@@ -94,6 +105,10 @@ static void cfg_load(void)
     const char* port = getenv("TAIKO_ONLINE_PORT");
     const char* verify = getenv("TAIKO_ONLINE_VERIFY");
     const char* cacert = getenv("TAIKO_ONLINE_CACERT");
+    const char* token = getenv("TAIKO_PAIRING_TOKEN");
+    const char* cabinet = getenv("TAIKO_CABINET_ID");
+    if (token && token[0])     cfg_assign("pairing_token", token);
+    if (cabinet && cabinet[0]) cfg_assign("cabinet_id", cabinet);
     if (host && host[0])     cfg_assign("host", host);
     if (port && port[0])     cfg_assign("port", port);
     if (verify && verify[0]) cfg_assign("verify", verify);
@@ -121,6 +136,33 @@ const char* taiko_online_host(void)
     const char* host = g_cfg.host;
     pthread_mutex_unlock(&g_tls_lock);
     return host;
+}
+
+const char* taiko_online_pairing_token(void)
+{
+    pthread_mutex_lock(&g_tls_lock);
+    cfg_load();
+    const char* token = g_cfg.pairing_token;
+    pthread_mutex_unlock(&g_tls_lock);
+    return token;
+}
+
+/* Eight hex digits, like the connector expects. Derived from the host name so
+ * it is stable across runs without a state file; set cabinet_id to pin it. */
+const char* taiko_online_cabinet_id(void)
+{
+    pthread_mutex_lock(&g_tls_lock);
+    cfg_load();
+    if (!g_cfg.cabinet_id[0]) {
+        char name[128] = "taiko-recomp";
+        gethostname(name, sizeof(name) - 1);
+        uint32_t h = 2166136261u;
+        for (const char* c = name; *c; c++) { h ^= (unsigned char)*c; h *= 16777619u; }
+        snprintf(g_cfg.cabinet_id, sizeof(g_cfg.cabinet_id), "%08x", h);
+    }
+    const char* id = g_cfg.cabinet_id;
+    pthread_mutex_unlock(&g_tls_lock);
+    return id;
 }
 
 int taiko_online_port(void)
@@ -273,6 +315,35 @@ taiko_tls* taiko_tls_open_socket(int fd, const char* sni)
     return tls;
 }
 
+taiko_tls* taiko_tls_connect(const char* host, int port)
+{
+    char service[8];
+    struct addrinfo hints;
+    struct addrinfo* result = NULL;
+
+    snprintf(service, sizeof(service), "%d", port);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, service, &hints, &result) != 0 || !result) {
+        if (result) freeaddrinfo(result);
+        return NULL;
+    }
+
+    int fd = (int)socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    if (fd < 0) { freeaddrinfo(result); return NULL; }
+    if (connect(fd, result->ai_addr, (int)result->ai_addrlen) != 0) {
+        freeaddrinfo(result);
+        closesocket_compat(fd);
+        return NULL;
+    }
+    freeaddrinfo(result);
+
+    taiko_tls* tls = taiko_tls_open_socket(fd, host);
+    if (!tls) closesocket_compat(fd);
+    return tls;
+}
+
 int taiko_tls_send(taiko_tls* tls, const void* buf, size_t len)
 {
     const unsigned char* p = (const unsigned char*)buf;
@@ -305,6 +376,7 @@ void taiko_tls_close(taiko_tls* tls)
 {
     if (!tls) return;
     mbedtls_ssl_close_notify(&tls->ssl);
+    if (tls->socket_fd >= 0) closesocket_compat(tls->socket_fd);
     mbedtls_ssl_free(&tls->ssl);
     mbedtls_ssl_config_free(&tls->conf);
     mbedtls_x509_crt_free(&tls->cacert);

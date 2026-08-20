@@ -309,6 +309,8 @@ add_executable(taiko_boot
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_spu.c"  # raw lifted bnusCore mixer
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sail.cpp"     # cellSail async callback shim
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_usio.cpp"     # virtual System 357 I/O board
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_card.c"       # virtual BanaPassport card
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pairing.c"    # six-digit card pairing
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_input.cpp" # portable title input latch
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_lumen.cpp"    # title-local Lumen state fixes
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_vertex_job.cpp" # native SPURS vertex skinning
@@ -389,6 +391,7 @@ set(TAIKO_MBEDTLS_LIBS "${TAIKO_MBEDTLS_SSL}" "${TAIKO_MBEDTLS_X509}" "${TAIKO_M
 set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pairing.c"
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_MBEDTLS_ROOT}/include")
 target_link_libraries(taiko_boot PRIVATE ${TAIKO_MBEDTLS_LIBS})
 if(WIN32)

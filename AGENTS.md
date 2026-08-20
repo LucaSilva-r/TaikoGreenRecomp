@@ -487,6 +487,13 @@ sent to one configured host and port over TLS.
 - Live-validated 2026-08-20 against a private ALL.Net server: PowerOn over TLS,
   chassis startupauth 200, `online_state=2 ready=1`, and the whole chassis
   service loop running.
+- **Card login without a reader.** `src/taiko_card.c` is the virtual
+  BanaPassport behind the USIO reader emulation; `src/taiko_pairing.c` is the
+  six-digit pairing client. `TAIKO_CARD_CODE=<20 digits>` swipes a known code
+  with no server; `TAIKO_PAIRING_TOKEN=<token>` polls the server for one and
+  logs the code to enter in its web UI. The card's block 1 is encrypted with
+  key material inside the game image, found by its `NBGIC0..7` tags, so a code
+  no profile issued is rejected rather than silently wrong.
 - `TAIKO_NET_TRACE=1` logs the first 40 socket operations.
 
 ## Repository layout and history
