@@ -2059,6 +2059,16 @@ extern "C" void ppu_register_opd_fixup(uint32_t opd, uint32_t code, uint32_t toc
         s_opd_fixups[s_opd_fixup_n].code = code; s_opd_fixups[s_opd_fixup_n].toc = toc; s_opd_fixup_n++; }
 }
 
+/* Depth of nested guest-callback execution on this thread.  ppu_guest_call
+ * and ppu_guest_call_ct share one per-thread scratch context, so a caller that
+ * runs guest code from inside a callback would reuse it and corrupt the outer
+ * frame.  ppu_gcm_pump() consults this to skip while nested.
+ *
+ * Deliberately C++ thread_local, NOT __declspec(thread): MinGW silently
+ * ignores the latter, which would make every guest thread share one counter. */
+static thread_local int g_guest_call_depth = 0;
+extern "C" int ppu_in_guest_callback(void) { return g_guest_call_depth; }
+
 extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
                                    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
 {
@@ -2098,8 +2108,10 @@ extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
         ? saved_active->thread_id
         : 128u + (ps3_host_thread_id() & 127u);
     g_active_ctx = &ctx;
+    ++g_guest_call_depth;
     fn(&ctx);
     while (ppu_trampoline_for(&ctx)) { void (*tf)(void*) = ppu_trampoline_for(&ctx); ppu_trampoline_for(&ctx) = 0; tf(&ctx); }
+    --g_guest_call_depth;
     g_active_ctx = saved_active;
     return ctx.gpr[3];
 }
@@ -2132,8 +2144,10 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
         ? saved_active->thread_id
         : 128u + (ps3_host_thread_id() & 127u);
     g_active_ctx = &ctx;
+    ++g_guest_call_depth;
     fn(&ctx);
     while (ppu_trampoline_for(&ctx)) { void (*tf)(void*) = ppu_trampoline_for(&ctx); ppu_trampoline_for(&ctx) = 0; tf(&ctx); }
+    --g_guest_call_depth;
     g_active_ctx = saved_active;
     return ctx.gpr[3];
 }

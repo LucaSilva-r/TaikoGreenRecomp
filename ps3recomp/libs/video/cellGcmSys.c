@@ -526,26 +526,101 @@ u32 cellGcmGetFlipStatus(void)
  * drives the title-screen state machine for many games. */
 #include "ps3emu/guest_call.h"
 
+/* The vblank/flip handlers are GUEST code.  Running them straight from the
+ * host frame-driver thread executed guest code concurrently with the main
+ * guest thread, racing on guest memory -- the kind of corruption that shows up
+ * at a different place every run.  The ticker therefore only marks a tick
+ * pending here; ppu_gcm_pump() below runs the handlers on a guest thread, at an
+ * HLE-call boundary, serialized with normal guest execution. */
+extern int ppu_in_guest_callback(void);   /* runtime/ppu/ppu_loader.cpp */
+
+static int s_vblank_handler_pending = 0;
+static int s_flip_handler_pending   = 0;
+
+/* Diagnostic escape hatch.  Handler delivery moved from a regular 60 Hz host
+ * tick to HLE-call boundaries, which changes WHEN guest handlers run; audio and
+ * chart synchronisation are sensitive to that.  Set TAIKO_GCM_TICKER_HANDLERS=1
+ * to restore the old direct-from-ticker delivery for an A/B comparison.  That
+ * path races guest memory by design -- it is for measurement, not for play. */
+static int gcm_ticker_handlers(void)
+{
+    static int cached = -1;
+    if (cached < 0) {
+        const char* e = getenv("TAIKO_GCM_TICKER_HANDLERS");
+        cached = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
 void cellGcmTickVBlank(void)
 {
     s_vblank_count++;
-    if (getenv("YDKJ_HANDLERTRACE")) { static int _n=0; if(_n++<4) fprintf(stderr,"[GCM-TICK] VBlank #%llu vblank_handler_opd=0x%08X flip_handler_opd=0x%08X caller=%p\n",(unsigned long long)s_vblank_count,s_vblank_handler_opd,s_flip_handler_opd,(void*)g_ps3_guest_caller); }
-    ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
-    if (s_vblank_handler_opd && g_ps3_guest_caller) {
-        g_ps3_guest_caller(s_vblank_handler_opd,
-                           (uint64_t)s_vblank_count, 0, 0, 0);
+    if (gcm_ticker_handlers()) {
+        ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
+        if (s_vblank_handler_opd && g_ps3_guest_caller)
+            g_ps3_guest_caller(s_vblank_handler_opd,
+                               (uint64_t)s_vblank_count, 0, 0, 0);
+        return;
     }
+    __atomic_fetch_add(&s_vblank_handler_pending, 1, __ATOMIC_RELEASE);
 }
 
 void cellGcmTickFlip(void)
 {
     /* A display refresh: the pending flip is now complete (unblocks a guest
-     * cellGcmSetWaitFlip). */
+     * cellGcmSetWaitFlip).  This part is a plain store the guest polls, so it
+     * stays on the ticker; only the handler call is deferred. */
     s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
-    if (getenv("YDKJ_HANDLERTRACE")) { static int _n=0; if(_n++<4) fprintf(stderr,"[GCM-TICK] Flip flip_handler_opd=0x%08X (invoked=%d)\n",s_flip_handler_opd,(s_flip_handler_opd && g_ps3_guest_caller)?1:0); }
-    ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
-    if (s_flip_handler_opd && g_ps3_guest_caller) {
-        g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0);
+    if (gcm_ticker_handlers()) {
+        ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
+        if (s_flip_handler_opd && g_ps3_guest_caller)
+            g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0);
+        return;
+    }
+    __atomic_fetch_add(&s_flip_handler_pending, 1, __ATOMIC_RELEASE);
+}
+
+/* Run any ticks the frame driver marked pending, on the calling guest thread.
+ *
+ * Re-entrancy: ppu_guest_call uses a single per-thread scratch stack, so this
+ * must not fire while already inside a guest callback -- ppu_in_guest_callback()
+ * reports that.  Pending counts are collapsed rather than replayed: a backlog
+ * means the guest was busy, and delivering N stale vblanks in a row is worse
+ * than delivering the current one. */
+void ppu_gcm_pump(void)
+{
+    if (!g_ps3_guest_caller) return;
+    if (ppu_in_guest_callback()) return;
+
+    /* RSX_VBLANK_TRACE=1 reports how promptly pending ticks are drained: the
+     * number delivered, and how many ticks had piled up when each drain ran.
+     * A rising backlog means the guest is spending too long between HLE calls
+     * for this delivery point to keep 60 Hz. */
+    static int trace = -1;
+    if (trace < 0) { const char* e = getenv("RSX_VBLANK_TRACE");
+                     trace = (e && e[0] && e[0] != '0') ? 1 : 0; }
+
+    const int vpend = __atomic_exchange_n(&s_vblank_handler_pending, 0, __ATOMIC_ACQUIRE);
+    if (trace) {
+        static unsigned long long drains, delivered, backlog_max;
+        if (vpend) { ++drains; delivered += (unsigned)vpend;
+                     if ((unsigned long long)vpend > backlog_max) backlog_max = vpend;
+                     if ((drains % 300) == 0)
+                         fprintf(stderr, "[VBLANK] drains=%llu delivered=%llu "
+                                 "avg_backlog=%.2f max_backlog=%llu\n",
+                                 drains, delivered, (double)delivered / (double)drains,
+                                 backlog_max); }
+    }
+    if (vpend != 0) {
+        ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
+        if (s_vblank_handler_opd)
+            g_ps3_guest_caller(s_vblank_handler_opd,
+                               (uint64_t)s_vblank_count, 0, 0, 0);
+    }
+    if (__atomic_exchange_n(&s_flip_handler_pending, 0, __ATOMIC_ACQUIRE) != 0) {
+        ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
+        if (s_flip_handler_opd)
+            g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0);
     }
 }
 

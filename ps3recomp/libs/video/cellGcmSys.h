@@ -267,6 +267,10 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler);
  * mechanism (see ps3emu/guest_call.h). Many games drive their
  * title-screen state machine from the VBlank handler. */
 void cellGcmTickVBlank(void);
+/* Deliver pending vblank/flip ticks on the calling guest thread (see
+ * cellGcmSys.c).  Called at HLE-call boundaries so guest handlers never run
+ * concurrently with normal guest execution. */
+void ppu_gcm_pump(void);
 void cellGcmTickFlip(void);
 
 /* NID: 0xF9BFCDA3 */

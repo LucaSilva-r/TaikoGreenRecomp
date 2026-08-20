@@ -484,6 +484,17 @@ if(BUILD_TESTING AND TAIKO_RSX_BACKEND STREQUAL "null" AND
     add_test(NAME taiko_linux_headless_smoke COMMAND taiko_linux_headless_smoke)
 endif()
 
+if(BUILD_TESTING)
+    # Semantics of the host mutex behind sys_lwmutex: recursive ownership,
+    # FIFO fairness, cross-thread release, and the timed-out-acquire fallback.
+    add_executable(fair_mutex_tests "tests/fair_mutex_tests.cpp")
+    target_include_directories(fair_mutex_tests PRIVATE
+        "${PS3RECOMP_DIR}/runtime/ppu")
+    find_package(Threads REQUIRED)
+    target_link_libraries(fair_mutex_tests PRIVATE Threads::Threads)
+    add_test(NAME fair_mutex_tests COMMAND fair_mutex_tests)
+endif()
+
 if(BUILD_TESTING AND NOT WIN32)
     add_executable(rsx_render_batch_tests
         "tests/rsx_render_batch_tests.c"
