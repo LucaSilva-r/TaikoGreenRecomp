@@ -175,9 +175,18 @@ static inline void* ps3_GetModuleHandleA(const char*)
 }
 #endif
 
+/* Weak so builds that do not link cellGcmSys.c (test harnesses) resolve it to
+ * null and skip the pump. */
+extern "C" __attribute__((weak)) void ppu_gcm_pump(void);
+
 extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
 {
     HleProfileGuard _hle_profile(nid, ctx);
+    /* Deliver any vblank/flip tick the frame driver marked pending, on THIS
+     * guest thread.  The ticker no longer calls guest handlers itself, so
+     * handler code is serialized with normal guest execution instead of racing
+     * it from a host thread. */
+    if (ppu_gcm_pump) ppu_gcm_pump();
     /* Preserve the caller TOC (r2) across the HLE call. ELFv1 makes r2 caller-saved
      * across a cross-module call: the glink stub does `std r2,40(r1)` before jumping and
      * the caller does `ld r2,40(r1)` after. Our HLE import stubs (`ps3_hle_call(nid);

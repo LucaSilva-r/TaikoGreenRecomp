@@ -165,129 +165,7 @@ static inline uint32_t lwm_self(ppu_context* ctx)
  * Keep recursive ownership, but queue contended first-level acquisitions in
  * arrival order.  Timed-out tickets remove themselves so an abandoned guest
  * lock still cannot wedge the host queue permanently. */
-class FairRecursiveTimedMutex {
-public:
-    void lock(uint32_t self, uint32_t lr)
-    {
-        std::unique_lock<std::mutex> lock(gate_);
-        if (owner_ == self) {
-            ++depth_;
-            return;
-        }
-        if (owner_ == 0 && waiters_.empty()) {
-            owner_ = self;
-            depth_ = 1;
-            owner_lr_ = lr;
-            return;
-        }
-
-        const uint64_t ticket = next_ticket_++;
-        waiters_.push_back(ticket);
-        cv_.wait(lock, [&] {
-            return owner_ == 0 &&
-                   !waiters_.empty() && waiters_.front() == ticket;
-        });
-        waiters_.pop_front();
-        owner_ = self;
-        depth_ = 1;
-        owner_lr_ = lr;
-    }
-
-    bool try_lock(uint32_t self, uint32_t lr)
-    {
-        std::lock_guard<std::mutex> lock(gate_);
-        if (owner_ == self) {
-            ++depth_;
-            return true;
-        }
-        if (owner_ == 0 && waiters_.empty()) {
-            owner_ = self;
-            depth_ = 1;
-            owner_lr_ = lr;
-            return true;
-        }
-        return false;
-    }
-
-    template<class Rep, class Period>
-    bool try_lock_for(uint32_t self, uint32_t lr,
-                      const std::chrono::duration<Rep, Period>& timeout)
-    {
-        std::unique_lock<std::mutex> lock(gate_);
-        if (owner_ == self) {
-            ++depth_;
-            return true;
-        }
-        if (owner_ == 0 && waiters_.empty()) {
-            owner_ = self;
-            depth_ = 1;
-            owner_lr_ = lr;
-            return true;
-        }
-
-        const uint64_t ticket = next_ticket_++;
-        waiters_.push_back(ticket);
-        const auto ready = [&] {
-            return owner_ == 0 &&
-                   !waiters_.empty() && waiters_.front() == ticket;
-        };
-        if (!cv_.wait_for(lock, timeout, ready)) {
-            const auto it = std::find(waiters_.begin(), waiters_.end(), ticket);
-            const bool was_front = it != waiters_.end() && it == waiters_.begin();
-            if (it != waiters_.end()) waiters_.erase(it);
-            if (was_front && owner_ == 0) cv_.notify_all();
-            return false;
-        }
-
-        waiters_.pop_front();
-        owner_ = self;
-        depth_ = 1;
-        owner_lr_ = lr;
-        return true;
-    }
-
-    void unlock(uint32_t self)
-    {
-        std::unique_lock<std::mutex> lock(gate_);
-        if (owner_ != self || depth_ == 0) return;
-        if (--depth_ != 0) return;
-        owner_ = 0;
-        owner_lr_ = 0;
-        lock.unlock();
-        cv_.notify_all();
-    }
-
-    /* Condition waits must drop every recursive level atomically.  Keeping
-     * this beside owner_/depth_ avoids a second per-thread ownership table. */
-    int release_all(uint32_t self)
-    {
-        std::unique_lock<std::mutex> lock(gate_);
-        if (owner_ != self || depth_ == 0) return 0;
-        const int depth = (int)depth_;
-        owner_ = 0;
-        depth_ = 0;
-        owner_lr_ = 0;
-        lock.unlock();
-        cv_.notify_all();
-        return depth;
-    }
-
-    void owner_snapshot(uint32_t& tid, uint32_t& lr)
-    {
-        std::lock_guard<std::mutex> lock(gate_);
-        tid = owner_;
-        lr = owner_lr_;
-    }
-
-private:
-    std::mutex gate_;
-    std::condition_variable cv_;
-    uint32_t owner_ = 0;
-    uint32_t depth_ = 0;
-    uint32_t owner_lr_ = 0;
-    uint64_t next_ticket_ = 0;
-    std::deque<uint64_t> waiters_;
-};
+#include "ppu_fair_mutex.h"
 
 static std::mutex g_lwm_map_mtx;
 static std::map<uint32_t, FairRecursiveTimedMutex> g_lwm_mtxs;
@@ -814,9 +692,10 @@ static void sys_lwmutex_unlock(ppu_context* ctx)
     uint32_t rc = vm_read32(lwm + LWM_RECUR);
     if (rc) vm_write32(lwm + LWM_RECUR, rc - 1);
     if (rc <= 1) vm_write32(lwm + LWM_OWNER, LWM_FREE);
-    /* The host mutex itself verifies guest-thread ownership.  Thus a timed-out
-     * acquire can still execute this path safely without a redundant held-lock
-     * table or global owner-map mutex on every lock pair. */
+    /* The host mutex sorts out who may release: the owner decrements its
+     * recursion, a timed-out acquire that ran unlocked is balanced without
+     * touching the owner, and any other thread performs a real cross-thread
+     * release, which lv2 permits. */
     const uint32_t self_tid = lwm_self(ctx);
     if (ydkj_reallwm() && lwm_policy_cached(lwm) != LwmPolicy::none)
         lwm_host_mutex(lwm).unlock(self_tid);
