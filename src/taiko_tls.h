@@ -17,6 +17,10 @@ extern "C" {
 
 /* Redirect configuration, from taiko_online.cfg and/or the environment. */
 int         taiko_online_enabled(void);   /* 0 when no server is configured */
+/* boot_fast: tick the guest vblank faster than the play rate until the title
+ * starts its attract audio -- the whole boot is paced by that tick. Default on
+ * (taiko_online.cfg boot_fast=0 disables); TAIKO_BOOT_VBLANK_HZ sets the rate. */
+int         taiko_boot_fast_enabled(void);
 const char* taiko_online_host(void);
 int         taiko_online_port(void);
 

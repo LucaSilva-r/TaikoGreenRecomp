@@ -52,6 +52,8 @@ extern "C" {
 
 #include <ps3emu/host_platform.h>
 
+extern "C" void ps3_frame_boot_fast_finish(void);
+
 extern "C" void ps3_hle_register_ctx(uint32_t nid, const char* name,
                                       void (*handler)(ppu_context*));
 
@@ -706,6 +708,9 @@ void set_data_and_get_mem_size(ppu_context* ctx)
             g_decoders[handle] = std::move(state);
         }
         if (ready) {
+            /* First decode is the attract/logo BGM, i.e. the boot state machine
+             * is done -- drop the frame driver back to the 60 Hz play rate. */
+            ps3_frame_boot_fast_finish();
             std::fprintf(stderr,
                 "[taiko_atrac] decoded handle=%08X hash=%016llX frames=%zu "
                 "decode=%.2fms cache=%s read=%u buffer=%u loop=%zu..%zu count=%d source=%s\n",

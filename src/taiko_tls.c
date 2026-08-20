@@ -50,6 +50,7 @@ static struct {
     char cacert[512];
     char pairing_token[128];
     char cabinet_id[32];
+    int  boot_fast;
 } g_cfg;
 
 static pthread_mutex_t g_tls_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -64,6 +65,9 @@ static void cfg_assign(const char* key, const char* value)
         snprintf(g_cfg.pairing_token, sizeof(g_cfg.pairing_token), "%s", value);
     else if (!strcmp(key, "cabinet_id"))
         snprintf(g_cfg.cabinet_id, sizeof(g_cfg.cabinet_id), "%s", value);
+    else if (!strcmp(key, "boot_fast"))
+        g_cfg.boot_fast = (!strcmp(value, "1") || !strcmp(value, "true") ||
+                           !strcmp(value, "yes"));
 }
 
 static void cfg_load_file(const char* path)
@@ -97,6 +101,7 @@ static void cfg_load(void)
     if (g_cfg.loaded) return;
     g_cfg.loaded = 1;
     g_cfg.port = 443;
+    g_cfg.boot_fast = 1;
 
     const char* path = getenv("TAIKO_ONLINE_CONFIG");
     cfg_load_file(path && path[0] ? path : TAIKO_ONLINE_CONFIG_FILE);
@@ -118,6 +123,15 @@ static void cfg_load(void)
         fprintf(stderr, "[taiko_online] every arcade service -> https://%s:%d "
                         "(certificate verification %s)\n",
                 g_cfg.host, g_cfg.port, g_cfg.verify ? "on" : "off");
+}
+
+int taiko_boot_fast_enabled(void)
+{
+    pthread_mutex_lock(&g_tls_lock);
+    cfg_load();
+    int fast = g_cfg.boot_fast;
+    pthread_mutex_unlock(&g_tls_lock);
+    return fast;
 }
 
 int taiko_online_enabled(void)

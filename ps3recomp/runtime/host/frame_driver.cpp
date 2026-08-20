@@ -44,6 +44,17 @@ bool enabled(const char* name)
     return value && value[0] != '0';
 }
 
+unsigned env_hz(const char* name, unsigned fallback)
+{
+    const char* value = std::getenv(name);
+    if (!value) return fallback;
+    int v = std::atoi(value);
+    return (v >= 10 && v <= 1000) ? (unsigned)v : fallback;
+}
+
+/* Set once the title starts its attract audio; ends the boot fast-forward. */
+std::atomic<bool> s_boot_fast_done{false};
+
 void present_pending()
 {
     if (!cellGcm_take_flip_pending()) return;
@@ -80,7 +91,27 @@ void run_frame_driver()
                  rsx_ok ? "OK" : "FAILED");
 
     constexpr uint64_t kFifoPeriodNs = 4000000u;
-    constexpr uint64_t kVblankPeriodNs = 1000000000u / 60u;
+    /* The title's boot -- arcade system checks, the chassis service sequence and
+     * the asset load -- is paced by the guest's per-frame state machine, not by
+     * the network or by disk. Ticking vblank faster than 60 Hz until the game
+     * starts its attract music shortens boot proportionally (measured: 30 s of
+     * online checks -> 6 s at 240 Hz, and asset loading starts at 6 s instead of
+     * 22 s). Gameplay must run at 60 Hz, so the rate reverts on the first ATRAC
+     * decode (ps3_frame_boot_fast_finish) or at the deadline below.
+     *   TAIKO_VBLANK_HZ      -- normal rate, default 60
+     *   TAIKO_BOOT_VBLANK_HZ -- boot rate, default 240; set to 60 to disable */
+    unsigned vblank_hz = env_hz("TAIKO_VBLANK_HZ", 60);
+    unsigned boot_hz = env_hz("TAIKO_BOOT_VBLANK_HZ", 240);
+    if (boot_hz < vblank_hz) boot_hz = vblank_hz;
+    const uint64_t kVblankPeriodNs = 1000000000ull / vblank_hz;
+    const uint64_t kBootVblankPeriodNs = 1000000000ull / boot_hz;
+    /* ponytail: hard deadline so a boot that never reaches attract (no audio,
+     * failed online) cannot leave the guest clock overclocked forever. */
+    const uint64_t kBootFastDeadlineNs = ps3_host_monotonic_ns() + 180000000000ull;
+    bool boot_fast = boot_hz > vblank_hz;
+    if (boot_fast)
+        std::fprintf(stderr, "[frame] boot fast-forward at %u Hz (play rate %u Hz)\n",
+                     boot_hz, vblank_hz);
     uint64_t now = ps3_host_monotonic_ns();
     uint64_t next_fifo = now + kFifoPeriodNs;
     uint64_t next_vblank = now;
@@ -94,6 +125,15 @@ void run_frame_driver()
          * scrolling notes visibly juddered and a late submission could miss a
          * host VSync. Wake at the earlier deadline so vblank is not rounded to
          * the FIFO grid; retain the independent 4 ms drain cadence. */
+        if (boot_fast &&
+            (s_boot_fast_done.load(std::memory_order_acquire) ||
+             ps3_host_monotonic_ns() >= kBootFastDeadlineNs)) {
+            boot_fast = false;
+            std::fprintf(stderr, "[frame] boot fast-forward off, back to %u Hz\n",
+                         vblank_hz);
+        }
+        const uint64_t vblank_period = boot_fast ? kBootVblankPeriodNs
+                                                 : kVblankPeriodNs;
         const uint64_t next_wake = next_vblank < next_fifo
             ? next_vblank : next_fifo;
         ps3_host_sleep_until_ns(next_wake);
@@ -119,10 +159,10 @@ void run_frame_driver()
                 cellGcm_rsx_process_fifo();
                 ++fifo_drains;
             }
-            next_vblank += kVblankPeriodNs;
+            next_vblank += vblank_period;
         }
         if (fired == 240)
-            next_vblank = now + kVblankPeriodNs;
+            next_vblank = now + vblank_period;
 
         if (fifo_due) {
             const bool queue_ready = !sdl_rsx ||
@@ -175,6 +215,13 @@ void* frame_thread(void*) { run_frame_driver(); return nullptr; }
 #endif
 
 } // namespace
+
+/* Called by the title layer when the game starts its attract audio, which is
+ * the point the boot state machine has finished. Safe to call repeatedly. */
+extern "C" void ps3_frame_boot_fast_finish(void)
+{
+    s_boot_fast_done.store(true, std::memory_order_release);
+}
 
 extern "C" int ps3recomp_start_frame_driver(void)
 {

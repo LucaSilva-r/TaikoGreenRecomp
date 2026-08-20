@@ -35,7 +35,18 @@ host=127.0.0.1     # TAIKO_ONLINE_HOST   -- unset means offline, as before
 port=443           # TAIKO_ONLINE_PORT
 verify=0           # TAIKO_ONLINE_VERIFY -- 1 checks the server certificate
 cacert=ca.pem      # TAIKO_ONLINE_CACERT -- required when verify=1
+boot_fast=1        # TAIKO_BOOT_VBLANK_HZ -- boot fast-forward, on by default
 ```
+
+`boot_fast` is not an online setting as such, but it lives here because the
+arcade system checks are what it shortens. The title's boot -- the chassis
+service sequence and the asset load alike -- is paced by the guest's per-frame
+tick rather than by the network or the disk, so the frame driver ticks vblank at
+240 Hz until the game starts its attract audio and then returns to 60 Hz.
+Measured against this server: 26 s of chassis calls became 6 s, and asset
+loading started at 6 s instead of 22 s. `boot_fast=0` pins the boot tick to the
+play rate; `TAIKO_BOOT_VBLANK_HZ` sets the boot rate and `TAIKO_VBLANK_HZ` the
+play rate.
 
 A private arcade server presents its own certificate, so verification is off by
 default; refusing it would only mean no online at all.

@@ -112,6 +112,18 @@ The script sets everything needed. Notable pieces:
   render loop keeps animating -- it looks exactly like a hang on the LOADING
   screen. Adding the mounts took one boot from 895 file opens to 1300+.
 - `TAIKO_DNS_LOOPBACK=1` — arcade network services resolve to 127.0.0.1.
+- **Boot fast-forward** (`boot_fast=1` in `taiko_online.cfg`, on by default).
+  The whole boot — arcade system checks, the chassis service sequence and the
+  asset load — is paced by the guest's per-frame state machine, not by the
+  network or by disk: measured round trips to the server are ~250 ms while the
+  gaps between service calls are 4–9 s of an idle guest. The frame driver
+  therefore ticks vblank at 240 Hz until the title starts its attract audio
+  (`ps3_frame_boot_fast_finish`, called from the first ATRAC decode) and then
+  returns to 60 Hz; a 180 s deadline is the backstop if that never happens.
+  Measured: 26 s of chassis calls → 6 s, asset loading starting at 6 s instead
+  of 22 s. `TAIKO_BOOT_VBLANK_HZ` sets the boot rate, `TAIKO_VBLANK_HZ` the play
+  rate. Do not raise the play rate — everything frame-paced, including chart and
+  audio timing, scales with it.
 - Boot takes ~1–2 min: security/test screen → Bandai Namco logo → credits →
   attract. The fumen `composition.xml` scan (~850 files) is the long pause.
 

@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+int taiko_boot_fast_enabled(void);
+
 void cellGame_set_title_id(const char* title_id);
 void cellGame_set_title(const char* title);
 
@@ -40,6 +42,10 @@ static void taiko_init(void)
      * silent/headless diagnosis. */
     taiko_set_default_environment("TAIKO_AUDIO_DECODE", "1");
     taiko_set_default_environment("TAIKO_AUDIO_SPU", "1");
+
+    /* boot_fast=0 in taiko_online.cfg pins the boot tick to the play rate. */
+    if (!taiko_boot_fast_enabled())
+        taiko_set_default_environment("TAIKO_BOOT_VBLANK_HZ", "60");
 
     cellGame_set_title_id(TAIKO_TITLE_ID);
     cellGame_set_title("Taiko no Tatsujin(S111)");
