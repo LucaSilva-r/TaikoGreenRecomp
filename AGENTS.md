@@ -381,6 +381,66 @@ guest polls.
   than merely stopping RSX and leaving `ppu_run` alive. Escape is deliberately
   not an application-exit shortcut.
 
+## Guest-visible races (fixed 2026-08-20)
+
+Two defects of the kind that corrupt or hang at a different place every run,
+so they read as many unrelated bugs.
+
+**vblank/flip handlers ran guest code on a host thread.** `cellGcmTickVBlank` /
+`TickFlip` called `g_ps3_guest_caller` directly from `frame_driver.cpp`'s
+ticker, so guest handlers executed concurrently with the main guest thread.
+The ticker now only marks a tick pending; `ppu_gcm_pump()` runs the handlers on
+a guest thread at HLE-call boundaries, guarded by `ppu_in_guest_callback()`
+because `ppu_guest_call` and `ppu_guest_call_ct` share one per-thread scratch
+context. Pending ticks are collapsed, not replayed.
+
+That depth counter is C++ `thread_local` **and must stay that way**. MinGW
+silently ignores `__declspec(thread)` — the same defect that once let guest
+threads steal each other's trampoline continuations.
+
+Measured after the change: a live session delivered 75600/75600 ticks with a
+maximum backlog of 1, and the frame stutters disappeared. `RSX_VBLANK_TRACE=1`
+prints the drain/backlog counters. `TAIKO_GCM_TICKER_HANDLERS=1` restores the
+old direct-from-ticker delivery for A/B — it races by design and exists for
+measuring audio/chart timing, not for play.
+
+**`sys_lwmutex` could not be released by a non-owner.** lv2 permits it and the
+guest's own recursion counter decrements regardless of caller, so refusing left
+the mutex held and hung every waiter. The subtlety: a genuine cross-thread
+release is indistinguishable from an unlock issued by a thread whose *timed
+acquire expired* — `try_lock_for` failing means the caller proceeds without the
+lock and the guest still calls unlock. Expired acquires are now counted per
+thread and balanced without touching the owner.
+
+`FairRecursiveTimedMutex` lives in `runtime/ppu/ppu_fair_mutex.h` so it can be
+tested; `tests/fair_mutex_tests.cpp` covers recursive ownership, FIFO fairness,
+cross-thread release and the expired-acquire fallback, and fails against the
+previous implementation on the cross-thread case.
+
+## Upstream ps3recomp: what we already have (surveyed 2026-08-20)
+
+`ps3recomp` is vendored at `82a1f96`; upstream master was 606 commits ahead.
+**That number badly overstates the gap** — most of the threading work is already
+here, some fixed independently. Verified present: sub-millisecond QPC timeouts
+(`lv2_usec_deadline`), unique guest thread IDs, cross-thread `stwcx/stdcx`
+reservations, honoured lwmutex timeouts, per-thread TLS blocks.
+
+Still missing: `sys_net` `select`/`poll` must block for the guest timeout (see
+`docs/online_base.md`). The rest of upstream's diff is largely LBP/WWS SPU work
+that does not apply to this title.
+
+Do **not** merge `runtime/ppu/ppu_sysprx.cpp` wholesale: upstream's is ~900
+lines smaller and would replace the fair/FIFO mutex with a barging one,
+reintroducing the waiter starvation documented above. Upstream's lifter branch
+is also in master, and that is what previously rendered a black screen — treat
+a lifter bump as its own project with a full re-lift and revalidation.
+
+## Online
+
+Base online (ALL.Net + MUCHA) is planned in **`docs/online_base.md`**: current
+state, endpoints read out of the binary, staged work, and the open TLS-library
+decision. `cellHttp` is currently 0 of 19 imported NIDs implemented.
+
 ## Repository layout and history
 
 This tree was re-founded as a clean, publishable repository. Its history begins
