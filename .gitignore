@@ -1,0 +1,55 @@
+# One rule: nothing derived from the game dump, from PS3 firmware, or from a
+# build is tracked.  This repository contains only hand-written host code and
+# the vendored ps3recomp framework.
+
+# --- Anything produced from the user's own dump -----------------------------
+# the dump itself, its VFS mounts, and the patched ELFs
+game/
+# Ghidra's raw string-table dump is verbatim content excerpted from the
+# executable, unlike the address/symbol maps beside it.  It is an output of
+# ps3recomp/tools/ghidra_analyze.py and no build step reads it.
+ghidra_out/strings.json
+gamedata/
+# lifted PPU code
+src/recomp/
+src/recomp.newlift/
+# lifted SPU images
+src/spu_gen/
+
+# --- Build output and third-party prefixes ----------------------------------
+build*/
+third_party/
+
+# --- Binary formats we must never carry -------------------------------------
+*.elf
+*.ELF
+*.self
+*.SELF
+*.prx
+*.sprx
+*.pkg
+*.sfo
+*.nub
+*.rap
+*.keys
+
+# --- Diagnostics, captures, logs --------------------------------------------
+captures/
+*.log
+*.rsxb
+frame_*.bmp
+rt_save.bmp
+tex_*.bin
+vp_[0-9A-F]*.hlsl
+recomp_spu_ls.bin
+vkd3d-proton.cache*
+
+# --- Local tooling ----------------------------------------------------------
+__pycache__/
+*.py[cod]
+.claude/
+.agents/
+.codex/
+.vscode/
+.idea/
+.DS_Store

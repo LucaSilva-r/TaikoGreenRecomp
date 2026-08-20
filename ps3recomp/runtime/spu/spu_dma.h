@@ -1,0 +1,596 @@
+/*
+ * ps3recomp - SPU DMA engine (MFC)
+ *
+ * The Memory Flow Controller (MFC) handles DMA transfers between an SPU's
+ * 256 KB local store and the main memory (EA space).  Each SPU has a 16-entry
+ * MFC command queue.
+ *
+ * Supported operations:
+ *   - DMA get/put  (local store <-> main memory)
+ *   - DMA list commands (scatter/gather)
+ *   - Tag group management and synchronization
+ *   - Barrier and fence
+ */
+
+#ifndef SPU_DMA_H
+#define SPU_DMA_H
+
+#include "spu_context.h"
+#include <ps3emu/host_platform.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern uint8_t* vm_base;
+#ifdef _WIN32
+extern int vm_range_is_accessible(uint32_t addr, uint32_t size);
+#endif
+
+/* Guard against a guest DMA whose effective address lands in reserved-but-
+ * uncommitted guest memory (the 4 GB VM is MEM_RESERVE; only main mem / RSX /
+ * SPU / lv2-heap / stack pages are committed). A garbage EA — e.g. one the SPURS
+ * kernel computes from an incomplete context during bring-up — must be treated
+ * as a failed DMA, NOT crash the host emulator with an access violation. On
+ * Windows we query the page state; the whole [ea, ea+size) range must be
+ * committed and accessible. Returns 1 if the range is safe to memcpy. */
+static inline int mfc_ea_range_committed(uint64_t ea, uint32_t size)
+{
+    uint32_t e = (uint32_t)ea;
+    if (size == 0) return 0;
+    if ((uint64_t)e + (uint64_t)size > 0x100000000ull) return 0;   /* past 4 GB */
+    /* The guest's first 64 KB is never a valid DMA target on PS3. Without this
+     * a corrupted EA register aims at the null page, and Wine's VirtualQuery
+     * can report it committed -- the bnusCore mixer was seen writing its whole
+     * 8192-byte output block there every period. Reject it so the damage is a
+     * logged SKIP instead of silent corruption. */
+    if (e < 0x10000u) return 0;
+    /* vm_init commits the entire 256 MB main-memory arena up front. Wine's
+     * VirtualQuery can nevertheless report a reserved parent region for an
+     * address that is readable and committed (observed for bnusCore's
+     * 0x01EA3100 atomic line), so treat this known arena as authoritative. */
+    if (e >= 0x00010000u &&
+        (uint64_t)e + size <= 0x10010000ull)
+        return 1;
+#ifdef _WIN32
+    if (!vm_base) return 0;
+    return vm_range_is_accessible(e, size);
+#endif
+    return 1;
+}
+
+/* MFC queue depth */
+#define MFC_QUEUE_DEPTH     16
+
+/* Maximum DMA transfer size per element */
+#define MFC_MAX_DMA_SIZE    (16 * 1024)
+
+/* ---------------------------------------------------------------------------
+ * MFC command entry
+ * -----------------------------------------------------------------------*/
+typedef struct mfc_cmd {
+    uint32_t lsa;       /* Local store address */
+    uint64_t ea;        /* Effective (main memory) address: EAH << 32 | EAL */
+    uint32_t size;      /* Transfer size in bytes */
+    uint32_t tag;       /* Tag group ID (0-31) */
+    uint32_t cmd;       /* Command opcode (MFC_PUT_CMD, MFC_GET_CMD, etc.) */
+
+    /* Status */
+    int      active;    /* 1 = pending, 0 = completed/free */
+} mfc_cmd;
+
+/* DMA list element (used by PUTL/GETL) */
+typedef struct mfc_list_element {
+    /* In PS3 memory these are big-endian:
+     *   bits  0-14 : reserved (notify/stall flags in upper halfword)
+     *   bit   15   : stall-and-notify
+     *   bits 16-31 : transfer size (low 16 bits)
+     *   bits 32-63 : effective address low 32 bits
+     */
+    uint32_t size_and_flags;
+    uint32_t eal;
+} mfc_list_element;
+
+/* ---------------------------------------------------------------------------
+ * MFC DMA engine state
+ * -----------------------------------------------------------------------*/
+typedef struct mfc_engine {
+    mfc_cmd     queue[MFC_QUEUE_DEPTH];
+    uint32_t    queue_count;
+
+    /* Per-tag completion tracking (bitmask: bit N = tag N completed) */
+    uint32_t    tag_completed;
+} mfc_engine;
+
+/* External: pointer to host mapping of PS3 main memory.
+ * Must be set by the VM manager before any DMA. */
+extern uint8_t* vm_base;
+
+/* ---------------------------------------------------------------------------
+ * Initialization
+ * -----------------------------------------------------------------------*/
+static inline void mfc_engine_init(mfc_engine* mfc)
+{
+    memset(mfc, 0, sizeof(*mfc));
+    mfc->tag_completed = 0xFFFFFFFF; /* all tags idle = completed */
+}
+
+/* ---------------------------------------------------------------------------
+ * Core DMA transfer (synchronous for recompiled code)
+ *
+ * In real hardware this would be asynchronous.  For a static recompiler the
+ * DMA is executed immediately; the tag status is updated after completion.
+ * -----------------------------------------------------------------------*/
+
+static inline int mfc_is_get(uint32_t cmd)
+{
+    return (cmd & 0x40) != 0; /* GET family has bit 6 set */
+}
+
+static inline int mfc_is_put(uint32_t cmd)
+{
+    return (cmd & 0x20) != 0 && !mfc_is_get(cmd);
+}
+
+static inline int mfc_is_list(uint32_t cmd)
+{
+    return (cmd & 0x04) != 0; /* list variants have bit 2 set */
+}
+
+static inline int mfc_is_barrier(uint32_t cmd)
+{
+    return (cmd & 0x01) != 0; /* barrier variants have bit 0 set */
+}
+
+static inline int mfc_is_fence(uint32_t cmd)
+{
+    return (cmd & 0x02) != 0; /* fence variants have bit 1 set */
+}
+
+/*
+ * Execute a single DMA transfer between local store and main memory.
+ * Returns 0 on success, -1 on error.
+ */
+static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
+                                   uint32_t size, uint32_t cmd)
+{
+    /* Validate size. This rejection was silent, which hid a real failure: the
+     * audio mixer's source codec issued its PCM fetch with a bad size and the
+     * transfer vanished with no SKIP line and no trace entry, looking exactly
+     * like a DMA that was never requested. */
+    if (size == 0 || size > MFC_MAX_DMA_SIZE) {
+        static int s_bad = 0;
+        if (s_bad++ < 32)
+            fprintf(stderr, "[spu-dma] BADSIZE %s img=%d lsa=0x%05X ea=0x%08X size=%u\n",
+                    mfc_is_get(cmd) ? "GET" : "PUT", spu->image_id, lsa,
+                    (uint32_t)ea, size);
+        return -1;
+    }
+
+    /* Mask LSA to local store range */
+    lsa &= SPU_LS_MASK;
+
+    /* Reject transfers that would overrun the 256 KB local store buffer (a real
+     * SPU MFC requires the LS range to be valid; an out-of-range lsa+size here
+     * would corrupt host heap past spu->ls). */
+    if ((uint64_t)lsa + (uint64_t)size > (uint64_t)SPU_LS_SIZE)
+        return -1;
+
+    /* Reject transfers whose main-memory range is not committed guest memory,
+     * so a garbage EA (e.g. from an incomplete SPURS context) is a failed DMA
+     * rather than a host segfault. */
+    if (!mfc_ea_range_committed(ea, size)) {
+        static int s_warned = 0;
+        if (s_warned++ < 32)
+            fprintf(stderr, "[spu-dma] SKIP %s lsa=0x%05X ea=0x%08X size=%u "
+                    "(EA not committed -- bad/garbage DMA target)\n",
+                    mfc_is_get(cmd) ? "GET" : "PUT", lsa, (uint32_t)ea, size);
+        return -1;
+    }
+
+    uint8_t* ls_ptr = &spu->ls[lsa];
+    uint8_t* ea_ptr = vm_base + (uint32_t)ea; /* PS3 uses 32-bit effective addresses for SPU DMA */
+
+#ifdef SPU_DMA_LOG
+    { extern int g_spu_dma_log; if (g_spu_dma_log-- > 0)
+        fprintf(stderr, "[spu-dma] %s lsa=0x%05X ea=0x%08X size=%u\n",
+                mfc_is_get(cmd) ? "GET" : "PUT", lsa, (uint32_t)ea, size); }
+#endif
+    { static int s_t = -1; if (s_t < 0) s_t = getenv("YDKJ_DMATRACE") ? 1 : 0;
+      if (s_t) { static int _n = 0; if (_n++ < 300)
+        fprintf(stderr, "[dmatrace] %s lsa=0x%05X ea=0x%08X size=%u img=%d\n",
+                mfc_is_get(cmd) ? "GET" : "PUT", lsa, (uint32_t)ea, size, spu->image_id); } }
+    /* Detect the cri task actually DECODING: a GET of the real video payload
+     * (large, from a non-context EA) as opposed to the 64-byte context handshake
+     * DMAs. Set a flag the dispatcher polls to know the task got real work. */
+    { extern int g_cri_video_dma;
+      if (spu->image_id == 22 && mfc_is_get(cmd) && size > 0x100)
+          g_cri_video_dma = 1; }
+    /* Taiko audio diagnosis: report each distinct raw-mixer DMA *call site*
+     * once.  Keying on the EA as well made the 24-voice sweep fill the table
+     * and hide everything that came later, so dedup on (lr, lsa, size, dir):
+     * the voice loop then costs a handful of entries and a new PCM fetch is
+     * still visible.  gpr[0] is the SPU link register, so lr identifies the
+     * caller of the shared DMA helper. */
+    { static int audio_trace = -1;
+      struct audio_dma_shape { uint32_t lr, lsa, size; uint8_t is_get; };
+      static struct audio_dma_shape shapes[256];
+      static uint32_t shape_count = 0;
+      if (audio_trace < 0) audio_trace = getenv("TAIKO_AUDIO_TRACE") ? 1 : 0;
+      if (audio_trace && spu->image_id == 5) {
+          const uint8_t is_get = mfc_is_get(cmd) ? 1 : 0;
+          const uint32_t lr = spu->gpr[0]._u32[0];
+          uint32_t i;
+          for (i = 0; i < shape_count; i++)
+              if (shapes[i].lr == lr && shapes[i].lsa == lsa &&
+                  shapes[i].size == size && shapes[i].is_get == is_get)
+                  break;
+          if (i == shape_count && shape_count < 256) {
+              shapes[shape_count++] = (struct audio_dma_shape){
+                  lr, lsa, size, is_get };
+              fprintf(stderr,
+                  "[audio-spu-dma] %s lr=%05X pc=%05X ea=%08X lsa=%05X size=%u shape=%u\n",
+                  is_get ? "GET" : "PUT", lr, spu->pc, (uint32_t)ea, lsa, size,
+                  shape_count);
+          }
+      } }
+    /* Peak of the mixer's own output block, measured in local store before it
+     * reaches main memory.  cellAudio's [cellAudio-pcm] peak only proves the
+     * port is silent; this says whether the SPU produced silence in the first
+     * place or the PPU copy/port mapping lost it. */
+    { static int audio_trace = -1;
+      if (audio_trace < 0) audio_trace = getenv("TAIKO_AUDIO_TRACE") ? 1 : 0;
+      if (audio_trace && spu->image_id == 5 && !mfc_is_get(cmd) && size >= 4096) {
+          static uint32_t puts = 0;
+          float peak = 0.0f;
+          uint32_t i;
+          for (i = 0; i + 4 <= size; i += 4) {
+              uint32_t bits = ((uint32_t)ls_ptr[i] << 24) |
+                              ((uint32_t)ls_ptr[i+1] << 16) |
+                              ((uint32_t)ls_ptr[i+2] << 8) | ls_ptr[i+3];
+              float v; memcpy(&v, &bits, sizeof(v));
+              if (v > peak) peak = v; else if (-v > peak) peak = -v;
+          }
+          /* This diagnostic sees both the work-buffer PUT and final-output PUT
+           * for every 256-frame mix, so its healthy rate is twice cellAudio's
+           * 187.5 blocks/s. */
+          if ((puts++ & 511u) == 0) {
+              static uint64_t t0 = 0;
+              uint64_t now = ps3_host_monotonic_ms();
+              if (!t0) t0 = now;
+              double secs = (now - t0) / 1000.0;
+              fprintf(stderr, "[audio-spu-rate] large_puts=%u elapsed=%.1fs rate=%.1f/s (need 375)\n",
+                      puts, secs, secs > 0.0 ? puts / secs : 0.0);
+          }
+          if (peak > 0.0f && (puts & 255u) == 0)
+              fprintf(stderr, "[audio-spu-out] put=%u ea=%08X size=%u peak=%g\n",
+                      puts, (uint32_t)ea, size, peak);
+      } }
+    if (mfc_is_get(cmd)) {
+        /* GET: main memory -> local store */
+        memcpy(ls_ptr, ea_ptr, size);
+    } else if (mfc_is_put(cmd)) {
+        /* PUT: local store -> main memory */
+        memcpy(ea_ptr, ls_ptr, size);
+        /* POISON-DMA detector: does an SPU PUT write the singleton object region
+         * (0x40003000-0x40005000) or carry the 0xC708C708 poison? This host-side
+         * memcpy bypasses vm_write32/AWATCH, so it's the prime suspect for the
+         * garbage fn-ptr fields that cause the 0xC708C708 vcall crash. */
+        { uint32_t e = (uint32_t)ea;
+          int hitregion = (e < 0x40005000u && e + size > 0x40003000u);
+          int haspoison = 0;
+          for (uint32_t o = 0; o + 4 <= size; o += 4) {
+              uint32_t w; memcpy(&w, (const char*)ls_ptr + o, 4);
+              if (w == 0x08C708C7u) { haspoison = 1; break; } /* 0xC708C708 BE in LS bytes */
+          }
+          if (hitregion || haspoison) {
+              static int _n = 0;
+              if (_n++ < 12)
+                  fprintf(stderr, "[POISON-DMA] img%u PUT ea=0x%08X size=0x%X lsa=0x%X hitregion=%d haspoison=%d\n",
+                          spu->image_id, e, size, lsa, hitregion, haspoison);
+          } }
+    }
+
+    return 0;
+}
+
+/*
+ * Execute a DMA list command (scatter/gather).
+ * The list resides in the SPU's local store at `lsa`.
+ * Each list element describes a (size, EA) pair for a sub-transfer.
+ */
+static inline int mfc_do_list_transfer(spu_context* spu, uint32_t list_lsa,
+                                        uint64_t ea_base, uint32_t list_size,
+                                        uint32_t cmd)
+{
+    /* list_size is in bytes; each element is 8 bytes */
+    uint32_t num_elements = list_size / 8;
+    uint32_t base_cmd = cmd & ~0x04u; /* strip the 'list' bit to get base GET/PUT */
+
+    for (uint32_t i = 0; i < num_elements; i++) {
+        uint32_t elem_lsa = (list_lsa + i * 8) & SPU_LS_MASK;
+
+        /* Read list element from local store (big-endian) */
+        uint32_t size_and_flags = spu_ls_read32(spu, elem_lsa);
+        uint32_t eal = spu_ls_read32(spu, elem_lsa + 4);
+
+        uint32_t xfer_size = size_and_flags & 0x7FFF; /* low 15 bits */
+        int stall_notify = (size_and_flags >> 15) & 1;
+
+        uint64_t ea = (ea_base & 0xFFFFFFFF00000000ull) | eal;
+
+        /* Calculate target LSA: for list commands, the data starts at
+         * the address given by the MFC_LSA channel and accumulates. */
+        int rc = mfc_do_transfer(spu, spu->mfc_lsa, ea, xfer_size, base_cmd);
+        if (rc != 0) return rc;
+
+        spu->mfc_lsa += xfer_size;
+
+        if (stall_notify) {
+            /* In a full emulator we would raise a stall-and-notify event.
+             * For recompiled code, we just continue. */
+        }
+    }
+
+    return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Enqueue an MFC command (called when SPU writes to MFC_Cmd channel)
+ * -----------------------------------------------------------------------*/
+static inline int mfc_enqueue(mfc_engine* mfc, spu_context* spu)
+{
+    if (mfc->queue_count >= MFC_QUEUE_DEPTH)
+        return -1; /* queue full */
+
+    uint32_t lsa  = spu->mfc_lsa;
+    uint64_t ea   = ((uint64_t)spu->mfc_eah << 32) | spu->mfc_eal;
+    uint32_t size = spu->mfc_size;
+    uint32_t tag  = spu->mfc_tag;
+    uint32_t cmd  = spu->ls[0]; /* overridden below */
+
+    /* The cmd was just written to the MFC_Cmd channel -- we receive it
+     * as a parameter to the channel write handler.  For this inline API,
+     * the caller should pass it.  We use a wrapper below. */
+    (void)cmd;
+    return 0;
+}
+
+/*
+ * Submit and immediately execute an MFC command.
+ * This is the main entry point called when the SPU writes to MFC_Cmd.
+ */
+static inline int mfc_submit(mfc_engine* mfc, spu_context* spu, uint32_t cmd)
+{
+    uint32_t lsa  = spu->mfc_lsa;
+    uint64_t ea   = ((uint64_t)spu->mfc_eah << 32) | spu->mfc_eal;
+    uint32_t size = spu->mfc_size;
+    uint32_t tag  = spu->mfc_tag & 0x1F;
+    int rc = 0;
+
+    /* cri build (YDKJ_CRI_CHAIN): when the kernel DMA-loads the TASKSET policy
+     * module (libsre guest 0x30023680) to LS 0xA00, switch this SPU's image to 23
+     * so subsequent indirect branches to 0xA00 resolve lift_tsp (taskset policy)
+     * instead of image-22's lift_pol (sys-service). The cri task (0x3000+) is
+     * registered under both 22 and 23, so it still resolves after the switch. */
+    if (lsa == 0xA00u && (uint32_t)ea == 0x30023680u) {
+        static int s_cc = -1; if (s_cc < 0) s_cc = getenv("YDKJ_CRI_CHAIN") ? 1 : 0;
+        if (s_cc) {
+            spu->image_id = 23;
+            fprintf(stderr, "[cri-chain] taskset policy DMA'd to LS 0xA00 -> SPU image -> 23\n");
+            /* YDKJ_CRI_R4: the taskset policy entry (tsp func_00000A00) writes r4
+             * into SpursTasksetContext.taskset @LS 0x27B8 (shufb gpr[4] -> +8), so
+             * r4 MUST be the CellSpursTaskset EA (per RPCS3 cellSpursSpu.cpp). The
+             * kernel->policy handoff doesn't convey it in our path, so the policy
+             * DMAs the taskset from garbage -> reads waiting!=0 -> wrong resume
+             * path -> savedContextLr=0. Inject r4 = taskset EA (0x0F000000) here.
+             * u64 pref-doubleword: bytes0-3=0, bytes4-7=0x0F000000 -> _u32[0]=0,
+             * _u32[1]=EA. Gated (default on with CRI_CHAIN unless YDKJ_NO_CRI_R4). */
+            if (!getenv("YDKJ_NO_CRI_R4")) {
+                spu->gpr[4]._u32[0] = 0x00000000u;
+                spu->gpr[4]._u32[1] = 0x0F000000u;   /* taskset EA (matches CRI_CHAIN TSEA) */
+                fprintf(stderr, "[cri-chain] injected r4 = taskset EA 0x0F000000 (-> ctxt->taskset @LS 0x27B8)\n");
+            }
+            fflush(stderr);
+        }
+    }
+
+    /* Mark tag as in-progress */
+    mfc->tag_completed &= ~(1u << tag);
+
+    /* Handle sync/barrier commands */
+    if (cmd == MFC_BARRIER_CMD || cmd == MFC_EIEIO_CMD || cmd == MFC_SYNC_CMD) {
+        /* For synchronous emulation these are no-ops; all prior DMAs
+         * have already completed. */
+        mfc->tag_completed |= (1u << tag);
+        return 0;
+    }
+
+    /* DMA trace for the cri task (image 22): log each transfer's LS/EA/size so we
+     * can see the work-fetch GET (func_000040F0) that precedes the branch-to-0 and
+     * whether its source EA holds valid work-queue data. Env YDKJ_DMATRACE. */
+    {
+        static int64_t dt=-2; if (dt==-2){ const char* e=getenv("YDKJ_DMATRACE"); dt=e?1:0; }
+        if (dt && (spu->image_id==22 || spu->image_id==23)) {
+            static int _n=0; if (_n++ < 160)
+                fprintf(stderr, "[DMA] img%d cmd=0x%02X lsa=0x%05X ea=0x%09llX size=0x%X tag=%u\n",
+                        spu->image_id, cmd, lsa, (unsigned long long)ea, size, tag);
+            /* YDKJ_CRI_R4 diag: when the policy issues the mis-computed context
+             * DMA (img23, lsa=0x2780, garbage high EA), dump the loaded
+             * SpursTasksetContext (LS 0x2700..0x27E0) so we can see which field
+             * fed the bad EA. taskset@0x27B8, kernelMgmt@0x27C0, syscall@0x27C4. */
+            if (spu->image_id==23 && lsa==0x2780u && ((ea>>32)&0xFFFF)) {
+                static int _d=0; if (_d++ < 3) {
+                    fprintf(stderr, "[cri-r4] BAD-DMA ea=0x%09llX; SpursTasksetContext LS[0x2700..0x27E0]:\n",
+                            (unsigned long long)ea);
+                    for (uint32_t o=0x2700; o<0x27E0; o+=16)
+                        fprintf(stderr, "   LS[0x%04X]: %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n", o,
+                            spu->ls[o+0],spu->ls[o+1],spu->ls[o+2],spu->ls[o+3], spu->ls[o+4],spu->ls[o+5],spu->ls[o+6],spu->ls[o+7],
+                            spu->ls[o+8],spu->ls[o+9],spu->ls[o+10],spu->ls[o+11], spu->ls[o+12],spu->ls[o+13],spu->ls[o+14],spu->ls[o+15]);
+                }
+            }
+            /* kernel bootstrap DMA: dump LS[0x1C0] (=r17, the packed instance EA via
+             * the entry's cdd/cwd/shufb) to check if the EA got byte-mangled. */
+            if (cmd==0x40 && lsa==0x3FFE0) {
+                static int _k=0; if (_k++ < 3) {
+                    const uint8_t* p=&spu->ls[0x1C0];
+                    fprintf(stderr, "[DMA] LS[0x1C0] (r17, packed instance) = %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
+                        p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15]);
+                    /* byte-order hypothesis: correct offset is 0xD00 (not 0xD0000).
+                     * Dump guest mem at instance+0xD00 (the SPU-correct EA) vs +0xD0000. */
+                    extern uint8_t* vm_base;
+                    uint32_t inst = (uint32_t)(ea - 0xD0000u);  /* recover instance base */
+                    for (uint32_t off2=0xD00; off2<=0xD0000; off2+= (0xD0000-0xD00)) {
+                        const uint8_t* q = vm_base + inst + off2;
+                        fprintf(stderr, "[DMA]   guest[inst+0x%05X = 0x%08X]: %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X\n",
+                            off2, inst+off2, q[0],q[1],q[2],q[3],q[4],q[5],q[6],q[7],q[8],q[9],q[10],q[11],q[12],q[13],q[14],q[15]);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Execute the transfer */
+    if (mfc_is_list(cmd)) {
+        rc = mfc_do_list_transfer(spu, lsa, ea, size, cmd);
+    } else {
+        rc = mfc_do_transfer(spu, lsa, ea, size, cmd);
+    }
+
+    /* After a cri-task GET, dump the bytes it just read (the task context) so we
+     * can tell if eaContext holds valid SPURS work data or garbage. */
+    {
+        static int64_t dt2=-2; if (dt2==-2){ const char* e=getenv("YDKJ_DMATRACE"); dt2=e?1:0; }
+        if (dt2 && spu->image_id==22 && cmd==0x40 /*GET*/ && size<=0x80) {
+            static int _g=0; if (_g++ < 6) {
+                const uint8_t* p = spu->ls + (lsa & 0x3FFFF);
+                fprintf(stderr, "[DMA] GET data @LS0x%05X (from ea=0x%09llX):", lsa, (unsigned long long)ea);
+                for (uint32_t i=0;i<size && i<0x40;i+=4)
+                    fprintf(stderr, " %02X%02X%02X%02X", p[i],p[i+1],p[i+2],p[i+3]);
+                fprintf(stderr, "\n");
+            }
+        }
+    }
+
+    /* Mark tag as completed */
+    mfc->tag_completed |= (1u << tag);
+
+    return rc;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tag group synchronization
+ * -----------------------------------------------------------------------*/
+
+/* Tag update types (values written to MFC_WrTagUpdate) */
+#define MFC_TAG_UPDATE_IMMEDIATE  0  /* return status immediately */
+#define MFC_TAG_UPDATE_ANY        1  /* wait for any tag in mask */
+#define MFC_TAG_UPDATE_ALL        2  /* wait for all tags in mask */
+
+/*
+ * Query tag status.  Returns the bitmask of completed tags that match
+ * the tag mask.  In synchronous mode, all submitted DMAs are already
+ * complete, so this just returns the intersection.
+ */
+static inline uint32_t mfc_read_tag_status(const mfc_engine* mfc, uint32_t tag_mask)
+{
+    return mfc->tag_completed & tag_mask;
+}
+
+/*
+ * Poll for tag completion.
+ * update_type: 0 = immediate, 1 = any, 2 = all.
+ * Returns the completed tag mask.  In synchronous mode, always succeeds.
+ */
+static inline uint32_t mfc_tag_wait(const mfc_engine* mfc, uint32_t tag_mask,
+                                     uint32_t update_type)
+{
+    uint32_t completed = mfc->tag_completed & tag_mask;
+
+    switch (update_type) {
+    case MFC_TAG_UPDATE_IMMEDIATE:
+        return completed;
+    case MFC_TAG_UPDATE_ANY:
+        /* In async mode we would block until any bit is set.
+         * Synchronous: always returns immediately. */
+        return completed;
+    case MFC_TAG_UPDATE_ALL:
+        /* Block until all bits in mask are set. */
+        return completed;
+    default:
+        return completed;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Convenience: process an SPU channel write for MFC-related channels.
+ * -----------------------------------------------------------------------*/
+static inline void mfc_channel_write(mfc_engine* mfc, spu_context* spu,
+                                      uint32_t channel, uint32_t value)
+{
+    switch (channel) {
+    case MFC_LSA:
+        spu->mfc_lsa = value;
+        break;
+    case MFC_EAH:
+        spu->mfc_eah = value;
+        break;
+    case MFC_EAL:
+        spu->mfc_eal = value;
+        break;
+    case MFC_Size:
+        spu->mfc_size = value;
+        break;
+    case MFC_TagID:
+        spu->mfc_tag = value & 0x1F;
+        break;
+    case MFC_Cmd:
+        mfc_submit(mfc, spu, value);
+        break;
+    case MFC_WrTagMask:
+        spu->mfc_tag_mask = value;
+        break;
+    case MFC_WrTagUpdate:
+        spu->mfc_tag_status = mfc_tag_wait(mfc, spu->mfc_tag_mask, value);
+        break;
+    case MFC_WrListStallAck:
+        /* Acknowledge stall -- no-op in synchronous mode */
+        break;
+    default:
+        break;
+    }
+}
+
+static inline uint32_t mfc_channel_read(mfc_engine* mfc, spu_context* spu,
+                                         uint32_t channel)
+{
+    switch (channel) {
+    case MFC_RdTagStat:
+        return spu->mfc_tag_status;
+    case MFC_RdTagMask:
+        return spu->mfc_tag_mask;
+    case MFC_RdListStallStat:
+        return 0; /* no stalls in synchronous mode */
+    case MFC_RdAtomicStat:
+        /* Result of the last atomic line op (GETLLAR/PUTLLC/PUTLLUC), set by
+         * spu_mfc_atomic(): 0 = PUTLLC_SUCCESS, 1 = PUTLLC_FAILURE (line moved,
+         * SPU must retry). Honoring this is what keeps the SPURS lock-free queue
+         * consistent across concurrent SPU kernel threads. */
+        return spu->atomic_stat;
+    default:
+        return 0;
+    }
+}
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* SPU_DMA_H */

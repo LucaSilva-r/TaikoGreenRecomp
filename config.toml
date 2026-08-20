@@ -1,0 +1,89 @@
+# ps3recomp configuration -- Taiko no Tatsujin (Namco System 357 arcade, S111 "Green")
+#
+# Arcade EBOOT, not a retail disc title. Two consequences:
+#   1. The SELF is a debug fSELF (key_revision 0x8000) -- plaintext segments,
+#      no keys needed. `tools/unfself.py` rebuilds the ELF directly.
+#   2. It talks to arcade hardware: a USIO I/O board over cellUsbd (drums,
+#      coin/credit, SRAM), a MUCHA network for content delivery/auth, and a
+#      security dongle. All three are ours to reimplement or stub.
+
+[input]
+elf_path = "game/EBOOT.recomp.elf"
+title    = "Taiko no Tatsujin (Green)"
+title_id = "SCEEXE001"
+notes    = "PARAM.SFO says 'Taiko no Tatsujin(S111)', PS3_SYSTEM_VER 04.7000"
+
+[loader]
+# from meta/EBOOT.loader.json -- ET_EXEC, loads verbatim, no relocations
+entry_opd  = 0xfa4a68
+entry_code = 0x10240
+entry_toc  = 0x1027c58
+module_toc = 0x1037a88
+opd_base   = 0xfa4a58
+
+[lift]
+# .text 0x10240..0xa1cf9c, then .fini and .sceStub.text; everything from
+# .eh_frame (0xa1f890) up is rodata. Without this the boundary detector
+# promotes 1,441 rodata blobs into "functions" covering 2.9 MB.
+code_end = 0xa1f890
+
+# 30,500 real functions -> 37,536 lifted (jump-table cases + tail-entry
+# wrappers), 8 chunks, 269 MB of C++. Zero unlifted instructions: all 13,310
+# `TODO: .word` lines decode to opcode 0 or negative offsets, i.e. inline
+# jump-table data inside function extents, not code the lifter missed.
+
+[modules]
+# 326 imported NIDs across 23 libraries.
+
+# --- Core runtime: ps3recomp implements these ---
+sysPrxForUser  = "hle"   # 31 -- threads, lwmutex, TLS, prx load, spu_image_import
+sys_fs         = "hle"   # 18 -- file I/O (5 cellFsAio* still missing)
+sys_io         = "hle"   # 20 -- pad/kb/mouse; the drums do NOT come through here
+cellSysmodule  = "hle"   #  2
+cellSysutil    = "hle"   # 13
+cellGame       = "hle"   #  3
+cellRtc        = "hle"   # 14
+cellScreenShotUtility = "hle"  # 2
+
+# --- Graphics: Namco's own engine (NUD/Lumen), own NV4097 shaders ---
+cellGcmSys     = "hle"   # 25 -- _cellGcmInitBody + _cellGcmFunc15 still missing
+cellResc       = "hle"   # 13 -- 480p/720p resolution conversion
+
+# --- Audio: THE blocker for a rhythm game ---
+cellAtrac      = "todo"  # 17 -- 0/17 implemented, not in ps3recomp at all.
+                         # Every song is ATRAC3+. Needs a real decoder
+                         # (FFmpeg has atrac3plus) behind a new HLE module.
+cellAudio      = "hle"   # 15 -- port/mixing; 6 NIDs unmapped
+
+# --- SPU ---
+cellSpurs      = "hle"   # 27 -- game builds its OWN Taskset2 + JobChains, and
+                         # 5 SPU images (267 KB) are embedded in .spu_image.
+                         # The Taskset2/JobChain APIs it uses are exactly the
+                         # ones ps3recomp is missing.
+
+# --- Arcade hardware: no upstream can help, but we own the protocol ---
+cellUsbd       = "stub"  #  9 -- USIO I/O board (drums, coins, SRAM).
+                         # ps3recomp's cellUsbd returns "no device"; the game
+                         # will not get past its I/O check. Back it with libusb
+                         # against real ITAIKO hardware, or fake the USIO
+                         # protocol in-process. See ../ITAIKO-Firmware.
+
+# --- Network / auth: offline arcade cabinet, stub the lot ---
+sys_net        = "hle"   # 26 -- BSD sockets
+cellNetCtl     = "hle"   #  6
+cellHttp       = "hle"   # 19 -- MUCHA content delivery; 11 NIDs unmapped
+cellSsl        = "hle"   #  3
+cellHttpUtil   = "hle"   #  1
+sceNp          = "stub"  #  3 -- sceNpDrmIsAvailable; arcade unit, no PSN
+
+# --- Optional features, stub until proven necessary ---
+cellSail       = "stub"  # 32 -- attract-mode movie playback
+cellCamera     = "stub"  # 15 -- photo mode
+libSceSmart    = "stub"  # 12 -- Namco's own /data/module/libsmart.sprx (image
+                         # recognition, the .dic files). Also a plaintext
+                         # fSELF, so lift_prx.py is an option if stubs fail.
+
+[debug]
+log_hle_calls          = true
+log_missing_nids       = true
+break_on_unimplemented = false

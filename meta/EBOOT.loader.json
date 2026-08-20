@@ -1,0 +1,12 @@
+{
+ "entry_opd": "0xfa4a68",
+ "entry_code": "0x10240",
+ "entry_toc": "0x1027c58",
+ "module_toc": "0x1037a88",
+ "opd_base": "0xfa4a58",
+ "opd_size": "0x7b200",
+ "opd_count": 63040,
+ "function_count": 28590,
+ "e_type": 2,
+ "load_segments": 2
+}

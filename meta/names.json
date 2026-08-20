@@ -1,0 +1,8068 @@
+{
+ "0x00012018": {
+  "cident": "application_BootFramework_ReceiveUsioBoot",
+  "label": "application_BootFramework_ReceiveUsioBoot",
+  "src": "string"
+ },
+ "0x000120EC": {
+  "cident": "application_BootFramework_ReceiveCardBoot",
+  "label": "application_BootFramework_ReceiveCardBoot",
+  "src": "string"
+ },
+ "0x000128C8": {
+  "cident": "movie",
+  "label": "movie",
+  "src": "string"
+ },
+ "0x00017020": {
+  "cident": "Framework_disp",
+  "label": "Framework_disp",
+  "src": "string"
+ },
+ "0x0001B278": {
+  "cident": "ApplicationUpdaterStart",
+  "label": "ApplicationUpdaterStart",
+  "src": "symbol"
+ },
+ "0x0001C258": {
+  "cident": "GameNet_IsOnlineReady",
+  "label": "GameNet_IsOnlineReady",
+  "src": "symbol"
+ },
+ "0x0001D800": {
+  "cident": "billing_OnRewardItemPurchaseCancel",
+  "label": "billing_OnRewardItemPurchaseCancel",
+  "src": "string"
+ },
+ "0x0001D8D8": {
+  "cident": "billing_OnRewardItemPurchaseResponse",
+  "label": "billing_OnRewardItemPurchaseResponse",
+  "src": "string"
+ },
+ "0x0001EA90": {
+  "cident": "head",
+  "label": "head",
+  "src": "string"
+ },
+ "0x0002034C": {
+  "cident": "face_FaceWork_Execute",
+  "label": "face_FaceWork_Execute",
+  "src": "string"
+ },
+ "0x0002648C": {
+  "cident": "cameraKao_d_nut",
+  "label": "cameraKao_d_nut",
+  "src": "string"
+ },
+ "0x0002A2D0": {
+  "cident": "boost_function",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0002A434": {
+  "cident": "boost_function_0002A434",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0002A5B4": {
+  "cident": "boost_function_0002A5B4",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0002A770": {
+  "cident": "boost_function_0002A770",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0002B75C": {
+  "cident": "game_backup_LastGameStatus_Update",
+  "label": "game_backup_LastGameStatus_Update",
+  "src": "string"
+ },
+ "0x0002B7FC": {
+  "cident": "game_backup_LastGameStatus_Initialize",
+  "label": "game_backup_LastGameStatus_Initialize",
+  "src": "string"
+ },
+ "0x00035DAC": {
+  "cident": "game_dojoselect_DojoSelectASConnect_RequestSE_St",
+  "label": "game_dojoselect_DojoSelectASConnect_RequestSE_St",
+  "src": "string"
+ },
+ "0x00036AEC": {
+  "cident": "game_dojoselect_DojoSelectASConnect_RequestSE_Pl",
+  "label": "game_dojoselect_DojoSelectASConnect_RequestSE_Pl",
+  "src": "string"
+ },
+ "0x0003A3BC": {
+  "cident": "fillrect_0",
+  "label": "fillrect_0",
+  "src": "string"
+ },
+ "0x0003CD74": {
+  "cident": "EnsoFumenSetupBuildList",
+  "label": "EnsoFumenSetupBuildList",
+  "src": "symbol"
+ },
+ "0x000439FC": {
+  "cident": "don_s",
+  "label": "don_s",
+  "src": "string"
+ },
+ "0x0004A1D8": {
+  "cident": "fever_start",
+  "label": "fever_start",
+  "src": "string"
+ },
+ "0x00052AE4": {
+  "cident": "hit_ka",
+  "label": "hit_ka",
+  "src": "string"
+ },
+ "0x00056910": {
+  "cident": "game_enso_EnsoProcess_ProcCheckSound",
+  "label": "game_enso_EnsoProcess_ProcCheckSound",
+  "src": "string"
+ },
+ "0x00056F2C": {
+  "cident": "game_enso_EnsoProcess_ProcSetupSound",
+  "label": "game_enso_EnsoProcess_ProcSetupSound",
+  "src": "string"
+ },
+ "0x00059078": {
+  "cident": "game_enso_EnsoProcess_ProcCheckFumen",
+  "label": "game_enso_EnsoProcess_ProcCheckFumen",
+  "src": "string"
+ },
+ "0x0005EEE4": {
+  "cident": "game_enso_EnsoProcess_ProcConfigure",
+  "label": "game_enso_EnsoProcess_ProcConfigure",
+  "src": "string"
+ },
+ "0x00069120": {
+  "cident": "flat_map_at",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0006B4D0": {
+  "cident": "left_don",
+  "label": "left_don",
+  "src": "string"
+ },
+ "0x000711C0": {
+  "cident": "hit_ka_000711C0",
+  "label": "hit_ka",
+  "src": "string"
+ },
+ "0x0007609C": {
+  "cident": "boost_function_0007609C",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00077D5C": {
+  "cident": "flat_map_at_00077D5C",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0007B288": {
+  "cident": "flat_map_at_0007B288",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0007BBC0": {
+  "cident": "flat_map_at_0007BBC0",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0007C214": {
+  "cident": "flat_map_at_0007C214",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0007DB08": {
+  "cident": "boost_function_0007DB08",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0007F208": {
+  "cident": "boost_function_0007F208",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0007FC7C": {
+  "cident": "boost_function_0007FC7C",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00092FDC": {
+  "cident": "SupportDondarake_Apply",
+  "label": "SupportDondarake_Apply",
+  "src": "string"
+ },
+ "0x000946A0": {
+  "cident": "SupportThinning_Apply",
+  "label": "SupportThinning_Apply",
+  "src": "string"
+ },
+ "0x00095B4C": {
+  "cident": "UserVoltageParam_CorrectionFactor",
+  "label": "UserVoltageParam_CorrectionFactor",
+  "src": "string"
+ },
+ "0x00098674": {
+  "cident": "waiwaiconfig_xml",
+  "label": "waiwaiconfig_xml",
+  "src": "string"
+ },
+ "0x0009A9B0": {
+  "cident": "packeddata_ddp",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x000A1ABC": {
+  "cident": "GameDojoSelect_ChangeState",
+  "label": "GameDojoSelect_ChangeState",
+  "src": "string"
+ },
+ "0x000A1D88": {
+  "cident": "game_GameDojoSelect_Proc_Main",
+  "label": "game_GameDojoSelect_Proc_Main",
+  "src": "string"
+ },
+ "0x000A256C": {
+  "cident": "packeddata_ddp_000A256C",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x000AEF1C": {
+  "cident": "flat_map_at_000AEF1C",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x000B4B80": {
+  "cident": "GameGhostEnsoResult_SetLEDPattern",
+  "label": "GameGhostEnsoResult_SetLEDPattern",
+  "src": "string"
+ },
+ "0x000D2208": {
+  "cident": "SongSelectStateMachine",
+  "label": "SongSelectStateMachine",
+  "src": "symbol"
+ },
+ "0x000DA268": {
+  "cident": "flat_map_at_000DA268",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x000E1534": {
+  "cident": "packeddata_ddp_000E1534",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x000E37A0": {
+  "cident": "localranking_bin",
+  "label": "localranking_bin",
+  "src": "string"
+ },
+ "0x000F7F50": {
+  "cident": "WaiwaiCollaboSongScene",
+  "label": "WaiwaiCollaboSongScene",
+  "src": "symbol"
+ },
+ "0x000FA0C0": {
+  "cident": "SongSelectSceneEnterBuild",
+  "label": "SongSelectSceneEnterBuild",
+  "src": "symbol"
+ },
+ "0x000FC7F4": {
+  "cident": "SongSelAsNotifyGenreFolder",
+  "label": "SongSelAsNotifyGenreFolder",
+  "src": "symbol"
+ },
+ "0x000FCE90": {
+  "cident": "game_ghostsongselect_GhostASConnect_RequestSE_St",
+  "label": "game_ghostsongselect_GhostASConnect_RequestSE_St",
+  "src": "string"
+ },
+ "0x000FCF60": {
+  "cident": "game_ghostsongselect_GhostASConnect_RequestSE_Sa",
+  "label": "game_ghostsongselect_GhostASConnect_RequestSE_Sa",
+  "src": "string"
+ },
+ "0x000FD42C": {
+  "cident": "game_ghostsongselect_GhostASConnect_SetGenreEffe",
+  "label": "game_ghostsongselect_GhostASConnect_SetGenreEffe",
+  "src": "string"
+ },
+ "0x000FD554": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyGenreF",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyGenreF",
+  "src": "string"
+ },
+ "0x000FD628": {
+  "cident": "SongSelAsNotifyMusicBoard",
+  "label": "SongSelAsNotifyMusicBoard",
+  "src": "symbol"
+ },
+ "0x000FD7B4": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyCloseF",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyCloseF",
+  "src": "string"
+ },
+ "0x000FD860": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyCloseF_000FD860",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyCloseF",
+  "src": "string"
+ },
+ "0x000FEBF8": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyMusicB",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyMusicB",
+  "src": "string"
+ },
+ "0x000FEDE8": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyMusicB_000FEDE8",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyMusicB",
+  "src": "string"
+ },
+ "0x000FEFC8": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyStopBG",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyStopBG",
+  "src": "string"
+ },
+ "0x000FF14C": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyStopBG_000FF14C",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyStopBG",
+  "src": "string"
+ },
+ "0x000FF29C": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyOpenFo",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyOpenFo",
+  "src": "string"
+ },
+ "0x000FF428": {
+  "cident": "game_ghostsongselect_GhostASConnect_NotifyOpenFo_000FF428",
+  "label": "game_ghostsongselect_GhostASConnect_NotifyOpenFo",
+  "src": "string"
+ },
+ "0x001069D8": {
+  "cident": "song_name0",
+  "label": "song_name0",
+  "src": "string"
+ },
+ "0x0010A4FC": {
+  "cident": "game_ghostsongselect_GhostSongSelectNetwork_Requ",
+  "label": "game_ghostsongselect_GhostSongSelectNetwork_Requ",
+  "src": "string"
+ },
+ "0x0010A9D4": {
+  "cident": "SongSelFolderStarAggregate",
+  "label": "SongSelFolderStarAggregate",
+  "src": "symbol"
+ },
+ "0x0010CF30": {
+  "cident": "game_ghostsongselect_GhostSongSelectSound_StopBG",
+  "label": "game_ghostsongselect_GhostSongSelectSound_StopBG",
+  "src": "string"
+ },
+ "0x0010E6B0": {
+  "cident": "game_ghostsongselect_GhostSongSelectSound_QuickS",
+  "label": "game_ghostsongselect_GhostSongSelectSound_QuickS",
+  "src": "string"
+ },
+ "0x0011358C": {
+  "cident": "game_MusicInfoCoursePathCreator_operator",
+  "label": "game_MusicInfoCoursePathCreator_operator",
+  "src": "string"
+ },
+ "0x0011B724": {
+  "cident": "game_net_OnFeatureBoardDataResponse",
+  "label": "game_net_OnFeatureBoardDataResponse",
+  "src": "string"
+ },
+ "0x0011C8EC": {
+  "cident": "game_net_OnFeatureBoardDataRequest",
+  "label": "game_net_OnFeatureBoardDataRequest",
+  "src": "string"
+ },
+ "0x0011D434": {
+  "cident": "game_net_OnInitialDataCheckCancel",
+  "label": "game_net_OnInitialDataCheckCancel",
+  "src": "string"
+ },
+ "0x0011D488": {
+  "cident": "game_net_OnInitialDataCheckRequest",
+  "label": "game_net_OnInitialDataCheckRequest",
+  "src": "string"
+ },
+ "0x0011E34C": {
+  "cident": "versiondata_bin",
+  "label": "versiondata_bin",
+  "src": "string"
+ },
+ "0x0011EB0C": {
+  "cident": "game_net_OnInitialDataCheckResponse",
+  "label": "game_net_OnInitialDataCheckResponse",
+  "src": "string"
+ },
+ "0x00122F80": {
+  "cident": "game_net_OnRewardShopDataRequest",
+  "label": "game_net_OnRewardShopDataRequest",
+  "src": "string"
+ },
+ "0x0012333C": {
+  "cident": "game_net_OnRewardShopDataResponse",
+  "label": "game_net_OnRewardShopDataResponse",
+  "src": "string"
+ },
+ "0x00124A7C": {
+  "cident": "game_net_OnRewardShopDataCanceled",
+  "label": "game_net_OnRewardShopDataCanceled",
+  "src": "string"
+ },
+ "0x00126A14": {
+  "cident": "StartupAuth_RequestWrapper",
+  "label": "StartupAuth_RequestWrapper",
+  "src": "symbol"
+ },
+ "0x00126A9C": {
+  "cident": "OnStartupAuthCancel_Handler",
+  "label": "OnStartupAuthCancel_Handler",
+  "src": "symbol"
+ },
+ "0x00126BF0": {
+  "cident": "OnStartupAuthResponse_Handler",
+  "label": "OnStartupAuthResponse_Handler",
+  "src": "symbol"
+ },
+ "0x00127CEC": {
+  "cident": "StartupAuth_Initialize",
+  "label": "StartupAuth_Initialize",
+  "src": "symbol"
+ },
+ "0x00128D28": {
+  "cident": "game_net_OnTaikoJukuCanceled",
+  "label": "game_net_OnTaikoJukuCanceled",
+  "src": "string"
+ },
+ "0x00128DD8": {
+  "cident": "game_net_OnTaikoJukuResponse",
+  "label": "game_net_OnTaikoJukuResponse",
+  "src": "string"
+ },
+ "0x0012A8A4": {
+  "cident": "game_net_OnTaikoJukuRequest",
+  "label": "game_net_OnTaikoJukuRequest",
+  "src": "string"
+ },
+ "0x0012B378": {
+  "cident": "game_net_OnTelopDataCanceled",
+  "label": "game_net_OnTelopDataCanceled",
+  "src": "string"
+ },
+ "0x0012D37C": {
+  "cident": "game_net_OnTournamentCheckCancel",
+  "label": "game_net_OnTournamentCheckCancel",
+  "src": "string"
+ },
+ "0x0012D3C0": {
+  "cident": "game_net_OnTournamentCheckResponse",
+  "label": "game_net_OnTournamentCheckResponse",
+  "src": "string"
+ },
+ "0x0012E360": {
+  "cident": "game_net_OnTournamentCheckRequest",
+  "label": "game_net_OnTournamentCheckRequest",
+  "src": "string"
+ },
+ "0x001372C8": {
+  "cident": "title_info_00",
+  "label": "title_info_00",
+  "src": "string"
+ },
+ "0x0013D71C": {
+  "cident": "game_rewardgasha_RewardGashaCard_OnTouchCardTrig",
+  "label": "game_rewardgasha_RewardGashaCard_OnTouchCardTrig",
+  "src": "string"
+ },
+ "0x0014C908": {
+  "cident": "game_rewardshop_RewardShopSound_StopBGM",
+  "label": "game_rewardshop_RewardShopSound_StopBGM",
+  "src": "string"
+ },
+ "0x0014DAB4": {
+  "cident": "song",
+  "label": "song",
+  "src": "string"
+ },
+ "0x0014E8AC": {
+  "cident": "game_rewardshop_RewardShopSound_QuickStartBGM",
+  "label": "game_rewardshop_RewardShopSound_QuickStartBGM",
+  "src": "string"
+ },
+ "0x001513D4": {
+  "cident": "packeddata_ddp_001513D4",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x00154CE4": {
+  "cident": "game_service_CloseTimeChecker_Tick",
+  "label": "game_service_CloseTimeChecker_Tick",
+  "src": "string"
+ },
+ "0x0015A1D0": {
+  "cident": "packeddata_ddp_0015A1D0",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x0015C4C4": {
+  "cident": "in_extra",
+  "label": "in_extra",
+  "src": "string"
+ },
+ "0x0015D3B8": {
+  "cident": "game_service_MoviePlayServiceManager_NotifyLeave",
+  "label": "game_service_MoviePlayServiceManager_NotifyLeave",
+  "src": "string"
+ },
+ "0x0015D43C": {
+  "cident": "game_service_MoviePlayService_NotifyLeaveChild",
+  "label": "game_service_MoviePlayService_NotifyLeaveChild",
+  "src": "string"
+ },
+ "0x0015E620": {
+  "cident": "packeddata_ddp_0015E620",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x001611E4": {
+  "cident": "NetworkIndicator_GetStartupAuthFlag",
+  "label": "NetworkIndicator_GetStartupAuthFlag",
+  "src": "symbol"
+ },
+ "0x001611F0": {
+  "cident": "NetworkIndicator_GetOnlineFlag",
+  "label": "NetworkIndicator_GetOnlineFlag",
+  "src": "symbol"
+ },
+ "0x001612C4": {
+  "cident": "NetworkIndicator_UpdateFlags",
+  "label": "NetworkIndicator_UpdateFlags",
+  "src": "symbol"
+ },
+ "0x00161D64": {
+  "cident": "NetworkIndicator_RegisterLumenBindings",
+  "label": "NetworkIndicator_RegisterLumenBindings",
+  "src": "symbol"
+ },
+ "0x00163678": {
+  "cident": "NetworkServiceState_Get",
+  "label": "NetworkServiceState_Get",
+  "src": "symbol"
+ },
+ "0x001636AC": {
+  "cident": "OnlineCheck_GetReadyFlag",
+  "label": "OnlineCheck_GetReadyFlag",
+  "src": "symbol"
+ },
+ "0x001636FC": {
+  "cident": "OnlineCheck_GetBlockFlag",
+  "label": "OnlineCheck_GetBlockFlag",
+  "src": "symbol"
+ },
+ "0x00163724": {
+  "cident": "NetworkServiceState_RefreshFromServiceStatus",
+  "label": "NetworkServiceState_RefreshFromServiceStatus",
+  "src": "symbol"
+ },
+ "0x0016384C": {
+  "cident": "NetworkServiceState_OnConnectionFlagChanged",
+  "label": "NetworkServiceState_OnConnectionFlagChanged",
+  "src": "symbol"
+ },
+ "0x001638C0": {
+  "cident": "NetworkServiceState_OnAuthStepChanged",
+  "label": "NetworkServiceState_OnAuthStepChanged",
+  "src": "symbol"
+ },
+ "0x00163990": {
+  "cident": "NetworkServiceState_RegisterCallbacks",
+  "label": "NetworkServiceState_RegisterCallbacks",
+  "src": "symbol"
+ },
+ "0x00165BCC": {
+  "cident": "game_service_PowerOnTime_Tick",
+  "label": "game_service_PowerOnTime_Tick",
+  "src": "string"
+ },
+ "0x001662A8": {
+  "cident": "circular_buffer",
+  "label": "circular_buffer",
+  "src": "string"
+ },
+ "0x0016D9D8": {
+  "cident": "_02d_02d_02d",
+  "label": "_02d_02d_02d",
+  "src": "string"
+ },
+ "0x00178FD8": {
+  "cident": "updates",
+  "label": "updates",
+  "src": "string"
+ },
+ "0x001820D4": {
+  "cident": "std_uint32_t",
+  "label": "std_uint32_t",
+  "src": "string"
+ },
+ "0x001821F8": {
+  "cident": "std_uint32_t_001821F8",
+  "label": "std_uint32_t",
+  "src": "string"
+ },
+ "0x001822B0": {
+  "cident": "std_uint32_t_001822B0",
+  "label": "std_uint32_t",
+  "src": "string"
+ },
+ "0x001823D4": {
+  "cident": "std_uint32_t_001823D4",
+  "label": "std_uint32_t",
+  "src": "string"
+ },
+ "0x00190B14": {
+  "cident": "game_texture",
+  "label": "game_texture",
+  "src": "string"
+ },
+ "0x001921A4": {
+  "cident": "tone_icon",
+  "label": "tone_icon",
+  "src": "string"
+ },
+ "0x0019A030": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_RequestSE",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_RequestSE_",
+  "src": "string"
+ },
+ "0x0019A28C": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_SetGenreEf",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_SetGenreEf",
+  "src": "string"
+ },
+ "0x0019A3B4": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyGenr",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyGenr",
+  "src": "string"
+ },
+ "0x0019A614": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyClos",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyClos",
+  "src": "string"
+ },
+ "0x0019A6C0": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyClos_0019A6C0",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyClos",
+  "src": "string"
+ },
+ "0x0019C388": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyMusi",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyMusi",
+  "src": "string"
+ },
+ "0x0019C578": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyMusi_0019C578",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyMusi",
+  "src": "string"
+ },
+ "0x0019C758": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyStop",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyStop",
+  "src": "string"
+ },
+ "0x0019C8DC": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyStop_0019C8DC",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyStop",
+  "src": "string"
+ },
+ "0x0019CA2C": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyOpen",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyOpen",
+  "src": "string"
+ },
+ "0x0019CBB8": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_NotifyOpen_0019CBB8",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_NotifyOpen",
+  "src": "string"
+ },
+ "0x0019D570": {
+  "cident": "game_waiwaisongselect_WaiwaiASConnect_RequestSE_0019D570",
+  "label": "game_waiwaisongselect_WaiwaiASConnect_RequestSE_",
+  "src": "string"
+ },
+ "0x001A121C": {
+  "cident": "song_name0_001A121C",
+  "label": "song_name0",
+  "src": "string"
+ },
+ "0x001A44A4": {
+  "cident": "game_waiwaisongselect_WaiwaiSongSelectNetwork_Re",
+  "label": "game_waiwaisongselect_WaiwaiSongSelectNetwork_Re",
+  "src": "string"
+ },
+ "0x001A6ED8": {
+  "cident": "game_waiwaisongselect_WaiwaiSongSelectSound_Stop",
+  "label": "game_waiwaisongselect_WaiwaiSongSelectSound_Stop",
+  "src": "string"
+ },
+ "0x001A8658": {
+  "cident": "game_waiwaisongselect_WaiwaiSongSelectSound_Quic",
+  "label": "game_waiwaisongselect_WaiwaiSongSelectSound_Quic",
+  "src": "string"
+ },
+ "0x001AA1B8": {
+  "cident": "AllNetAuthStatus_GetBase",
+  "label": "AllNetAuthStatus_GetBase",
+  "src": "symbol"
+ },
+ "0x001AA1C8": {
+  "cident": "AllNetAuthStatus_GetField10",
+  "label": "AllNetAuthStatus_GetField10",
+  "src": "symbol"
+ },
+ "0x001AA1D4": {
+  "cident": "AllNetAuthStatus_GetField20",
+  "label": "AllNetAuthStatus_GetField20",
+  "src": "symbol"
+ },
+ "0x001AA1EC": {
+  "cident": "AllNetAuthStatus_IsPowerOnOk",
+  "label": "AllNetAuthStatus_IsPowerOnOk",
+  "src": "symbol"
+ },
+ "0x001AA348": {
+  "cident": "AllNetAuthStatus_CopyTimingFields",
+  "label": "AllNetAuthStatus_CopyTimingFields",
+  "src": "symbol"
+ },
+ "0x001AAB44": {
+  "cident": "AllNetAuthStatus_HandlePowerOnResult",
+  "label": "AllNetAuthStatus_HandlePowerOnResult",
+  "src": "symbol"
+ },
+ "0x001AD11C": {
+  "cident": "security_details_UsbStartupAuth_Initialize",
+  "label": "security_details_UsbStartupAuth_Initialize",
+  "src": "string"
+ },
+ "0x001AD6C4": {
+  "cident": "security_details_UsbStartupAuth_Authenticate",
+  "label": "security_details_UsbStartupAuth_Authenticate",
+  "src": "string"
+ },
+ "0x001AE1D8": {
+  "cident": "DATA11000_BIN",
+  "label": "DATA11000_BIN",
+  "src": "string"
+ },
+ "0x001AF4DC": {
+  "cident": "DATA10000_BIN",
+  "label": "DATA10000_BIN",
+  "src": "string"
+ },
+ "0x001C6158": {
+  "cident": "system_Boot",
+  "label": "system_Boot",
+  "src": "string"
+ },
+ "0x001C89B4": {
+  "cident": "system_InitParam",
+  "label": "system_InitParam",
+  "src": "string"
+ },
+ "0x001C9C34": {
+  "cident": "MuchaService_ThreadBody",
+  "label": "MuchaService_ThreadBody",
+  "src": "derived",
+  "note": "shared body of the 8 service threads; dispatches vtable[8]=init, [0xC]=exec, [0x10]=cleanup"
+ },
+ "0x001CA2D0": {
+  "cident": "develop_InputPad_Update",
+  "label": "develop_InputPad_Update",
+  "src": "string"
+ },
+ "0x001CC630": {
+  "cident": "ProcessTimerList_Draw",
+  "label": "ProcessTimerList_Draw",
+  "src": "string"
+ },
+ "0x001D01A0": {
+  "cident": "game_InputAnalog_Update",
+  "label": "game_InputAnalog_Update",
+  "src": "string"
+ },
+ "0x001D1180": {
+  "cident": "game_MusicCourseInfoExtLoader_Invoke",
+  "label": "game_MusicCourseInfoExtLoader_Invoke",
+  "src": "string"
+ },
+ "0x001D2314": {
+  "cident": "boost_bad_format_string",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x001D345C": {
+  "cident": "ghostinfo_xml",
+  "label": "ghostinfo_xml",
+  "src": "string"
+ },
+ "0x001D3580": {
+  "cident": "ghosttuning_xml",
+  "label": "ghosttuning_xml",
+  "src": "string"
+ },
+ "0x001DA7F0": {
+  "cident": "N5boost6detail17sp_counted_impl_pIN4game19LumenP",
+  "label": "N5boost6detail17sp_counted_impl_pIN4game19LumenP",
+  "src": "string"
+ },
+ "0x001ED1AC": {
+  "cident": "boost_bad_any_cast",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x001ED698": {
+  "cident": "fillrect_9",
+  "label": "fillrect_9",
+  "src": "string"
+ },
+ "0x001F4EA4": {
+  "cident": "s_s_bin",
+  "label": "s_s_bin",
+  "src": "string"
+ },
+ "0x001FE2DC": {
+  "cident": "rare_1_hit",
+  "label": "rare_1_hit",
+  "src": "string"
+ },
+ "0x0020081C": {
+  "cident": "hit_dai_ryo",
+  "label": "hit_dai_ryo",
+  "src": "string"
+ },
+ "0x00201398": {
+  "cident": "rare_1_hit_00201398",
+  "label": "rare_1_hit",
+  "src": "string"
+ },
+ "0x0021113C": {
+  "cident": "hit_effect",
+  "label": "hit_effect",
+  "src": "string"
+ },
+ "0x00211E28": {
+  "cident": "katsu_d_hit",
+  "label": "katsu_d_hit",
+  "src": "string"
+ },
+ "0x00211EE0": {
+  "cident": "katsu_d_hit_00211EE0",
+  "label": "katsu_d_hit",
+  "src": "string"
+ },
+ "0x00216984": {
+  "cident": "reward_paint",
+  "label": "reward_paint",
+  "src": "string"
+ },
+ "0x0021BB64": {
+  "cident": "boost_bad_any_cast_0021BB64",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0021DF28": {
+  "cident": "boost_bad_any_cast_0021DF28",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x002209C0": {
+  "cident": "defvariance_first",
+  "label": "defvariance_first",
+  "src": "string"
+ },
+ "0x002213DC": {
+  "cident": "emotionofs_threslow",
+  "label": "emotionofs_threslow",
+  "src": "string"
+ },
+ "0x0022CECC": {
+  "cident": "set_T_too_long",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0023FF58": {
+  "cident": "timing_progress",
+  "label": "timing_progress",
+  "src": "string"
+ },
+ "0x00240294": {
+  "cident": "thinning_progress",
+  "label": "thinning_progress",
+  "src": "string"
+ },
+ "0x0024046C": {
+  "cident": "thininng_regress",
+  "label": "thininng_regress",
+  "src": "string"
+ },
+ "0x00240514": {
+  "cident": "bomb_progress_1",
+  "label": "bomb_progress_1",
+  "src": "string"
+ },
+ "0x0024064C": {
+  "cident": "dondarake_progress_2",
+  "label": "dondarake_progress_2",
+  "src": "string"
+ },
+ "0x00241260": {
+  "cident": "dec_cond_1",
+  "label": "dec_cond_1",
+  "src": "string"
+ },
+ "0x002418A8": {
+  "cident": "dec_cond_1_002418A8",
+  "label": "dec_cond_1",
+  "src": "string"
+ },
+ "0x00241C80": {
+  "cident": "dec_cond_2",
+  "label": "dec_cond_2",
+  "src": "string"
+ },
+ "0x00241EA4": {
+  "cident": "N4game9animation26Lumen_action_synchro_startE",
+  "label": "N4game9animation26Lumen_action_synchro_startE",
+  "src": "string"
+ },
+ "0x00242300": {
+  "cident": "N4game9animation28Lumen_action_solo_above_laneE",
+  "label": "N4game9animation28Lumen_action_solo_above_laneE",
+  "src": "string"
+ },
+ "0x0025131C": {
+  "cident": "boost_bad_any_cast_0025131C",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x002588B4": {
+  "cident": "set_T_too_long_002588B4",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0026EB18": {
+  "cident": "exception_ptr",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x00281500": {
+  "cident": "MaybeNetworkIconStatus_GetFlag",
+  "label": "MaybeNetworkIconStatus_GetFlag",
+  "src": "symbol"
+ },
+ "0x0028150C": {
+  "cident": "MaybeNetworkIconStatus_GetStruct",
+  "label": "MaybeNetworkIconStatus_GetStruct",
+  "src": "symbol"
+ },
+ "0x00281518": {
+  "cident": "NetworkIconStatus_ResetIfUninitialized",
+  "label": "NetworkIconStatus_ResetIfUninitialized",
+  "src": "symbol"
+ },
+ "0x00281554": {
+  "cident": "NetworkIconStatus_LifecycleCallback",
+  "label": "NetworkIconStatus_LifecycleCallback",
+  "src": "symbol"
+ },
+ "0x00281690": {
+  "cident": "NetworkIconStatus_SetConnectionFlag",
+  "label": "NetworkIconStatus_SetConnectionFlag",
+  "src": "symbol"
+ },
+ "0x00281778": {
+  "cident": "boost_exception_ptr",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x00281860": {
+  "cident": "exception_ptr_00281860",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x002819A8": {
+  "cident": "NetworkIconStatus_StopServices",
+  "label": "NetworkIconStatus_StopServices",
+  "src": "symbol"
+ },
+ "0x00283200": {
+  "cident": "NetworkIconStatus_StartServices",
+  "label": "NetworkIconStatus_StartServices",
+  "src": "symbol"
+ },
+ "0x0028355C": {
+  "cident": "NetworkIcon_GetBurstFlag",
+  "label": "NetworkIcon_GetBurstFlag",
+  "src": "symbol"
+ },
+ "0x00283568": {
+  "cident": "NetworkIconBurst_Reset",
+  "label": "NetworkIconBurst_Reset",
+  "src": "symbol"
+ },
+ "0x00283578": {
+  "cident": "NetworkIconBurst_Clear",
+  "label": "NetworkIconBurst_Clear",
+  "src": "symbol"
+ },
+ "0x00283588": {
+  "cident": "NetworkIconBurst_LifecycleCallback",
+  "label": "NetworkIconBurst_LifecycleCallback",
+  "src": "symbol"
+ },
+ "0x0028369C": {
+  "cident": "song_name3",
+  "label": "song_name3",
+  "src": "string"
+ },
+ "0x00284DB4": {
+  "cident": "localaitaskboard_xml",
+  "label": "localaitaskboard_xml",
+  "src": "string"
+ },
+ "0x002852C4": {
+  "cident": "game_ghostsongselect_GhostSongSelectNetwork_Requ_002852C4",
+  "label": "game_ghostsongselect_GhostSongSelectNetwork_Requ",
+  "src": "string"
+ },
+ "0x002A32B8": {
+  "cident": "boost_function_002A32B8",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x002A3800": {
+  "cident": "N5lumen9load_impl11ChunkParser18parser_holder_im",
+  "label": "N5lumen9load_impl11ChunkParser18parser_holder_im",
+  "src": "string"
+ },
+ "0x002A9E40": {
+  "cident": "St12length_error",
+  "label": "St12length_error",
+  "src": "string"
+ },
+ "0x002AA488": {
+  "cident": "MaybeGameNet_GetServiceContextFlag",
+  "label": "MaybeGameNet_GetServiceContextFlag",
+  "src": "symbol"
+ },
+ "0x002B1D0C": {
+  "cident": "MusicMgrHttpFetchWorker",
+  "label": "MusicMgrHttpFetchWorker",
+  "src": "symbol"
+ },
+ "0x002B20B8": {
+  "cident": "MusicMgrLoadDbFromXml_RegenEntry",
+  "label": "MusicMgrLoadDbFromXml_RegenEntry",
+  "src": "symbol"
+ },
+ "0x002B2410": {
+  "cident": "MusicMgrCtorDtor",
+  "label": "MusicMgrCtorDtor",
+  "src": "symbol"
+ },
+ "0x002B2AD0": {
+  "cident": "MusicMgrAppendSongRuntime",
+  "label": "MusicMgrAppendSongRuntime",
+  "src": "symbol"
+ },
+ "0x002B3178": {
+  "cident": "MusicMgrOnlinePollTick",
+  "label": "MusicMgrOnlinePollTick",
+  "src": "symbol"
+ },
+ "0x00357164": {
+  "cident": "boost_function_00357164",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0035AC8C": {
+  "cident": "St11logic_error",
+  "label": "St11logic_error",
+  "src": "string"
+ },
+ "0x0035AF50": {
+  "cident": "St12length_error_0035AF50",
+  "label": "St12length_error",
+  "src": "string"
+ },
+ "0x0035B040": {
+  "cident": "boost_too_many_args",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x0035B660": {
+  "cident": "set_T_iterator",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0035B7FC": {
+  "cident": "MaybeNetConfig_GetStatusWord",
+  "label": "MaybeNetConfig_GetStatusWord",
+  "src": "symbol"
+ },
+ "0x0035B880": {
+  "cident": "MaybeNetConfig_GetLimitValue",
+  "label": "MaybeNetConfig_GetLimitValue",
+  "src": "symbol"
+ },
+ "0x0035B8E0": {
+  "cident": "MaybeNetConfig_GetCurrentValue",
+  "label": "MaybeNetConfig_GetCurrentValue",
+  "src": "symbol"
+ },
+ "0x0035BE3C": {
+  "cident": "St11logic_error_0035BE3C",
+  "label": "St11logic_error",
+  "src": "string"
+ },
+ "0x0035FECC": {
+  "cident": "boost_format_error",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x0036B378": {
+  "cident": "_02d_02d_02d_0036B378",
+  "label": "_02d_02d_02d",
+  "src": "string"
+ },
+ "0x0036C0C8": {
+  "cident": "_02d_02d_02d_0036C0C8",
+  "label": "_02d_02d_02d",
+  "src": "string"
+ },
+ "0x0036C3B4": {
+  "cident": "_02d_02d_02d_02d",
+  "label": "_02d_02d_02d_02d",
+  "src": "string"
+ },
+ "0x00376BD4": {
+  "cident": "bnusAudio_GetMixBuffer",
+  "label": "bnusAudio_GetMixBuffer",
+  "src": "derived",
+  "note": "returns the source buffer for the 0x2000-byte copy"
+ },
+ "0x00376E4C": {
+  "cident": "bnusAudio_ReportMixTime",
+  "label": "bnusAudio_ReportMixTime",
+  "src": "derived",
+  "note": "receives elapsed us of the mix iteration"
+ },
+ "0x00377030": {
+  "cident": "bnusAudio_MixBegin",
+  "label": "bnusAudio_MixBegin",
+  "src": "derived",
+  "note": "called before the STAT request"
+ },
+ "0x00377034": {
+  "cident": "bnusAudio_MixEnd",
+  "label": "bnusAudio_MixEnd",
+  "src": "derived",
+  "note": "called after the 0x2000-byte block copy"
+ },
+ "0x00377334": {
+  "cident": "boost_format_error_00377334",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x003774F8": {
+  "cident": "boost_bad_format_string_003774F8",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x00377A5C": {
+  "cident": "boost_too_few_args",
+  "label": "boost_too_few_args",
+  "src": "string"
+ },
+ "0x00378E40": {
+  "cident": "N5boost6detail17sp_counted_impl_pIN6common4cell7",
+  "label": "N5boost6detail17sp_counted_impl_pIN6common4cell7",
+  "src": "string"
+ },
+ "0x0037958C": {
+  "cident": "bnusAudioMixerLoop",
+  "label": "bnusAudioMixerLoop",
+  "src": "derived",
+  "note": "real body of bnusCoreUpdateThread. Sends 'STAT' (0x53544154) via sys_event_port_send then spins on sys_event_queue_receive until the reply is 'END ' (0x454E4420) -- the SPU audio worker never runs, so this inner loop NEVER exits. Source of the q=5 log flood and a permanently spinning core; no audio block is ever mixed."
+ },
+ "0x00379748": {
+  "cident": "bnusCoreUpdateThread_body",
+  "label": "bnusCoreUpdateThread_body",
+  "src": "derived",
+  "note": "audio update thread; polls SPU event queue 5 (ATRAC3+ decode) with a 5.3ms timeout"
+ },
+ "0x0037A240": {
+  "cident": "bnusCoreDecoderServerThread_body",
+  "label": "bnusCoreDecoderServerThread_body",
+  "src": "derived",
+  "note": "audio decoder server thread"
+ },
+ "0x00381180": {
+  "cident": "boost_match_results",
+  "label": "boost_match_results",
+  "src": "string"
+ },
+ "0x0038D69C": {
+  "cident": "name",
+  "label": "name",
+  "src": "string"
+ },
+ "0x0038F514": {
+  "cident": "version",
+  "label": "version",
+  "src": "string"
+ },
+ "0x003CDF00": {
+  "cident": "listeners",
+  "label": "listeners",
+  "src": "string"
+ },
+ "0x003E54A8": {
+  "cident": "Md5HashTable_Cleanup",
+  "label": "Md5HashTable_Cleanup",
+  "src": "symbol"
+ },
+ "0x0040C22C": {
+  "cident": "boost_too_many_args_0040C22C",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x00413074": {
+  "cident": "usj_usio_worker_thread",
+  "label": "usj_usio_worker_thread",
+  "src": "string"
+ },
+ "0x00418114": {
+  "cident": "usj_usio_worker_thread_body",
+  "label": "usj_usio_worker_thread_body",
+  "src": "derived",
+  "note": "USIO arcade I/O board worker"
+ },
+ "0x004182A8": {
+  "cident": "usbio_UsbConnectionCell_scan_open_pipes",
+  "label": "usbio_UsbConnectionCell_scan_open_pipes",
+  "src": "symbol"
+ },
+ "0x00418C00": {
+  "cident": "usb_s357",
+  "label": "usb_s357",
+  "src": "string"
+ },
+ "0x00419020": {
+  "cident": "PS3A_USJ_probe_vid_pid",
+  "label": "PS3A_USJ_probe_vid_pid",
+  "src": "symbol"
+ },
+ "0x0041F65C": {
+  "cident": "BngRwThread_0",
+  "label": "BngRwThread_0",
+  "src": "string"
+ },
+ "0x0041F9F8": {
+  "cident": "BngRwThread_body",
+  "label": "BngRwThread_body",
+  "src": "derived",
+  "note": "BanaPassport card reader/writer thread"
+ },
+ "0x00420508": {
+  "cident": "bngrw_init_validate_nbgic_short",
+  "label": "bngrw_init_validate_nbgic_short",
+  "src": "symbol"
+ },
+ "0x00420FEC": {
+  "cident": "bngrw_init_validate_nbgic_extended",
+  "label": "bngrw_init_validate_nbgic_extended",
+  "src": "symbol"
+ },
+ "0x00427910": {
+  "cident": "bngrw_parse_nbgic_ident_response",
+  "label": "bngrw_parse_nbgic_ident_response",
+  "src": "symbol"
+ },
+ "0x00428E94": {
+  "cident": "bngrw_verify_nbgic_challenge_response",
+  "label": "bngrw_verify_nbgic_challenge_response",
+  "src": "symbol"
+ },
+ "0x0043D6E8": {
+  "cident": "boost_format_error_0043D6E8",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x004820BC": {
+  "cident": "boost_format_error_004820BC",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x004842A4": {
+  "cident": "boost_too_many_args_004842A4",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x0048432C": {
+  "cident": "boost_too_many_args_0048432C",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x00492DE8": {
+  "cident": "game_texture_00492DE8",
+  "label": "game_texture",
+  "src": "string"
+ },
+ "0x0049A668": {
+  "cident": "boost_format_error_0049A668",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x0049FD24": {
+  "cident": "featureboard_h_ai",
+  "label": "featureboard_h_ai",
+  "src": "string"
+ },
+ "0x004A0930": {
+  "cident": "shop_info",
+  "label": "shop_info",
+  "src": "string"
+ },
+ "0x004A223C": {
+  "cident": "season_BG",
+  "label": "season_BG",
+  "src": "string"
+ },
+ "0x004A3908": {
+  "cident": "featureboard_h_ai_004A3908",
+  "label": "featureboard_h_ai",
+  "src": "string"
+ },
+ "0x004B469C": {
+  "cident": "boost_bad_any_cast_004B469C",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x004B49E8": {
+  "cident": "boost_bad_any_cast_004B49E8",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x004BA7C4": {
+  "cident": "AssignMusic_GenreID",
+  "label": "AssignMusic_GenreID",
+  "src": "string"
+ },
+ "0x004BC038": {
+  "cident": "GetMuchaUpdaterDownloadResult",
+  "label": "GetMuchaUpdaterDownloadResult",
+  "src": "symbol"
+ },
+ "0x004BC274": {
+  "cident": "mucha_updater_state_check",
+  "label": "mucha_updater_state_check",
+  "src": "symbol"
+ },
+ "0x004BCF78": {
+  "cident": "exception_ptr_004BCF78",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x004CD398": {
+  "cident": "boost_exception_ptr_004CD398",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x004D7AA0": {
+  "cident": "set_T_too_long_004D7AA0",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x004D7EA8": {
+  "cident": "song_name1",
+  "label": "song_name1",
+  "src": "string"
+ },
+ "0x004D8340": {
+  "cident": "song_name8",
+  "label": "song_name8",
+  "src": "string"
+ },
+ "0x004D8DE8": {
+  "cident": "song_name10",
+  "label": "song_name10",
+  "src": "string"
+ },
+ "0x004D8FD0": {
+  "cident": "song_name11",
+  "label": "song_name11",
+  "src": "string"
+ },
+ "0x004DB210": {
+  "cident": "MuchaUpdaterStatePredicate",
+  "label": "MuchaUpdaterStatePredicate",
+  "src": "symbol"
+ },
+ "0x004DB5C0": {
+  "cident": "tone_icon_in_0",
+  "label": "tone_icon_in_0",
+  "src": "string"
+ },
+ "0x004DDEEC": {
+  "cident": "tone_name_in_1",
+  "label": "tone_name_in_1",
+  "src": "string"
+ },
+ "0x004DE0CC": {
+  "cident": "tone_icon_in_1",
+  "label": "tone_icon_in_1",
+  "src": "string"
+ },
+ "0x004E3254": {
+  "cident": "set_T_iterator_004E3254",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x004E38C8": {
+  "cident": "set_T_iterator_004E38C8",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x004EFEA0": {
+  "cident": "boost_bad_any_cast_004EFEA0",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x004F0028": {
+  "cident": "boost_bad_any_cast_004F0028",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x004F7FD0": {
+  "cident": "ConfigSetForceMusicAllRelease",
+  "label": "ConfigSetForceMusicAllRelease",
+  "src": "symbol"
+ },
+ "0x004FC688": {
+  "cident": "ignore_network_connection",
+  "label": "ignore_network_connection",
+  "src": "string"
+ },
+ "0x004FC758": {
+  "cident": "ignore_network_connection_004FC758",
+  "label": "ignore_network_connection",
+  "src": "string"
+ },
+ "0x0050B7A0": {
+  "cident": "boost_match_results_0050B7A0",
+  "label": "boost_match_results",
+  "src": "string"
+ },
+ "0x0050BF14": {
+  "cident": "spacialbaid_xml",
+  "label": "spacialbaid_xml",
+  "src": "string"
+ },
+ "0x0051C69C": {
+  "cident": "boost_exception_ptr_0051C69C",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0051C6BC": {
+  "cident": "boost_exception_ptr_0051C6BC",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0051C714": {
+  "cident": "boost_exception_ptr_0051C714",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0051C764": {
+  "cident": "boost_exception_ptr_0051C764",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0051CC1C": {
+  "cident": "N5boost7archive6detail18interface_oarchiveINS0_1",
+  "label": "N5boost7archive6detail18interface_oarchiveINS0_1",
+  "src": "string"
+ },
+ "0x00521DCC": {
+  "cident": "NU_Thread_Trampoline",
+  "label": "NU_Thread_Trampoline",
+  "src": "derived",
+  "note": "shared entry for NU::System::VSync and NU::Draw::RequestManager; dispatches on arg"
+ },
+ "0x00527F30": {
+  "cident": "boost_function_00527F30",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00527FC8": {
+  "cident": "set_T_iterator_00527FC8",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0052812C": {
+  "cident": "set_T_iterator_0052812C",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0052D628": {
+  "cident": "don_miss6",
+  "label": "don_miss6",
+  "src": "string"
+ },
+ "0x0052DF38": {
+  "cident": "don_miss6_0052DF38",
+  "label": "don_miss6",
+  "src": "string"
+ },
+ "0x0052F82C": {
+  "cident": "UnknownError",
+  "label": "UnknownError",
+  "src": "string"
+ },
+ "0x0053CDC0": {
+  "cident": "mac_oshirase_pam",
+  "label": "mac_oshirase_pam",
+  "src": "string"
+ },
+ "0x0053D1B0": {
+  "cident": "libsmart_sprx",
+  "label": "libsmart_sprx",
+  "src": "string"
+ },
+ "0x0053D2C0": {
+  "cident": "mucha",
+  "label": "mucha",
+  "src": "string"
+ },
+ "0x0053D904": {
+  "cident": "arcdir",
+  "label": "arcdir",
+  "src": "string"
+ },
+ "0x0053DA14": {
+  "cident": "chunk",
+  "label": "chunk",
+  "src": "string"
+ },
+ "0x0053DB24": {
+  "cident": "updates_0053DB24",
+  "label": "updates",
+  "src": "string"
+ },
+ "0x0053DDE8": {
+  "cident": "S11100_1",
+  "label": "S11100_1",
+  "src": "string"
+ },
+ "0x0053DF0C": {
+  "cident": "logs",
+  "label": "logs",
+  "src": "string"
+ },
+ "0x0053F240": {
+  "cident": "don_result_clear",
+  "label": "don_result_clear",
+  "src": "string"
+ },
+ "0x0053F4BC": {
+  "cident": "don_result_clear_0053F4BC",
+  "label": "don_result_clear",
+  "src": "string"
+ },
+ "0x005457C4": {
+  "cident": "texture_nut",
+  "label": "texture_nut",
+  "src": "string"
+ },
+ "0x00546340": {
+  "cident": "game_SetDon3DIF_operator",
+  "label": "game_SetDon3DIF_operator",
+  "src": "string"
+ },
+ "0x005524D8": {
+  "cident": "game_InputAnalog_Update_005524D8",
+  "label": "game_InputAnalog_Update",
+  "src": "string"
+ },
+ "0x00552778": {
+  "cident": "game_InputAnalog_Update_00552778",
+  "label": "game_InputAnalog_Update",
+  "src": "string"
+ },
+ "0x0055D220": {
+  "cident": "boost_too_few_args_0055D220",
+  "label": "boost_too_few_args",
+  "src": "string"
+ },
+ "0x005696D0": {
+  "cident": "padding_nut",
+  "label": "padding_nut",
+  "src": "string"
+ },
+ "0x005697B8": {
+  "cident": "padding_nut_005697B8",
+  "label": "padding_nut",
+  "src": "string"
+ },
+ "0x0056A8FC": {
+  "cident": "movie_0056A8FC",
+  "label": "movie",
+  "src": "string"
+ },
+ "0x0056B7E8": {
+  "cident": "rewardtitlefiltering_xml",
+  "label": "rewardtitlefiltering_xml",
+  "src": "string"
+ },
+ "0x0056C2D8": {
+  "cident": "Thread_40031cf0_body",
+  "label": "Thread_40031cf0_body",
+  "src": "derived"
+ },
+ "0x0056D67C": {
+  "cident": "ThreadMain_body",
+  "label": "ThreadMain_body",
+  "src": "derived"
+ },
+ "0x0057C0A0": {
+  "cident": "abort",
+  "label": "abort",
+  "src": "symbol"
+ },
+ "0x0057C1E8": {
+  "cident": "abs",
+  "label": "abs",
+  "src": "symbol"
+ },
+ "0x0057C1FC": {
+  "cident": "Getptimes",
+  "label": "_Getptimes",
+  "src": "symbol"
+ },
+ "0x0057C204": {
+  "cident": "asctime",
+  "label": "asctime",
+  "src": "symbol"
+ },
+ "0x0057C278": {
+  "cident": "sys_libc_0x0DF8809F",
+  "label": "sys_libc_0x0DF8809F",
+  "src": "symbol"
+ },
+ "0x0057C49C": {
+  "cident": "sys_libc_0xA835BE11",
+  "label": "sys_libc_0xA835BE11",
+  "src": "symbol"
+ },
+ "0x0057C5FC": {
+  "cident": "Atexit",
+  "label": "_Atexit",
+  "src": "symbol"
+ },
+ "0x0057C608": {
+  "cident": "atof",
+  "label": "atof",
+  "src": "symbol"
+ },
+ "0x0057C634": {
+  "cident": "atoff",
+  "label": "atoff",
+  "src": "symbol"
+ },
+ "0x0057C660": {
+  "cident": "atoi",
+  "label": "atoi",
+  "src": "symbol"
+ },
+ "0x0057C690": {
+  "cident": "atol",
+  "label": "atol",
+  "src": "symbol"
+ },
+ "0x0057C6C0": {
+  "cident": "atoll",
+  "label": "atoll",
+  "src": "symbol"
+ },
+ "0x0057C6EC": {
+  "cident": "bsearch",
+  "label": "bsearch",
+  "src": "symbol"
+ },
+ "0x0057C7F4": {
+  "cident": "btowc",
+  "label": "btowc",
+  "src": "symbol"
+ },
+ "0x0057C81C": {
+  "cident": "clearerr",
+  "label": "clearerr",
+  "src": "symbol"
+ },
+ "0x0057C87C": {
+  "cident": "ctime",
+  "label": "ctime",
+  "src": "symbol"
+ },
+ "0x0057C8B0": {
+  "cident": "difftime",
+  "label": "difftime",
+  "src": "symbol"
+ },
+ "0x0057C8C4": {
+  "cident": "div",
+  "label": "div",
+  "src": "symbol"
+ },
+ "0x0057C8E4": {
+  "cident": "Geterrno",
+  "label": "_Geterrno",
+  "src": "symbol"
+ },
+ "0x0057C8F4": {
+  "cident": "exit",
+  "label": "exit",
+  "src": "symbol"
+ },
+ "0x0057C93C": {
+  "cident": "fclose",
+  "label": "fclose",
+  "src": "symbol"
+ },
+ "0x0057CA88": {
+  "cident": "close_all_FILE",
+  "label": "_close_all_FILE",
+  "src": "symbol"
+ },
+ "0x0057CAF8": {
+  "cident": "feof",
+  "label": "feof",
+  "src": "symbol"
+ },
+ "0x0057CB48": {
+  "cident": "ferror",
+  "label": "ferror",
+  "src": "symbol"
+ },
+ "0x0057CB98": {
+  "cident": "fflush",
+  "label": "fflush",
+  "src": "symbol"
+ },
+ "0x0057CDBC": {
+  "cident": "fgetc",
+  "label": "fgetc",
+  "src": "symbol"
+ },
+ "0x0057CF40": {
+  "cident": "fgetpos",
+  "label": "fgetpos",
+  "src": "symbol"
+ },
+ "0x0057CFA0": {
+  "cident": "fgets",
+  "label": "fgets",
+  "src": "symbol"
+ },
+ "0x0057D214": {
+  "cident": "fgetwc",
+  "label": "fgetwc",
+  "src": "symbol"
+ },
+ "0x0057D540": {
+  "cident": "fgetws",
+  "label": "fgetws",
+  "src": "symbol"
+ },
+ "0x0057D604": {
+  "cident": "fileno",
+  "label": "fileno",
+  "src": "symbol"
+ },
+ "0x0057D630": {
+  "cident": "fopen",
+  "label": "fopen",
+  "src": "symbol"
+ },
+ "0x0057D6A4": {
+  "cident": "fputc",
+  "label": "fputc",
+  "src": "symbol"
+ },
+ "0x0057D798": {
+  "cident": "fputs",
+  "label": "fputs",
+  "src": "symbol"
+ },
+ "0x0057D9B4": {
+  "cident": "fputwc",
+  "label": "fputwc",
+  "src": "symbol"
+ },
+ "0x0057DBB4": {
+  "cident": "fputws",
+  "label": "fputws",
+  "src": "symbol"
+ },
+ "0x0057DC68": {
+  "cident": "fread",
+  "label": "fread",
+  "src": "symbol"
+ },
+ "0x0057DE6C": {
+  "cident": "freopen",
+  "label": "freopen",
+  "src": "symbol"
+ },
+ "0x0057DF20": {
+  "cident": "fscanf",
+  "label": "fscanf",
+  "src": "symbol"
+ },
+ "0x0057E014": {
+  "cident": "fseek",
+  "label": "fseek",
+  "src": "symbol"
+ },
+ "0x0057E088": {
+  "cident": "fsetpos",
+  "label": "fsetpos",
+  "src": "symbol"
+ },
+ "0x0057E0F0": {
+  "cident": "ftell",
+  "label": "ftell",
+  "src": "symbol"
+ },
+ "0x0057E14C": {
+  "cident": "fwide",
+  "label": "fwide",
+  "src": "symbol"
+ },
+ "0x0057E238": {
+  "cident": "fwrite",
+  "label": "fwrite",
+  "src": "symbol"
+ },
+ "0x0057E4B0": {
+  "cident": "fwscanf",
+  "label": "fwscanf",
+  "src": "symbol"
+ },
+ "0x0057E594": {
+  "cident": "getc",
+  "label": "getc",
+  "src": "symbol"
+ },
+ "0x0057E5BC": {
+  "cident": "getchar",
+  "label": "getchar",
+  "src": "symbol"
+ },
+ "0x0057E5E8": {
+  "cident": "gets",
+  "label": "gets",
+  "src": "symbol"
+ },
+ "0x0057E800": {
+  "cident": "getwc",
+  "label": "getwc",
+  "src": "symbol"
+ },
+ "0x0057E828": {
+  "cident": "getwchar",
+  "label": "getwchar",
+  "src": "symbol"
+ },
+ "0x0057E854": {
+  "cident": "gmtime",
+  "label": "gmtime",
+  "src": "symbol"
+ },
+ "0x0057E8A4": {
+  "cident": "imaxabs",
+  "label": "imaxabs",
+  "src": "symbol"
+ },
+ "0x0057E8B4": {
+  "cident": "imaxdiv",
+  "label": "imaxdiv",
+  "src": "symbol"
+ },
+ "0x0057E8D4": {
+  "cident": "isalnum",
+  "label": "isalnum",
+  "src": "symbol"
+ },
+ "0x0057E8F8": {
+  "cident": "isalpha",
+  "label": "isalpha",
+  "src": "symbol"
+ },
+ "0x0057E91C": {
+  "cident": "isblank",
+  "label": "isblank",
+  "src": "symbol"
+ },
+ "0x0057E940": {
+  "cident": "iscntrl",
+  "label": "iscntrl",
+  "src": "symbol"
+ },
+ "0x0057E964": {
+  "cident": "isdigit",
+  "label": "isdigit",
+  "src": "symbol"
+ },
+ "0x0057E988": {
+  "cident": "isgraph",
+  "label": "isgraph",
+  "src": "symbol"
+ },
+ "0x0057E9AC": {
+  "cident": "islower",
+  "label": "islower",
+  "src": "symbol"
+ },
+ "0x0057E9D0": {
+  "cident": "isprint",
+  "label": "isprint",
+  "src": "symbol"
+ },
+ "0x0057E9F4": {
+  "cident": "ispunct",
+  "label": "ispunct",
+  "src": "symbol"
+ },
+ "0x0057EA18": {
+  "cident": "isspace",
+  "label": "isspace",
+  "src": "symbol"
+ },
+ "0x0057EA3C": {
+  "cident": "isupper",
+  "label": "isupper",
+  "src": "symbol"
+ },
+ "0x0057EA60": {
+  "cident": "isalnum_ascii",
+  "label": "isalnum_ascii",
+  "src": "symbol"
+ },
+ "0x0057EA84": {
+  "cident": "isalpha_ascii",
+  "label": "isalpha_ascii",
+  "src": "symbol"
+ },
+ "0x0057EAA8": {
+  "cident": "isblank_ascii",
+  "label": "isblank_ascii",
+  "src": "symbol"
+ },
+ "0x0057EACC": {
+  "cident": "iscntrl_ascii",
+  "label": "iscntrl_ascii",
+  "src": "symbol"
+ },
+ "0x0057EAF0": {
+  "cident": "isdigit_ascii",
+  "label": "isdigit_ascii",
+  "src": "symbol"
+ },
+ "0x0057EB14": {
+  "cident": "isgraph_ascii",
+  "label": "isgraph_ascii",
+  "src": "symbol"
+ },
+ "0x0057EB38": {
+  "cident": "islower_ascii",
+  "label": "islower_ascii",
+  "src": "symbol"
+ },
+ "0x0057EB5C": {
+  "cident": "isprint_ascii",
+  "label": "isprint_ascii",
+  "src": "symbol"
+ },
+ "0x0057EB80": {
+  "cident": "ispunct_ascii",
+  "label": "ispunct_ascii",
+  "src": "symbol"
+ },
+ "0x0057EBA4": {
+  "cident": "isspace_ascii",
+  "label": "isspace_ascii",
+  "src": "symbol"
+ },
+ "0x0057EBC8": {
+  "cident": "isupper_ascii",
+  "label": "isupper_ascii",
+  "src": "symbol"
+ },
+ "0x0057EBEC": {
+  "cident": "isxdigit_ascii",
+  "label": "isxdigit_ascii",
+  "src": "symbol"
+ },
+ "0x0057EC0C": {
+  "cident": "tolower_ascii",
+  "label": "tolower_ascii",
+  "src": "symbol"
+ },
+ "0x0057EC3C": {
+  "cident": "toupper_ascii",
+  "label": "toupper_ascii",
+  "src": "symbol"
+ },
+ "0x0057EC6C": {
+  "cident": "iswalnum",
+  "label": "iswalnum",
+  "src": "symbol"
+ },
+ "0x0057EC98": {
+  "cident": "iswalpha",
+  "label": "iswalpha",
+  "src": "symbol"
+ },
+ "0x0057ECC4": {
+  "cident": "iswblank",
+  "label": "iswblank",
+  "src": "symbol"
+ },
+ "0x0057ECF0": {
+  "cident": "iswcntrl",
+  "label": "iswcntrl",
+  "src": "symbol"
+ },
+ "0x0057ED1C": {
+  "cident": "iswctype",
+  "label": "iswctype",
+  "src": "symbol"
+ },
+ "0x0057ED44": {
+  "cident": "iswdigit",
+  "label": "iswdigit",
+  "src": "symbol"
+ },
+ "0x0057ED70": {
+  "cident": "iswgraph",
+  "label": "iswgraph",
+  "src": "symbol"
+ },
+ "0x0057ED9C": {
+  "cident": "iswlower",
+  "label": "iswlower",
+  "src": "symbol"
+ },
+ "0x0057EDC8": {
+  "cident": "iswprint",
+  "label": "iswprint",
+  "src": "symbol"
+ },
+ "0x0057EDF4": {
+  "cident": "iswpunct",
+  "label": "iswpunct",
+  "src": "symbol"
+ },
+ "0x0057EE20": {
+  "cident": "iswspace",
+  "label": "iswspace",
+  "src": "symbol"
+ },
+ "0x0057EE4C": {
+  "cident": "iswupper",
+  "label": "iswupper",
+  "src": "symbol"
+ },
+ "0x0057EE78": {
+  "cident": "iswxdigit",
+  "label": "iswxdigit",
+  "src": "symbol"
+ },
+ "0x0057EEA4": {
+  "cident": "isxdigit",
+  "label": "isxdigit",
+  "src": "symbol"
+ },
+ "0x0057EEC4": {
+  "cident": "labs",
+  "label": "labs",
+  "src": "symbol"
+ },
+ "0x0057EED8": {
+  "cident": "ldiv",
+  "label": "ldiv",
+  "src": "symbol"
+ },
+ "0x0057EEF8": {
+  "cident": "llabs",
+  "label": "llabs",
+  "src": "symbol"
+ },
+ "0x0057EF08": {
+  "cident": "lldiv",
+  "label": "lldiv",
+  "src": "symbol"
+ },
+ "0x0057EF28": {
+  "cident": "localeconv",
+  "label": "localeconv",
+  "src": "symbol"
+ },
+ "0x0057EF30": {
+  "cident": "localtime",
+  "label": "localtime",
+  "src": "symbol"
+ },
+ "0x0057EFB4": {
+  "cident": "mblen",
+  "label": "mblen",
+  "src": "symbol"
+ },
+ "0x0057F01C": {
+  "cident": "mbrlen",
+  "label": "mbrlen",
+  "src": "symbol"
+ },
+ "0x0057F074": {
+  "cident": "mbrtowc",
+  "label": "mbrtowc",
+  "src": "symbol"
+ },
+ "0x0057F108": {
+  "cident": "mbsinit",
+  "label": "mbsinit",
+  "src": "symbol"
+ },
+ "0x0057F128": {
+  "cident": "mbsrtowcs",
+  "label": "mbsrtowcs",
+  "src": "symbol"
+ },
+ "0x0057F2E0": {
+  "cident": "mbstowcs",
+  "label": "mbstowcs",
+  "src": "symbol"
+ },
+ "0x0057F42C": {
+  "cident": "mbtowc",
+  "label": "mbtowc",
+  "src": "symbol"
+ },
+ "0x0057F48C": {
+  "cident": "memchr",
+  "label": "memchr",
+  "src": "symbol"
+ },
+ "0x0057F5D8": {
+  "cident": "memcpy",
+  "label": "memcpy",
+  "src": "symbol"
+ },
+ "0x0057FB9C": {
+  "cident": "memmove",
+  "label": "memmove",
+  "src": "symbol"
+ },
+ "0x00580E70": {
+  "cident": "mktime",
+  "label": "mktime",
+  "src": "symbol"
+ },
+ "0x00581074": {
+  "cident": "perror",
+  "label": "perror",
+  "src": "symbol"
+ },
+ "0x00581118": {
+  "cident": "putc",
+  "label": "putc",
+  "src": "symbol"
+ },
+ "0x00581140": {
+  "cident": "putchar",
+  "label": "putchar",
+  "src": "symbol"
+ },
+ "0x0058116C": {
+  "cident": "puts",
+  "label": "puts",
+  "src": "symbol"
+ },
+ "0x00581228": {
+  "cident": "putwc",
+  "label": "putwc",
+  "src": "symbol"
+ },
+ "0x00581250": {
+  "cident": "putwchar",
+  "label": "putwchar",
+  "src": "symbol"
+ },
+ "0x00581F5C": {
+  "cident": "qsort",
+  "label": "qsort",
+  "src": "symbol"
+ },
+ "0x00581F6C": {
+  "cident": "rand",
+  "label": "rand",
+  "src": "symbol"
+ },
+ "0x00582074": {
+  "cident": "remove",
+  "label": "remove",
+  "src": "symbol"
+ },
+ "0x0058209C": {
+  "cident": "rename",
+  "label": "rename",
+  "src": "symbol"
+ },
+ "0x005820C4": {
+  "cident": "rewind",
+  "label": "rewind",
+  "src": "symbol"
+ },
+ "0x0058212C": {
+  "cident": "scanf",
+  "label": "scanf",
+  "src": "symbol"
+ },
+ "0x00582218": {
+  "cident": "setbuf",
+  "label": "setbuf",
+  "src": "symbol"
+ },
+ "0x0058225C": {
+  "cident": "setlocale",
+  "label": "setlocale",
+  "src": "symbol"
+ },
+ "0x005822A8": {
+  "cident": "Getlname",
+  "label": "_Getlname",
+  "src": "symbol"
+ },
+ "0x00582574": {
+  "cident": "Getnloc",
+  "label": "_Getnloc",
+  "src": "symbol"
+ },
+ "0x005826B8": {
+  "cident": "Getcloc",
+  "label": "_Getcloc",
+  "src": "symbol"
+ },
+ "0x00582998": {
+  "cident": "setvbuf",
+  "label": "setvbuf",
+  "src": "symbol"
+ },
+ "0x00582B44": {
+  "cident": "srand",
+  "label": "srand",
+  "src": "symbol"
+ },
+ "0x00582BA4": {
+  "cident": "sscanf",
+  "label": "sscanf",
+  "src": "symbol"
+ },
+ "0x00582C4C": {
+  "cident": "Strcollx",
+  "label": "_Strcollx",
+  "src": "symbol"
+ },
+ "0x00582E70": {
+  "cident": "strcoll",
+  "label": "strcoll",
+  "src": "symbol"
+ },
+ "0x00582E7C": {
+  "cident": "strcspn",
+  "label": "strcspn",
+  "src": "symbol"
+ },
+ "0x00582EEC": {
+  "cident": "strerror",
+  "label": "strerror",
+  "src": "symbol"
+ },
+ "0x00582F18": {
+  "cident": "strftime",
+  "label": "strftime",
+  "src": "symbol"
+ },
+ "0x00582F44": {
+  "cident": "strlen",
+  "label": "strlen",
+  "src": "symbol"
+ },
+ "0x00582FE8": {
+  "cident": "strpbrk",
+  "label": "strpbrk",
+  "src": "symbol"
+ },
+ "0x00583050": {
+  "cident": "strrchr",
+  "label": "strrchr",
+  "src": "symbol"
+ },
+ "0x0058319C": {
+  "cident": "strspn",
+  "label": "strspn",
+  "src": "symbol"
+ },
+ "0x00583210": {
+  "cident": "strstr",
+  "label": "strstr",
+  "src": "symbol"
+ },
+ "0x005832BC": {
+  "cident": "strtod",
+  "label": "strtod",
+  "src": "symbol"
+ },
+ "0x005832E4": {
+  "cident": "strtof",
+  "label": "strtof",
+  "src": "symbol"
+ },
+ "0x0058330C": {
+  "cident": "strtoimax",
+  "label": "strtoimax",
+  "src": "symbol"
+ },
+ "0x00583330": {
+  "cident": "strtok",
+  "label": "strtok",
+  "src": "symbol"
+ },
+ "0x00583414": {
+  "cident": "strtok_r",
+  "label": "strtok_r",
+  "src": "symbol"
+ },
+ "0x005834F0": {
+  "cident": "Stolx",
+  "label": "_Stolx",
+  "src": "symbol"
+ },
+ "0x005836EC": {
+  "cident": "strtol",
+  "label": "strtol",
+  "src": "symbol"
+ },
+ "0x005836F4": {
+  "cident": "strtold",
+  "label": "strtold",
+  "src": "symbol"
+ },
+ "0x0058371C": {
+  "cident": "strtoll",
+  "label": "strtoll",
+  "src": "symbol"
+ },
+ "0x00583740": {
+  "cident": "strtoul",
+  "label": "strtoul",
+  "src": "symbol"
+ },
+ "0x00583768": {
+  "cident": "strtoull",
+  "label": "strtoull",
+  "src": "symbol"
+ },
+ "0x0058378C": {
+  "cident": "strtoumax",
+  "label": "strtoumax",
+  "src": "symbol"
+ },
+ "0x005837B0": {
+  "cident": "Strxfrmx",
+  "label": "_Strxfrmx",
+  "src": "symbol"
+ },
+ "0x005838E8": {
+  "cident": "strxfrm",
+  "label": "strxfrm",
+  "src": "symbol"
+ },
+ "0x005838F4": {
+  "cident": "strdup",
+  "label": "strdup",
+  "src": "symbol"
+ },
+ "0x0058399C": {
+  "cident": "swscanf",
+  "label": "swscanf",
+  "src": "symbol"
+ },
+ "0x00583A00": {
+  "cident": "tolower",
+  "label": "tolower",
+  "src": "symbol"
+ },
+ "0x00583A30": {
+  "cident": "towctrans",
+  "label": "towctrans",
+  "src": "symbol"
+ },
+ "0x00583AAC": {
+  "cident": "towlower",
+  "label": "towlower",
+  "src": "symbol"
+ },
+ "0x00583AC4": {
+  "cident": "towupper",
+  "label": "towupper",
+  "src": "symbol"
+ },
+ "0x00583ADC": {
+  "cident": "ungetc",
+  "label": "ungetc",
+  "src": "symbol"
+ },
+ "0x00583BBC": {
+  "cident": "ungetwc",
+  "label": "ungetwc",
+  "src": "symbol"
+ },
+ "0x00583C7C": {
+  "cident": "vfscanf",
+  "label": "vfscanf",
+  "src": "symbol"
+ },
+ "0x00583D4C": {
+  "cident": "vfwprintf",
+  "label": "vfwprintf",
+  "src": "symbol"
+ },
+ "0x00583E70": {
+  "cident": "vfwscanf",
+  "label": "vfwscanf",
+  "src": "symbol"
+ },
+ "0x00583F40": {
+  "cident": "vscanf",
+  "label": "vscanf",
+  "src": "symbol"
+ },
+ "0x00584014": {
+  "cident": "vsnprintf",
+  "label": "vsnprintf",
+  "src": "symbol"
+ },
+ "0x0058414C": {
+  "cident": "vsscanf",
+  "label": "vsscanf",
+  "src": "symbol"
+ },
+ "0x00584190": {
+  "cident": "vswprintf",
+  "label": "vswprintf",
+  "src": "symbol"
+ },
+ "0x005842D0": {
+  "cident": "vswscanf",
+  "label": "vswscanf",
+  "src": "symbol"
+ },
+ "0x00584314": {
+  "cident": "vwscanf",
+  "label": "vwscanf",
+  "src": "symbol"
+ },
+ "0x005843E8": {
+  "cident": "wcrtomb",
+  "label": "wcrtomb",
+  "src": "symbol"
+ },
+ "0x00584470": {
+  "cident": "wcscat",
+  "label": "wcscat",
+  "src": "symbol"
+ },
+ "0x005844B4": {
+  "cident": "wcschr",
+  "label": "wcschr",
+  "src": "symbol"
+ },
+ "0x005844F4": {
+  "cident": "wcscmp",
+  "label": "wcscmp",
+  "src": "symbol"
+ },
+ "0x00584610": {
+  "cident": "Wcscollx",
+  "label": "_Wcscollx",
+  "src": "symbol"
+ },
+ "0x00584790": {
+  "cident": "wcscoll",
+  "label": "wcscoll",
+  "src": "symbol"
+ },
+ "0x0058479C": {
+  "cident": "wcscpy",
+  "label": "wcscpy",
+  "src": "symbol"
+ },
+ "0x005847C0": {
+  "cident": "wcscspn",
+  "label": "wcscspn",
+  "src": "symbol"
+ },
+ "0x00584824": {
+  "cident": "wcsftime",
+  "label": "wcsftime",
+  "src": "symbol"
+ },
+ "0x005849E8": {
+  "cident": "wcslen",
+  "label": "wcslen",
+  "src": "symbol"
+ },
+ "0x00584A18": {
+  "cident": "wcsncat",
+  "label": "wcsncat",
+  "src": "symbol"
+ },
+ "0x00584A80": {
+  "cident": "wcsncmp",
+  "label": "wcsncmp",
+  "src": "symbol"
+ },
+ "0x00584AE8": {
+  "cident": "wcsncpy",
+  "label": "wcsncpy",
+  "src": "symbol"
+ },
+ "0x00584B50": {
+  "cident": "wcspbrk",
+  "label": "wcspbrk",
+  "src": "symbol"
+ },
+ "0x00584BA8": {
+  "cident": "wcsrchr",
+  "label": "wcsrchr",
+  "src": "symbol"
+ },
+ "0x00584BDC": {
+  "cident": "wcsrtombs",
+  "label": "wcsrtombs",
+  "src": "symbol"
+ },
+ "0x00584E24": {
+  "cident": "wcsspn",
+  "label": "wcsspn",
+  "src": "symbol"
+ },
+ "0x00584E8C": {
+  "cident": "wcsstr",
+  "label": "wcsstr",
+  "src": "symbol"
+ },
+ "0x00584F30": {
+  "cident": "wcstod",
+  "label": "wcstod",
+  "src": "symbol"
+ },
+ "0x00584F58": {
+  "cident": "wcstof",
+  "label": "wcstof",
+  "src": "symbol"
+ },
+ "0x00584F80": {
+  "cident": "wcstoimax",
+  "label": "wcstoimax",
+  "src": "symbol"
+ },
+ "0x00584FA4": {
+  "cident": "wcstok",
+  "label": "wcstok",
+  "src": "symbol"
+ },
+ "0x00585088": {
+  "cident": "wcstol",
+  "label": "wcstol",
+  "src": "symbol"
+ },
+ "0x00585280": {
+  "cident": "wcstold",
+  "label": "wcstold",
+  "src": "symbol"
+ },
+ "0x005852A8": {
+  "cident": "wcstoll",
+  "label": "wcstoll",
+  "src": "symbol"
+ },
+ "0x005852CC": {
+  "cident": "wcstombs",
+  "label": "wcstombs",
+  "src": "symbol"
+ },
+ "0x0058552C": {
+  "cident": "wcstoul",
+  "label": "wcstoul",
+  "src": "symbol"
+ },
+ "0x00585554": {
+  "cident": "wcstoull",
+  "label": "wcstoull",
+  "src": "symbol"
+ },
+ "0x00585578": {
+  "cident": "wcstoumax",
+  "label": "wcstoumax",
+  "src": "symbol"
+ },
+ "0x0058559C": {
+  "cident": "Wcsxfrmx",
+  "label": "_Wcsxfrmx",
+  "src": "symbol"
+ },
+ "0x00585754": {
+  "cident": "wcsxfrm",
+  "label": "wcsxfrm",
+  "src": "symbol"
+ },
+ "0x00585760": {
+  "cident": "wctob",
+  "label": "wctob",
+  "src": "symbol"
+ },
+ "0x00585788": {
+  "cident": "wctomb",
+  "label": "wctomb",
+  "src": "symbol"
+ },
+ "0x005857B8": {
+  "cident": "wctrans",
+  "label": "wctrans",
+  "src": "symbol"
+ },
+ "0x00585820": {
+  "cident": "wctype",
+  "label": "wctype",
+  "src": "symbol"
+ },
+ "0x005858D8": {
+  "cident": "wmemchr",
+  "label": "wmemchr",
+  "src": "symbol"
+ },
+ "0x0058591C": {
+  "cident": "wmemcmp",
+  "label": "wmemcmp",
+  "src": "symbol"
+ },
+ "0x00585974": {
+  "cident": "wmemcpy",
+  "label": "wmemcpy",
+  "src": "symbol"
+ },
+ "0x005859A4": {
+  "cident": "wmemmove",
+  "label": "wmemmove",
+  "src": "symbol"
+ },
+ "0x00585A24": {
+  "cident": "wmemset",
+  "label": "wmemset",
+  "src": "symbol"
+ },
+ "0x00585A4C": {
+  "cident": "wscanf",
+  "label": "wscanf",
+  "src": "symbol"
+ },
+ "0x00585B04": {
+  "cident": "Btowc",
+  "label": "_Btowc",
+  "src": "symbol"
+ },
+ "0x00585B70": {
+  "cident": "Getpcostate",
+  "label": "_Getpcostate",
+  "src": "symbol"
+ },
+ "0x00585B80": {
+  "cident": "Getpctype",
+  "label": "_Getpctype",
+  "src": "symbol"
+ },
+ "0x00585B8C": {
+  "cident": "Defloc",
+  "label": "_Defloc",
+  "src": "symbol"
+ },
+ "0x00585B94": {
+  "cident": "Dnorm",
+  "label": "_Dnorm",
+  "src": "symbol"
+ },
+ "0x00585D58": {
+  "cident": "Dscale",
+  "label": "_Dscale",
+  "src": "symbol"
+ },
+ "0x00585FA4": {
+  "cident": "Dtentox",
+  "label": "_Dtentox",
+  "src": "symbol"
+ },
+ "0x00586054": {
+  "cident": "Dunscale",
+  "label": "_Dunscale",
+  "src": "symbol"
+ },
+ "0x00586174": {
+  "cident": "Exit",
+  "label": "_Exit",
+  "src": "symbol"
+ },
+ "0x005861A4": {
+  "cident": "FDnorm",
+  "label": "_FDnorm",
+  "src": "symbol"
+ },
+ "0x005862A8": {
+  "cident": "FDscale",
+  "label": "_FDscale",
+  "src": "symbol"
+ },
+ "0x00586480": {
+  "cident": "FDtentox",
+  "label": "_FDtentox",
+  "src": "symbol"
+ },
+ "0x00586530": {
+  "cident": "FDunscale",
+  "label": "_FDunscale",
+  "src": "symbol"
+ },
+ "0x00586638": {
+  "cident": "sys_libc_0xFB8EA4D2",
+  "label": "sys_libc_0xFB8EA4D2",
+  "src": "symbol"
+ },
+ "0x005866DC": {
+  "cident": "sys_libc_0xC1A71972",
+  "label": "sys_libc_0xC1A71972",
+  "src": "symbol"
+ },
+ "0x00586788": {
+  "cident": "sys_libc_0x8E2484F1",
+  "label": "sys_libc_0x8E2484F1",
+  "src": "symbol"
+ },
+ "0x005868A4": {
+  "cident": "sys_libc_0x2EEA9F25",
+  "label": "sys_libc_0x2EEA9F25",
+  "src": "symbol"
+ },
+ "0x005869E0": {
+  "cident": "sys_libc_0x23D3BCA7",
+  "label": "sys_libc_0x23D3BCA7",
+  "src": "symbol"
+ },
+ "0x00586A7C": {
+  "cident": "sys_libc_0x89B62F56",
+  "label": "sys_libc_0x89B62F56",
+  "src": "symbol"
+ },
+ "0x00586C94": {
+  "cident": "sys_libc_0xA483D50D",
+  "label": "sys_libc_0xA483D50D",
+  "src": "symbol"
+ },
+ "0x00586DBC": {
+  "cident": "sys_libc_0xCECBCDC4",
+  "label": "sys_libc_0xCECBCDC4",
+  "src": "symbol"
+ },
+ "0x00586EDC": {
+  "cident": "Nnl",
+  "label": "_Nnl",
+  "src": "symbol"
+ },
+ "0x00586EF4": {
+  "cident": "Fgpos",
+  "label": "_Fgpos",
+  "src": "symbol"
+ },
+ "0x005870E4": {
+  "cident": "Findloc",
+  "label": "_Findloc",
+  "src": "symbol"
+ },
+ "0x005870EC": {
+  "cident": "Skip",
+  "label": "_Skip",
+  "src": "symbol"
+ },
+ "0x00587148": {
+  "cident": "Fofind",
+  "label": "_Fofind",
+  "src": "symbol"
+ },
+ "0x005871E0": {
+  "cident": "Fopen",
+  "label": "_Fopen",
+  "src": "symbol"
+ },
+ "0x00587250": {
+  "cident": "sys_libc_0x02F52A3C",
+  "label": "sys_libc_0x02F52A3C",
+  "src": "symbol"
+ },
+ "0x00587338": {
+  "cident": "Foprep",
+  "label": "_Foprep",
+  "src": "symbol"
+ },
+ "0x005875E0": {
+  "cident": "Freeloc",
+  "label": "_Freeloc",
+  "src": "symbol"
+ },
+ "0x00587864": {
+  "cident": "Frprep",
+  "label": "_Frprep",
+  "src": "symbol"
+ },
+ "0x00587BD8": {
+  "cident": "Fspos",
+  "label": "_Fspos",
+  "src": "symbol"
+ },
+ "0x00588008": {
+  "cident": "Fwprep",
+  "label": "_Fwprep",
+  "src": "symbol"
+ },
+ "0x005881A8": {
+  "cident": "Genld",
+  "label": "_Genld",
+  "src": "symbol"
+ },
+ "0x00588E20": {
+  "cident": "Gentime",
+  "label": "_Gentime",
+  "src": "symbol"
+ },
+ "0x00589910": {
+  "cident": "Getdst",
+  "label": "_Getdst",
+  "src": "symbol"
+ },
+ "0x00589B88": {
+  "cident": "Getfld",
+  "label": "_Getfld",
+  "src": "symbol"
+ },
+ "0x00589F98": {
+  "cident": "Getfloat",
+  "label": "_Getfloat",
+  "src": "symbol"
+ },
+ "0x0058AFB0": {
+  "cident": "Getgloballocale",
+  "label": "_Getgloballocale",
+  "src": "symbol"
+ },
+ "0x0058AFBC": {
+  "cident": "Setgloballocale",
+  "label": "_Setgloballocale",
+  "src": "symbol"
+ },
+ "0x0058AFC8": {
+  "cident": "Getint",
+  "label": "_Getint",
+  "src": "symbol"
+ },
+ "0x0058B710": {
+  "cident": "Getloc",
+  "label": "_Getloc",
+  "src": "symbol"
+ },
+ "0x0058BA04": {
+  "cident": "Getmem",
+  "label": "_Getmem",
+  "src": "symbol"
+ },
+ "0x0058BB10": {
+  "cident": "Getstr",
+  "label": "_Getstr",
+  "src": "symbol"
+ },
+ "0x0058C154": {
+  "cident": "Gettime",
+  "label": "_Gettime",
+  "src": "symbol"
+ },
+ "0x0058C26C": {
+  "cident": "Isdst",
+  "label": "_Isdst",
+  "src": "symbol"
+ },
+ "0x0058C4F4": {
+  "cident": "LDscale",
+  "label": "_LDscale",
+  "src": "symbol"
+ },
+ "0x0058C51C": {
+  "cident": "LDtentox",
+  "label": "_LDtentox",
+  "src": "symbol"
+ },
+ "0x0058C5D4": {
+  "cident": "Ldtob",
+  "label": "_Ldtob",
+  "src": "symbol"
+ },
+ "0x0058CF88": {
+  "cident": "LDunscale",
+  "label": "_LDunscale",
+  "src": "symbol"
+ },
+ "0x0058CFB0": {
+  "cident": "Litob",
+  "label": "_Litob",
+  "src": "symbol"
+ },
+ "0x0058D208": {
+  "cident": "Locterm",
+  "label": "_Locterm",
+  "src": "symbol"
+ },
+ "0x0058D420": {
+  "cident": "Locvar",
+  "label": "_Locvar",
+  "src": "symbol"
+ },
+ "0x0058D678": {
+  "cident": "Locsum",
+  "label": "_Locsum",
+  "src": "symbol"
+ },
+ "0x0058D730": {
+  "cident": "Makeloc",
+  "label": "_Makeloc",
+  "src": "symbol"
+ },
+ "0x0058DE30": {
+  "cident": "Makestab",
+  "label": "_Makestab",
+  "src": "symbol"
+ },
+ "0x0058E180": {
+  "cident": "Makewct",
+  "label": "_Makewct",
+  "src": "symbol"
+ },
+ "0x0058E58C": {
+  "cident": "Mbtowcx",
+  "label": "_Mbtowcx",
+  "src": "symbol"
+ },
+ "0x0058E8E8": {
+  "cident": "Mbtowc",
+  "label": "_Mbtowc",
+  "src": "symbol"
+ },
+ "0x0058E8F4": {
+  "cident": "Putstr",
+  "label": "_Putstr",
+  "src": "symbol"
+ },
+ "0x0058EB18": {
+  "cident": "Puttxt",
+  "label": "_Puttxt",
+  "src": "symbol"
+ },
+ "0x0058EF48": {
+  "cident": "Readloc",
+  "label": "_Readloc",
+  "src": "symbol"
+ },
+ "0x0058F104": {
+  "cident": "Scanf",
+  "label": "_Scanf",
+  "src": "symbol"
+ },
+ "0x0058F6CC": {
+  "cident": "Setloc",
+  "label": "_Setloc",
+  "src": "symbol"
+ },
+ "0x0058FB58": {
+  "cident": "Getmbcurmax",
+  "label": "_Getmbcurmax",
+  "src": "symbol"
+ },
+ "0x0058FB6C": {
+  "cident": "Getpmbstate",
+  "label": "_Getpmbstate",
+  "src": "symbol"
+ },
+ "0x0058FB7C": {
+  "cident": "Stodx",
+  "label": "_Stodx",
+  "src": "symbol"
+ },
+ "0x0058FF14": {
+  "cident": "Stod",
+  "label": "_Stod",
+  "src": "symbol"
+ },
+ "0x0058FF1C": {
+  "cident": "Stofx",
+  "label": "_Stofx",
+  "src": "symbol"
+ },
+ "0x005902BC": {
+  "cident": "Stof",
+  "label": "_Stof",
+  "src": "symbol"
+ },
+ "0x005902C4": {
+  "cident": "Stoflt",
+  "label": "_Stoflt",
+  "src": "symbol"
+ },
+ "0x005907C0": {
+  "cident": "Stoldx",
+  "label": "_Stoldx",
+  "src": "symbol"
+ },
+ "0x00590B58": {
+  "cident": "Stold",
+  "label": "_Stold",
+  "src": "symbol"
+ },
+ "0x00590B60": {
+  "cident": "Stollx",
+  "label": "_Stollx",
+  "src": "symbol"
+ },
+ "0x00590D50": {
+  "cident": "Stoll",
+  "label": "_Stoll",
+  "src": "symbol"
+ },
+ "0x00590D58": {
+  "cident": "Stopfx",
+  "label": "_Stopfx",
+  "src": "symbol"
+ },
+ "0x00590FE8": {
+  "cident": "Stoulx",
+  "label": "_Stoulx",
+  "src": "symbol"
+ },
+ "0x00591330": {
+  "cident": "Stoul",
+  "label": "_Stoul",
+  "src": "symbol"
+ },
+ "0x00591338": {
+  "cident": "Stoullx",
+  "label": "_Stoullx",
+  "src": "symbol"
+ },
+ "0x0059168C": {
+  "cident": "Stoull",
+  "label": "_Stoull",
+  "src": "symbol"
+ },
+ "0x00591694": {
+  "cident": "Stoxflt",
+  "label": "_Stoxflt",
+  "src": "symbol"
+ },
+ "0x00591C14": {
+  "cident": "Strerror",
+  "label": "_Strerror",
+  "src": "symbol"
+ },
+ "0x00592288": {
+  "cident": "CStrftime",
+  "label": "_CStrftime",
+  "src": "symbol"
+ },
+ "0x00592524": {
+  "cident": "CStrxfrm",
+  "label": "_CStrxfrm",
+  "src": "symbol"
+ },
+ "0x00592C30": {
+  "cident": "Unlocksyslock",
+  "label": "_Unlocksyslock",
+  "src": "symbol"
+ },
+ "0x00592C7C": {
+  "cident": "Unlockfilelock",
+  "label": "_Unlockfilelock",
+  "src": "symbol"
+ },
+ "0x00592CAC": {
+  "cident": "Locksyslock",
+  "label": "_Locksyslock",
+  "src": "symbol"
+ },
+ "0x00592CF8": {
+  "cident": "Lockfilelock",
+  "label": "_Lockfilelock",
+  "src": "symbol"
+ },
+ "0x00592D28": {
+  "cident": "Initlocks",
+  "label": "_Initlocks",
+  "src": "symbol"
+ },
+ "0x00592E20": {
+  "cident": "Clearlocks",
+  "label": "_Clearlocks",
+  "src": "symbol"
+ },
+ "0x00592E7C": {
+  "cident": "Getptolower",
+  "label": "_Getptolower",
+  "src": "symbol"
+ },
+ "0x00592E88": {
+  "cident": "Getptoupper",
+  "label": "_Getptoupper",
+  "src": "symbol"
+ },
+ "0x00592E94": {
+  "cident": "Daysto",
+  "label": "_Daysto",
+  "src": "symbol"
+ },
+ "0x00592F24": {
+  "cident": "Ttotm",
+  "label": "_Ttotm",
+  "src": "symbol"
+ },
+ "0x00593180": {
+  "cident": "Vacopy",
+  "label": "_Vacopy",
+  "src": "symbol"
+ },
+ "0x005931B0": {
+  "cident": "Getpwcostate",
+  "label": "_Getpwcostate",
+  "src": "symbol"
+ },
+ "0x005931C0": {
+  "cident": "Wcsftime",
+  "label": "_Wcsftime",
+  "src": "symbol"
+ },
+ "0x00593484": {
+  "cident": "Getpwcstate",
+  "label": "_Getpwcstate",
+  "src": "symbol"
+ },
+ "0x00593494": {
+  "cident": "CWcsxfrm",
+  "label": "_CWcsxfrm",
+  "src": "symbol"
+ },
+ "0x005936F8": {
+  "cident": "Wctob",
+  "label": "_Wctob",
+  "src": "symbol"
+ },
+ "0x0059375C": {
+  "cident": "Wctombx",
+  "label": "_Wctombx",
+  "src": "symbol"
+ },
+ "0x00593A38": {
+  "cident": "Wctomb",
+  "label": "_Wctomb",
+  "src": "symbol"
+ },
+ "0x00593A6C": {
+  "cident": "Getpwctrtab",
+  "label": "_Getpwctrtab",
+  "src": "symbol"
+ },
+ "0x00593A78": {
+  "cident": "Iswctype",
+  "label": "_Iswctype",
+  "src": "symbol"
+ },
+ "0x00593AF8": {
+  "cident": "Getpwctytab",
+  "label": "_Getpwctytab",
+  "src": "symbol"
+ },
+ "0x00593B04": {
+  "cident": "WFrprep",
+  "label": "_WFrprep",
+  "src": "symbol"
+ },
+ "0x00593CE0": {
+  "cident": "WFwprep",
+  "label": "_WFwprep",
+  "src": "symbol"
+ },
+ "0x00593E78": {
+  "cident": "WGenld",
+  "label": "_WGenld",
+  "src": "symbol"
+ },
+ "0x00594510": {
+  "cident": "WGetfld",
+  "label": "_WGetfld",
+  "src": "symbol"
+ },
+ "0x00594904": {
+  "cident": "WGetfloat",
+  "label": "_WGetfloat",
+  "src": "symbol"
+ },
+ "0x00595940": {
+  "cident": "WGetint",
+  "label": "_WGetint",
+  "src": "symbol"
+ },
+ "0x005960D8": {
+  "cident": "WGetstr",
+  "label": "_WGetstr",
+  "src": "symbol"
+ },
+ "0x00596574": {
+  "cident": "WLdtob",
+  "label": "_WLdtob",
+  "src": "symbol"
+ },
+ "0x00596E9C": {
+  "cident": "WLitob",
+  "label": "_WLitob",
+  "src": "symbol"
+ },
+ "0x0059710C": {
+  "cident": "WPutstr",
+  "label": "_WPutstr",
+  "src": "symbol"
+ },
+ "0x00597314": {
+  "cident": "WPuttxt",
+  "label": "_WPuttxt",
+  "src": "symbol"
+ },
+ "0x00597748": {
+  "cident": "wremove",
+  "label": "_wremove",
+  "src": "symbol"
+ },
+ "0x005977A8": {
+  "cident": "wrename",
+  "label": "_wrename",
+  "src": "symbol"
+ },
+ "0x0059783C": {
+  "cident": "WScanf",
+  "label": "_WScanf",
+  "src": "symbol"
+ },
+ "0x00597CB4": {
+  "cident": "WStodx",
+  "label": "_WStodx",
+  "src": "symbol"
+ },
+ "0x0059804C": {
+  "cident": "WStod",
+  "label": "_WStod",
+  "src": "symbol"
+ },
+ "0x00598054": {
+  "cident": "WStofx",
+  "label": "_WStofx",
+  "src": "symbol"
+ },
+ "0x005983F4": {
+  "cident": "WStof",
+  "label": "_WStof",
+  "src": "symbol"
+ },
+ "0x005983FC": {
+  "cident": "WStoflt",
+  "label": "_WStoflt",
+  "src": "symbol"
+ },
+ "0x00598900": {
+  "cident": "WStoldx",
+  "label": "_WStoldx",
+  "src": "symbol"
+ },
+ "0x00598C98": {
+  "cident": "WStold",
+  "label": "_WStold",
+  "src": "symbol"
+ },
+ "0x00598CA0": {
+  "cident": "WStoll",
+  "label": "_WStoll",
+  "src": "symbol"
+ },
+ "0x00598EA4": {
+  "cident": "WStopfx",
+  "label": "_WStopfx",
+  "src": "symbol"
+ },
+ "0x00599148": {
+  "cident": "WStoul",
+  "label": "_WStoul",
+  "src": "symbol"
+ },
+ "0x005993FC": {
+  "cident": "WStoull",
+  "label": "_WStoull",
+  "src": "symbol"
+ },
+ "0x005996C4": {
+  "cident": "WStoxflt",
+  "label": "_WStoxflt",
+  "src": "symbol"
+ },
+ "0x00599C0C": {
+  "cident": "get_state_TT800",
+  "label": "_get_state_TT800",
+  "src": "symbol"
+ },
+ "0x00599C1C": {
+  "cident": "init_TT800",
+  "label": "init_TT800",
+  "src": "symbol"
+ },
+ "0x00599C50": {
+  "cident": "init_by_array_TT800",
+  "label": "init_by_array_TT800",
+  "src": "symbol"
+ },
+ "0x00599CD4": {
+  "cident": "rand_int32_TT800",
+  "label": "rand_int32_TT800",
+  "src": "symbol"
+ },
+ "0x00599DBC": {
+  "cident": "rand_int31_TT800",
+  "label": "_rand_int31_TT800",
+  "src": "symbol"
+ },
+ "0x00599DE4": {
+  "cident": "rand_real1_TT800",
+  "label": "_rand_real1_TT800",
+  "src": "symbol"
+ },
+ "0x00599E24": {
+  "cident": "rand_real2_TT800",
+  "label": "rand_real2_TT800",
+  "src": "symbol"
+ },
+ "0x00599E64": {
+  "cident": "rand_real3_TT800",
+  "label": "rand_real3_TT800",
+  "src": "symbol"
+ },
+ "0x00599EAC": {
+  "cident": "strcat",
+  "label": "strcat",
+  "src": "symbol"
+ },
+ "0x00599FD8": {
+  "cident": "strchr",
+  "label": "strchr",
+  "src": "symbol"
+ },
+ "0x0059A1E4": {
+  "cident": "strcmp",
+  "label": "strcmp",
+  "src": "symbol"
+ },
+ "0x0059A338": {
+  "cident": "strcpy",
+  "label": "strcpy",
+  "src": "symbol"
+ },
+ "0x0059A424": {
+  "cident": "strncat",
+  "label": "strncat",
+  "src": "symbol"
+ },
+ "0x0059A588": {
+  "cident": "strncmp",
+  "label": "strncmp",
+  "src": "symbol"
+ },
+ "0x0059A74C": {
+  "cident": "sys_libc_0xBDA4DCF0",
+  "label": "sys_libc_0xBDA4DCF0",
+  "src": "symbol"
+ },
+ "0x0059A9F0": {
+  "cident": "strcasecmp",
+  "label": "strcasecmp",
+  "src": "symbol"
+ },
+ "0x0059AAB0": {
+  "cident": "strcasecmp_ascii",
+  "label": "strcasecmp_ascii",
+  "src": "symbol"
+ },
+ "0x0059AB70": {
+  "cident": "strncasecmp",
+  "label": "strncasecmp",
+  "src": "symbol"
+ },
+ "0x0059AC40": {
+  "cident": "strncasecmp_ascii",
+  "label": "strncasecmp_ascii",
+  "src": "symbol"
+ },
+ "0x0059AD10": {
+  "cident": "absi4",
+  "label": "_absi4",
+  "src": "symbol"
+ },
+ "0x0059AD20": {
+  "cident": "divi4",
+  "label": "_divi4",
+  "src": "symbol"
+ },
+ "0x0059ADDC": {
+  "cident": "fprintf",
+  "label": "fprintf",
+  "src": "symbol"
+ },
+ "0x0059AEE4": {
+  "cident": "fwprintf",
+  "label": "fwprintf",
+  "src": "symbol"
+ },
+ "0x0059B01C": {
+  "cident": "printf",
+  "label": "printf",
+  "src": "symbol"
+ },
+ "0x0059B11C": {
+  "cident": "snprintf",
+  "label": "snprintf",
+  "src": "symbol"
+ },
+ "0x0059B22C": {
+  "cident": "sprintf",
+  "label": "sprintf",
+  "src": "symbol"
+ },
+ "0x0059B2E4": {
+  "cident": "swprintf",
+  "label": "swprintf",
+  "src": "symbol"
+ },
+ "0x0059B400": {
+  "cident": "vfprintf",
+  "label": "vfprintf",
+  "src": "symbol"
+ },
+ "0x0059B4E4": {
+  "cident": "vprintf",
+  "label": "vprintf",
+  "src": "symbol"
+ },
+ "0x0059B5CC": {
+  "cident": "vsprintf",
+  "label": "vsprintf",
+  "src": "symbol"
+ },
+ "0x0059B664": {
+  "cident": "vwprintf",
+  "label": "vwprintf",
+  "src": "symbol"
+ },
+ "0x0059B78C": {
+  "cident": "wprintf",
+  "label": "wprintf",
+  "src": "symbol"
+ },
+ "0x0059B898": {
+  "cident": "Printf",
+  "label": "_Printf",
+  "src": "symbol"
+ },
+ "0x0059BF5C": {
+  "cident": "WPrintf",
+  "label": "_WPrintf",
+  "src": "symbol"
+ },
+ "0x0059C39C": {
+  "cident": "Putfld",
+  "label": "_Putfld",
+  "src": "symbol"
+ },
+ "0x0059D4CC": {
+  "cident": "WPutfld",
+  "label": "_WPutfld",
+  "src": "symbol"
+ },
+ "0x0059DCD8": {
+  "cident": "clock",
+  "label": "clock",
+  "src": "symbol"
+ },
+ "0x0059DD08": {
+  "cident": "sys_libc_0xDE7AFF7A",
+  "label": "sys_libc_0xDE7AFF7A",
+  "src": "symbol"
+ },
+ "0x0059DDC8": {
+  "cident": "sys_libc_0x81A0A858",
+  "label": "sys_libc_0x81A0A858",
+  "src": "symbol"
+ },
+ "0x0059DEE0": {
+  "cident": "sys_libc_0x8725A1A7",
+  "label": "sys_libc_0x8725A1A7",
+  "src": "symbol"
+ },
+ "0x0059E008": {
+  "cident": "sys_libc_0x87E8F748",
+  "label": "sys_libc_0x87E8F748",
+  "src": "symbol"
+ },
+ "0x0059E03C": {
+  "cident": "time",
+  "label": "time",
+  "src": "symbol"
+ },
+ "0x0059E0B0": {
+  "cident": "Nonfatal_Assert",
+  "label": "_Nonfatal_Assert",
+  "src": "symbol"
+ },
+ "0x0059E1AC": {
+  "cident": "SCE_Assert",
+  "label": "_SCE_Assert",
+  "src": "symbol"
+ },
+ "0x0059E1D0": {
+  "cident": "Assert",
+  "label": "_Assert",
+  "src": "symbol"
+ },
+ "0x0059E248": {
+  "cident": "spu_thread_read_mem",
+  "label": "spu_thread_read_mem",
+  "src": "symbol"
+ },
+ "0x0059E2EC": {
+  "cident": "spu_thread_read_char",
+  "label": "spu_thread_read_char",
+  "src": "symbol"
+ },
+ "0x0059E330": {
+  "cident": "spu_thread_read_short",
+  "label": "spu_thread_read_short",
+  "src": "symbol"
+ },
+ "0x0059E37C": {
+  "cident": "spu_thread_read_int",
+  "label": "spu_thread_read_int",
+  "src": "symbol"
+ },
+ "0x0059E3A8": {
+  "cident": "spu_thread_read_long",
+  "label": "spu_thread_read_long",
+  "src": "symbol"
+ },
+ "0x0059E3D4": {
+  "cident": "spu_thread_read_llong",
+  "label": "spu_thread_read_llong",
+  "src": "symbol"
+ },
+ "0x0059E42C": {
+  "cident": "spu_thread_read_uchar",
+  "label": "spu_thread_read_uchar",
+  "src": "symbol"
+ },
+ "0x0059E46C": {
+  "cident": "spu_thread_read_ushort",
+  "label": "spu_thread_read_ushort",
+  "src": "symbol"
+ },
+ "0x0059E4B4": {
+  "cident": "spu_thread_read_uint",
+  "label": "spu_thread_read_uint",
+  "src": "symbol"
+ },
+ "0x0059E4DC": {
+  "cident": "spu_thread_read_ulong",
+  "label": "spu_thread_read_ulong",
+  "src": "symbol"
+ },
+ "0x0059E504": {
+  "cident": "spu_thread_read_ullong",
+  "label": "spu_thread_read_ullong",
+  "src": "symbol"
+ },
+ "0x0059E55C": {
+  "cident": "spu_thread_read_float",
+  "label": "spu_thread_read_float",
+  "src": "symbol"
+ },
+ "0x0059E584": {
+  "cident": "spu_thread_read_double",
+  "label": "spu_thread_read_double",
+  "src": "symbol"
+ },
+ "0x0059E5DC": {
+  "cident": "spu_thread_read_ldouble",
+  "label": "spu_thread_read_ldouble",
+  "src": "symbol"
+ },
+ "0x0059E634": {
+  "cident": "spu_thread_read_ptr",
+  "label": "spu_thread_read_ptr",
+  "src": "symbol"
+ },
+ "0x0059E65C": {
+  "cident": "spu_thread_write_mem",
+  "label": "spu_thread_write_mem",
+  "src": "symbol"
+ },
+ "0x0059E764": {
+  "cident": "spu_thread_write_char",
+  "label": "spu_thread_write_char",
+  "src": "symbol"
+ },
+ "0x0059E7D8": {
+  "cident": "spu_thread_write_short",
+  "label": "spu_thread_write_short",
+  "src": "symbol"
+ },
+ "0x0059E854": {
+  "cident": "spu_thread_write_int",
+  "label": "spu_thread_write_int",
+  "src": "symbol"
+ },
+ "0x0059E85C": {
+  "cident": "spu_thread_write_long",
+  "label": "spu_thread_write_long",
+  "src": "symbol"
+ },
+ "0x0059E864": {
+  "cident": "spu_thread_write_llong",
+  "label": "spu_thread_write_llong",
+  "src": "symbol"
+ },
+ "0x0059E8C0": {
+  "cident": "spu_thread_write_uchar",
+  "label": "spu_thread_write_uchar",
+  "src": "symbol"
+ },
+ "0x0059E934": {
+  "cident": "spu_thread_write_ushort",
+  "label": "spu_thread_write_ushort",
+  "src": "symbol"
+ },
+ "0x0059E9B0": {
+  "cident": "spu_thread_write_uint",
+  "label": "spu_thread_write_uint",
+  "src": "symbol"
+ },
+ "0x0059E9B4": {
+  "cident": "spu_thread_write_ulong",
+  "label": "spu_thread_write_ulong",
+  "src": "symbol"
+ },
+ "0x0059E9B8": {
+  "cident": "spu_thread_write_ullong",
+  "label": "spu_thread_write_ullong",
+  "src": "symbol"
+ },
+ "0x0059EA14": {
+  "cident": "spu_thread_write_float",
+  "label": "spu_thread_write_float",
+  "src": "symbol"
+ },
+ "0x0059EA2C": {
+  "cident": "spu_thread_write_double",
+  "label": "spu_thread_write_double",
+  "src": "symbol"
+ },
+ "0x0059EA8C": {
+  "cident": "spu_thread_write_ldouble",
+  "label": "spu_thread_write_ldouble",
+  "src": "symbol"
+ },
+ "0x0059EAEC": {
+  "cident": "spu_thread_write_ptr",
+  "label": "spu_thread_write_ptr",
+  "src": "symbol"
+ },
+ "0x0059EBAC": {
+  "cident": "spu_thread_puttxt",
+  "label": "__spu_thread_puttxt",
+  "src": "symbol"
+ },
+ "0x0059F1E0": {
+  "cident": "spu_thread_putfld",
+  "label": "__spu_thread_putfld",
+  "src": "symbol"
+ },
+ "0x0059FB20": {
+  "cident": "spu_thread_printf",
+  "label": "__spu_thread_printf",
+  "src": "symbol"
+ },
+ "0x005A00C0": {
+  "cident": "spu_thread_printf_005A00C0",
+  "label": "spu_thread_printf",
+  "src": "symbol"
+ },
+ "0x005A019C": {
+  "cident": "raw_spu_read_char",
+  "label": "raw_spu_read_char",
+  "src": "symbol"
+ },
+ "0x005A01C8": {
+  "cident": "raw_spu_read_mem",
+  "label": "raw_spu_read_mem",
+  "src": "symbol"
+ },
+ "0x005A0260": {
+  "cident": "raw_spu_read_short",
+  "label": "raw_spu_read_short",
+  "src": "symbol"
+ },
+ "0x005A0294": {
+  "cident": "raw_spu_read_int",
+  "label": "raw_spu_read_int",
+  "src": "symbol"
+ },
+ "0x005A02B0": {
+  "cident": "raw_spu_read_long",
+  "label": "raw_spu_read_long",
+  "src": "symbol"
+ },
+ "0x005A02CC": {
+  "cident": "raw_spu_read_llong",
+  "label": "raw_spu_read_llong",
+  "src": "symbol"
+ },
+ "0x005A02F4": {
+  "cident": "raw_spu_read_uchar",
+  "label": "raw_spu_read_uchar",
+  "src": "symbol"
+ },
+ "0x005A031C": {
+  "cident": "raw_spu_read_ushort",
+  "label": "raw_spu_read_ushort",
+  "src": "symbol"
+ },
+ "0x005A034C": {
+  "cident": "raw_spu_read_uint",
+  "label": "raw_spu_read_uint",
+  "src": "symbol"
+ },
+ "0x005A035C": {
+  "cident": "raw_spu_read_ulong",
+  "label": "raw_spu_read_ulong",
+  "src": "symbol"
+ },
+ "0x005A036C": {
+  "cident": "raw_spu_read_ullong",
+  "label": "raw_spu_read_ullong",
+  "src": "symbol"
+ },
+ "0x005A0394": {
+  "cident": "raw_spu_read_float",
+  "label": "raw_spu_read_float",
+  "src": "symbol"
+ },
+ "0x005A03B8": {
+  "cident": "raw_spu_read_double",
+  "label": "raw_spu_read_double",
+  "src": "symbol"
+ },
+ "0x005A03E8": {
+  "cident": "raw_spu_read_ldouble",
+  "label": "raw_spu_read_ldouble",
+  "src": "symbol"
+ },
+ "0x005A0418": {
+  "cident": "raw_spu_read_ptr",
+  "label": "raw_spu_read_ptr",
+  "src": "symbol"
+ },
+ "0x005A0428": {
+  "cident": "raw_spu_write_mem",
+  "label": "raw_spu_write_mem",
+  "src": "symbol"
+ },
+ "0x005A0500": {
+  "cident": "raw_spu_write_char",
+  "label": "raw_spu_write_char",
+  "src": "symbol"
+ },
+ "0x005A0530": {
+  "cident": "raw_spu_write_short",
+  "label": "raw_spu_write_short",
+  "src": "symbol"
+ },
+ "0x005A0568": {
+  "cident": "raw_spu_write_int",
+  "label": "raw_spu_write_int",
+  "src": "symbol"
+ },
+ "0x005A0578": {
+  "cident": "raw_spu_write_long",
+  "label": "raw_spu_write_long",
+  "src": "symbol"
+ },
+ "0x005A0588": {
+  "cident": "raw_spu_write_llong",
+  "label": "raw_spu_write_llong",
+  "src": "symbol"
+ },
+ "0x005A05A8": {
+  "cident": "raw_spu_write_uchar",
+  "label": "raw_spu_write_uchar",
+  "src": "symbol"
+ },
+ "0x005A05D8": {
+  "cident": "raw_spu_write_ushort",
+  "label": "raw_spu_write_ushort",
+  "src": "symbol"
+ },
+ "0x005A0610": {
+  "cident": "raw_spu_write_uint",
+  "label": "raw_spu_write_uint",
+  "src": "symbol"
+ },
+ "0x005A0620": {
+  "cident": "raw_spu_write_ulong",
+  "label": "raw_spu_write_ulong",
+  "src": "symbol"
+ },
+ "0x005A0630": {
+  "cident": "raw_spu_write_ullong",
+  "label": "raw_spu_write_ullong",
+  "src": "symbol"
+ },
+ "0x005A0650": {
+  "cident": "raw_spu_write_float",
+  "label": "raw_spu_write_float",
+  "src": "symbol"
+ },
+ "0x005A0674": {
+  "cident": "raw_spu_write_double",
+  "label": "raw_spu_write_double",
+  "src": "symbol"
+ },
+ "0x005A069C": {
+  "cident": "raw_spu_write_ldouble",
+  "label": "raw_spu_write_ldouble",
+  "src": "symbol"
+ },
+ "0x005A06C4": {
+  "cident": "raw_spu_write_ptr",
+  "label": "raw_spu_write_ptr",
+  "src": "symbol"
+ },
+ "0x005A06D4": {
+  "cident": "raw_spu_puttxt",
+  "label": "__raw_spu_puttxt",
+  "src": "symbol"
+ },
+ "0x005A0C3C": {
+  "cident": "raw_spu_putfld",
+  "label": "__raw_spu_putfld",
+  "src": "symbol"
+ },
+ "0x005A142C": {
+  "cident": "raw_spu_printf",
+  "label": "__raw_spu_printf",
+  "src": "symbol"
+ },
+ "0x005A19BC": {
+  "cident": "raw_spu_printf_005A19BC",
+  "label": "raw_spu_printf",
+  "src": "symbol"
+ },
+ "0x005A1A98": {
+  "cident": "spu_thread_sprintf",
+  "label": "spu_thread_sprintf",
+  "src": "symbol"
+ },
+ "0x005A1B30": {
+  "cident": "spu_thread_snprintf",
+  "label": "spu_thread_snprintf",
+  "src": "symbol"
+ },
+ "0x005A1C24": {
+  "cident": "sys_libc_0xCFBFB7A7",
+  "label": "sys_libc_0xCFBFB7A7",
+  "src": "symbol"
+ },
+ "0x005A1CF8": {
+  "cident": "sys_libc_0x72B84004",
+  "label": "sys_libc_0x72B84004",
+  "src": "symbol"
+ },
+ "0x005A1DD0": {
+  "cident": "sys_libc_0x7EA8D860",
+  "label": "sys_libc_0x7EA8D860",
+  "src": "symbol"
+ },
+ "0x005A1EA0": {
+  "cident": "sys_libc_0x1DD0D4C5",
+  "label": "sys_libc_0x1DD0D4C5",
+  "src": "symbol"
+ },
+ "0x005A1F78": {
+  "cident": "sys_libc_0x00ACF0E5",
+  "label": "sys_libc_0x00ACF0E5",
+  "src": "symbol"
+ },
+ "0x005A20D8": {
+  "cident": "SPU_printf_server_body",
+  "label": "SPU_printf_server_body",
+  "src": "derived"
+ },
+ "0x005A2254": {
+  "cident": "sys_libc_0xC3C598E2",
+  "label": "sys_libc_0xC3C598E2",
+  "src": "symbol"
+ },
+ "0x005A24DC": {
+  "cident": "spu_raw_sprintf",
+  "label": "spu_raw_sprintf",
+  "src": "symbol"
+ },
+ "0x005A2574": {
+  "cident": "spu_raw_snprintf",
+  "label": "spu_raw_snprintf",
+  "src": "symbol"
+ },
+ "0x005A2668": {
+  "cident": "fdopen",
+  "label": "fdopen",
+  "src": "symbol"
+ },
+ "0x005A2708": {
+  "cident": "allocate_mapped_pages",
+  "label": "_allocate_mapped_pages",
+  "src": "symbol"
+ },
+ "0x005A2778": {
+  "cident": "kill",
+  "label": "kill",
+  "src": "symbol"
+ },
+ "0x005A279C": {
+  "cident": "sys_libc_0xDE32A334",
+  "label": "sys_libc_0xDE32A334",
+  "src": "symbol"
+ },
+ "0x005A2824": {
+  "cident": "getpid",
+  "label": "getpid",
+  "src": "symbol"
+ },
+ "0x005A284C": {
+  "cident": "sys_libc_0x11D270D2",
+  "label": "sys_libc_0x11D270D2",
+  "src": "symbol"
+ },
+ "0x005A28C8": {
+  "cident": "getpid_005A28C8",
+  "label": "__getpid",
+  "src": "symbol"
+ },
+ "0x005A28E8": {
+  "cident": "setjmp",
+  "label": "setjmp",
+  "src": "symbol"
+ },
+ "0x005A2A0C": {
+  "cident": "longjmp",
+  "label": "longjmp",
+  "src": "symbol"
+ },
+ "0x005A2BE0": {
+  "cident": "chmod",
+  "label": "chmod",
+  "src": "symbol"
+ },
+ "0x005A2C34": {
+  "cident": "utime",
+  "label": "utime",
+  "src": "symbol"
+ },
+ "0x005A2CC8": {
+  "cident": "mkdir",
+  "label": "mkdir",
+  "src": "symbol"
+ },
+ "0x005A2D1C": {
+  "cident": "rmdir",
+  "label": "rmdir",
+  "src": "symbol"
+ },
+ "0x005A2D70": {
+  "cident": "stat",
+  "label": "stat",
+  "src": "symbol"
+ },
+ "0x005A2DEC": {
+  "cident": "fstat",
+  "label": "fstat",
+  "src": "symbol"
+ },
+ "0x005A2E68": {
+  "cident": "truncate64",
+  "label": "truncate64",
+  "src": "symbol"
+ },
+ "0x005A2EBC": {
+  "cident": "ftruncate64",
+  "label": "ftruncate64",
+  "src": "symbol"
+ },
+ "0x005A2F10": {
+  "cident": "fsync",
+  "label": "fsync",
+  "src": "symbol"
+ },
+ "0x005A2F90": {
+  "cident": "rename_005A2F90",
+  "label": "__rename",
+  "src": "symbol"
+ },
+ "0x005A2FE4": {
+  "cident": "link",
+  "label": "link",
+  "src": "symbol"
+ },
+ "0x005A3038": {
+  "cident": "unlink",
+  "label": "unlink",
+  "src": "symbol"
+ },
+ "0x005A308C": {
+  "cident": "lseek64",
+  "label": "lseek64",
+  "src": "symbol"
+ },
+ "0x005A3114": {
+  "cident": "close",
+  "label": "close",
+  "src": "symbol"
+ },
+ "0x005A3178": {
+  "cident": "open",
+  "label": "open",
+  "src": "symbol"
+ },
+ "0x005A3210": {
+  "cident": "readdir",
+  "label": "readdir",
+  "src": "symbol"
+ },
+ "0x005A338C": {
+  "cident": "closedir",
+  "label": "closedir",
+  "src": "symbol"
+ },
+ "0x005A3494": {
+  "cident": "opendir",
+  "label": "opendir",
+  "src": "symbol"
+ },
+ "0x005A36D0": {
+  "cident": "lseek",
+  "label": "lseek",
+  "src": "symbol"
+ },
+ "0x005A375C": {
+  "cident": "truncate",
+  "label": "truncate",
+  "src": "symbol"
+ },
+ "0x005A37B0": {
+  "cident": "ftruncate",
+  "label": "ftruncate",
+  "src": "symbol"
+ },
+ "0x005A3804": {
+  "cident": "read",
+  "label": "read",
+  "src": "symbol"
+ },
+ "0x005A3A2C": {
+  "cident": "write",
+  "label": "write",
+  "src": "symbol"
+ },
+ "0x005A3B68": {
+  "cident": "fs_initialize",
+  "label": "_fs_initialize",
+  "src": "symbol"
+ },
+ "0x005A3BCC": {
+  "cident": "fs_finalize",
+  "label": "_fs_finalize",
+  "src": "symbol"
+ },
+ "0x005A3BD0": {
+  "cident": "put_fd",
+  "label": "_put_fd",
+  "src": "symbol"
+ },
+ "0x005A3C30": {
+  "cident": "get_fd",
+  "label": "_get_fd",
+  "src": "symbol"
+ },
+ "0x005A3D00": {
+  "cident": "sys_libc_0xA7E9EA47",
+  "label": "sys_libc_0xA7E9EA47",
+  "src": "symbol"
+ },
+ "0x005A3DD8": {
+  "cident": "memcmp",
+  "label": "memcmp",
+  "src": "symbol"
+ },
+ "0x005A3F30": {
+  "cident": "Mtxunlock",
+  "label": "_Mtxunlock",
+  "src": "symbol"
+ },
+ "0x005A3F74": {
+  "cident": "Mtxlock",
+  "label": "_Mtxlock",
+  "src": "symbol"
+ },
+ "0x005A401C": {
+  "cident": "Mtxdst",
+  "label": "_Mtxdst",
+  "src": "symbol"
+ },
+ "0x005A4048": {
+  "cident": "Once_dtor",
+  "label": "_Once_dtor",
+  "src": "symbol"
+ },
+ "0x005A4070": {
+  "cident": "Mtxinit",
+  "label": "_Mtxinit",
+  "src": "symbol"
+ },
+ "0x005A40C4": {
+  "cident": "Once",
+  "label": "_Once",
+  "src": "symbol"
+ },
+ "0x005A4178": {
+  "cident": "Once_ctor",
+  "label": "_Once_ctor",
+  "src": "symbol"
+ },
+ "0x005A41B4": {
+  "cident": "Tlsfree",
+  "label": "_Tlsfree",
+  "src": "symbol"
+ },
+ "0x005A4264": {
+  "cident": "TlsGetValue",
+  "label": "TlsGetValue",
+  "src": "symbol"
+ },
+ "0x005A4324": {
+  "cident": "Destroytls",
+  "label": "_Destroytls",
+  "src": "symbol"
+ },
+ "0x005A4414": {
+  "cident": "Tlsget",
+  "label": "_Tlsget",
+  "src": "symbol"
+ },
+ "0x005A4508": {
+  "cident": "TlsSetValue",
+  "label": "TlsSetValue",
+  "src": "symbol"
+ },
+ "0x005A45FC": {
+  "cident": "Tlsset",
+  "label": "_Tlsset",
+  "src": "symbol"
+ },
+ "0x005A4740": {
+  "cident": "Tlsalloc",
+  "label": "_Tlsalloc",
+  "src": "symbol"
+ },
+ "0x005A5240": {
+  "cident": "sys_libc_0x0871FFB0",
+  "label": "sys_libc_0x0871FFB0",
+  "src": "symbol"
+ },
+ "0x005A5798": {
+  "cident": "sys_libc_0x3F650700",
+  "label": "sys_libc_0x3F650700",
+  "src": "symbol"
+ },
+ "0x005A579C": {
+  "cident": "sys_libc_0x402F7285",
+  "label": "sys_libc_0x402F7285",
+  "src": "symbol"
+ },
+ "0x005A57A8": {
+  "cident": "sys_libc_0x2DBFCA07",
+  "label": "sys_libc_0x2DBFCA07",
+  "src": "symbol"
+ },
+ "0x005A586C": {
+  "cident": "sys_libc_0x7FD325C4",
+  "label": "sys_libc_0x7FD325C4",
+  "src": "symbol"
+ },
+ "0x005A5E24": {
+  "cident": "mspace_free",
+  "label": "mspace_free",
+  "src": "symbol"
+ },
+ "0x005A6C5C": {
+  "cident": "mspace_malloc",
+  "label": "mspace_malloc",
+  "src": "symbol"
+ },
+ "0x005A8AC4": {
+  "cident": "sys_libc_0xBA62681F",
+  "label": "sys_libc_0xBA62681F",
+  "src": "symbol"
+ },
+ "0x005A8D38": {
+  "cident": "sys_libc_0xD9674905",
+  "label": "sys_libc_0xD9674905",
+  "src": "symbol"
+ },
+ "0x005A8E5C": {
+  "cident": "sys_libc_0x1895908D",
+  "label": "sys_libc_0x1895908D",
+  "src": "symbol"
+ },
+ "0x005A8E88": {
+  "cident": "sys_libc_0x45EFD478",
+  "label": "sys_libc_0x45EFD478",
+  "src": "symbol"
+ },
+ "0x005A8EDC": {
+  "cident": "sys_libc_0x468B45DC",
+  "label": "sys_libc_0x468B45DC",
+  "src": "symbol"
+ },
+ "0x005A8F68": {
+  "cident": "sys_libc_0x145853CD",
+  "label": "sys_libc_0x145853CD",
+  "src": "symbol"
+ },
+ "0x005A8FA8": {
+  "cident": "sys_libc_0xA53800C2",
+  "label": "sys_libc_0xA53800C2",
+  "src": "symbol"
+ },
+ "0x005A8FDC": {
+  "cident": "sys_libc_0xA45A0313",
+  "label": "sys_libc_0xA45A0313",
+  "src": "symbol"
+ },
+ "0x005A9144": {
+  "cident": "sys_libc_0x312BE3B3",
+  "label": "sys_libc_0x312BE3B3",
+  "src": "symbol"
+ },
+ "0x005A928C": {
+  "cident": "malloc_usable_size",
+  "label": "malloc_usable_size",
+  "src": "symbol"
+ },
+ "0x005A92B4": {
+  "cident": "reallocalign",
+  "label": "reallocalign",
+  "src": "symbol"
+ },
+ "0x005A92F4": {
+  "cident": "malloc_stats",
+  "label": "malloc_stats",
+  "src": "symbol"
+ },
+ "0x005A9324": {
+  "cident": "memalign",
+  "label": "memalign",
+  "src": "symbol"
+ },
+ "0x005A935C": {
+  "cident": "realloc",
+  "label": "realloc",
+  "src": "symbol"
+ },
+ "0x005A9394": {
+  "cident": "calloc",
+  "label": "calloc",
+  "src": "symbol"
+ },
+ "0x005A93CC": {
+  "cident": "free",
+  "label": "free",
+  "src": "symbol"
+ },
+ "0x005A93F8": {
+  "cident": "malloc",
+  "label": "malloc",
+  "src": "symbol"
+ },
+ "0x005A9428": {
+  "cident": "malloc_finalize",
+  "label": "_malloc_finalize",
+  "src": "symbol"
+ },
+ "0x005A944C": {
+  "cident": "malloc_init",
+  "label": "_malloc_init",
+  "src": "symbol"
+ },
+ "0x005A9474": {
+  "cident": "sys_libc_0x4ED09B7E",
+  "label": "sys_libc_0x4ED09B7E",
+  "src": "symbol"
+ },
+ "0x005B1890": {
+  "cident": "N5boost9iostreams6detail18indirect_streambufIN4u",
+  "label": "N5boost9iostreams6detail18indirect_streambufIN4u",
+  "src": "string"
+ },
+ "0x005B4AF0": {
+  "cident": "boost_bad_any_cast_005B4AF0",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x005B4BEC": {
+  "cident": "boost_bad_any_cast_005B4BEC",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x005B8C50": {
+  "cident": "mon_decimal_point",
+  "label": "mon_decimal_point",
+  "src": "string"
+ },
+ "0x005B9640": {
+  "cident": "s_s_s_s",
+  "label": "s_s_s_s",
+  "src": "string"
+ },
+ "0x005BADF0": {
+  "cident": "set_T_too_long_005BADF0",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x005BE7DC": {
+  "cident": "MusicInfoUniqueIdLookupThrowA",
+  "label": "MusicInfoUniqueIdLookupThrowA",
+  "src": "symbol"
+ },
+ "0x005BEC14": {
+  "cident": "set_T_too_long_005BEC14",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x005BED78": {
+  "cident": "fillrect_2",
+  "label": "fillrect_2",
+  "src": "string"
+ },
+ "0x005C32BC": {
+  "cident": "MaybeGameNet_HasServiceContext",
+  "label": "MaybeGameNet_HasServiceContext",
+  "src": "symbol"
+ },
+ "0x005C44BC": {
+  "cident": "MaybeNetworkIcon_GetStatusFlag",
+  "label": "MaybeNetworkIcon_GetStatusFlag",
+  "src": "symbol"
+ },
+ "0x005C471C": {
+  "cident": "MaybeNetworkIcon_GetCurrentValue",
+  "label": "MaybeNetworkIcon_GetCurrentValue",
+  "src": "symbol"
+ },
+ "0x005C472C": {
+  "cident": "MaybeNetworkIcon_GetLimitValue",
+  "label": "MaybeNetworkIcon_GetLimitValue",
+  "src": "symbol"
+ },
+ "0x005C473C": {
+  "cident": "MaybeNetworkIcon_GetStatusStruct",
+  "label": "MaybeNetworkIcon_GetStatusStruct",
+  "src": "symbol"
+ },
+ "0x005C474C": {
+  "cident": "MaybeNetworkIcon_GetBurstFlag",
+  "label": "MaybeNetworkIcon_GetBurstFlag",
+  "src": "symbol"
+ },
+ "0x005C475C": {
+  "cident": "MaybeNetworkIcon_GetConnectionOkFlag",
+  "label": "MaybeNetworkIcon_GetConnectionOkFlag",
+  "src": "symbol"
+ },
+ "0x005C7E68": {
+  "cident": "boost_bad_format_string_005C7E68",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x005C7E70": {
+  "cident": "boost_too_few_args_005C7E70",
+  "label": "boost_too_few_args",
+  "src": "string"
+ },
+ "0x005C7E78": {
+  "cident": "boost_too_many_args_005C7E78",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x005C91C8": {
+  "cident": "N5boost3_bi6bind_tIvPFvPKvENS0_5list1INS_3argILi",
+  "label": "N5boost3_bi6bind_tIvPFvPKvENS0_5list1INS_3argILi",
+  "src": "string"
+ },
+ "0x005C92B8": {
+  "cident": "N5boost2io22basic_oaltstringstreamIcSt11char_tra",
+  "label": "N5boost2io22basic_oaltstringstreamIcSt11char_tra",
+  "src": "string"
+ },
+ "0x005D936C": {
+  "cident": "set_T_too_long_005D936C",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x005E8B50": {
+  "cident": "boost_function_005E8B50",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x005FDEBC": {
+  "cident": "boost_match_results_005FDEBC",
+  "label": "boost_match_results",
+  "src": "string"
+ },
+ "0x00601324": {
+  "cident": "boost_function_00601324",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00603710": {
+  "cident": "boost_bad_any_cast_00603710",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x00606808": {
+  "cident": "set_T_iterator_00606808",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0060BC70": {
+  "cident": "toupper",
+  "label": "toupper",
+  "src": "symbol"
+ },
+ "0x00611060": {
+  "cident": "set_T_too_long_00611060",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x006123A4": {
+  "cident": "set_T_iterator_006123A4",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x006140D4": {
+  "cident": "set_T_too_long_006140D4",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x006167D0": {
+  "cident": "boost_function_006167D0",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0061714C": {
+  "cident": "set_T_iterator_0061714C",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x006194D0": {
+  "cident": "boost_function_006194D0",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0062BF64": {
+  "cident": "boost_exception_ptr_0062BF64",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0062C7D8": {
+  "cident": "boost_exception_ptr_0062C7D8",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x00636B58": {
+  "cident": "N5boost6detail13sp_ms_deleterIN4game4enso4core19",
+  "label": "N5boost6detail13sp_ms_deleterIN4game4enso4core19",
+  "src": "string"
+ },
+ "0x0063D0DC": {
+  "cident": "EnsoFormatFumenPath",
+  "label": "EnsoFormatFumenPath",
+  "src": "symbol"
+ },
+ "0x0063E678": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063E778": {
+  "cident": "N5boost3_bi6bind_tIvPFvPKvRN4game4enso8EnsoDispE",
+  "label": "N5boost3_bi6bind_tIvPFvPKvRN4game4enso8EnsoDispE",
+  "src": "string"
+ },
+ "0x0063E870": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063E870",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063E970": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063E970",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063EA70": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063EA70",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063EB70": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063EB70",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063EC70": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063EC70",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063ED70": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063ED70",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063EE70": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063EE70",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x0063EF70": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En_0063EF70",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso8En",
+  "src": "string"
+ },
+ "0x00650AB4": {
+  "cident": "set_T_too_long_00650AB4",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0065DB18": {
+  "cident": "rare_0_hit",
+  "label": "rare_0_hit",
+  "src": "string"
+ },
+ "0x00663070": {
+  "cident": "N5boost3_bi16protected_bind_tINS0_6bind_tIvNS_4",
+  "label": "N5boost3_bi16protected_bind_tINS0_6bind_tIvNS_4_",
+  "src": "string"
+ },
+ "0x00663170": {
+  "cident": "N5boost3_bi6bind_tIvPFvN4game4enso5event11Proces",
+  "label": "N5boost3_bi6bind_tIvPFvN4game4enso5event11Proces",
+  "src": "string"
+ },
+ "0x00663270": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00663370": {
+  "cident": "N5boost3_bi6bind_tIvPFvN9TaikoCore4Defs11PlayerT",
+  "label": "N5boost3_bi6bind_tIvPFvN9TaikoCore4Defs11PlayerT",
+  "src": "string"
+ },
+ "0x00663468": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso10S",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso10S",
+  "src": "string"
+ },
+ "0x00663568": {
+  "cident": "N5boost3_bi6bind_tIvPFvRSt6vectorISt4pairIiNS_8f",
+  "label": "N5boost3_bi6bind_tIvPFvRSt6vectorISt4pairIiNS_8f",
+  "src": "string"
+ },
+ "0x00663668": {
+  "cident": "N5boost3_bi6bind_tIbPFbRKN9TaikoCore5Fumen9IOnpu",
+  "label": "N5boost3_bi6bind_tIbPFbRKN9TaikoCore5Fumen9IOnpu",
+  "src": "string"
+ },
+ "0x00663768": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E_00663768",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00663868": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso10S_00663868",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso10S",
+  "src": "string"
+ },
+ "0x00663968": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso10S_00663968",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso10S",
+  "src": "string"
+ },
+ "0x00663A68": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11S",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11S",
+  "src": "string"
+ },
+ "0x00663B68": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11S_00663B68",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11S",
+  "src": "string"
+ },
+ "0x00663C68": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E_00663C68",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00663D68": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E_00663D68",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00663E68": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E_00663E68",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00663F68": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E_00663F68",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00664068": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E_00664068",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00664168": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf0IvN4game4enso4co",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf0IvN4game4enso4co",
+  "src": "string"
+ },
+ "0x00664268": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf0IvN4game4enso11E",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf0IvN4game4enso11E",
+  "src": "string"
+ },
+ "0x00664498": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game15Attrac",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game15Attrac",
+  "src": "string"
+ },
+ "0x006645F8": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game15Attrac_006645F8",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game15Attrac",
+  "src": "string"
+ },
+ "0x006648D8": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso16E",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso16E",
+  "src": "string"
+ },
+ "0x0066F9F8": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso12E",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso12E",
+  "src": "string"
+ },
+ "0x00670AF4": {
+  "cident": "boost_function_00670AF4",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00671CAC": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00675E58": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00675E58",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00675F58": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00675F58",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00676058": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00676058",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00676158": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00676158",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00676258": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00676258",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00676358": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00676358",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00676458": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00676458",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00676558": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00676558",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0067CEFC": {
+  "cident": "flat_map_at_0067CEFC",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0067E1CC": {
+  "cident": "set_T_too_long_0067E1CC",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x00686028": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00686028",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00686128": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00686128",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00686228": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00686228",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00686328": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00686328",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00686428": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00686428",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00686528": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_00686528",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00686628": {
+  "cident": "N5boost3_bi6bind_tIvPFvRN4game15AttractResourceE",
+  "label": "N5boost3_bi6bind_tIvPFvRN4game15AttractResourceE",
+  "src": "string"
+ },
+ "0x00686A44": {
+  "cident": "N4game4enso5ghost27GhostExternalProp_SyousetsuE",
+  "label": "N4game4enso5ghost27GhostExternalProp_SyousetsuE",
+  "src": "string"
+ },
+ "0x00686B3C": {
+  "cident": "N4game4enso5ghost22GhostExternalProp_OnpuE",
+  "label": "N4game4enso5ghost22GhostExternalProp_OnpuE",
+  "src": "string"
+ },
+ "0x0068A048": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0068A048",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0068A148": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0068A148",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0068A248": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0068A248",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x00691740": {
+  "cident": "rankstar_least_e",
+  "label": "rankstar_least_e",
+  "src": "string"
+ },
+ "0x0069192C": {
+  "cident": "reward_song",
+  "label": "reward_song",
+  "src": "string"
+ },
+ "0x00695D10": {
+  "cident": "N5boost3_bi6bind_tIvPFvNS_8signals210connectionE",
+  "label": "N5boost3_bi6bind_tIvPFvNS_8signals210connectionE",
+  "src": "string"
+ },
+ "0x006973D4": {
+  "cident": "N5boost8signals26detail29bound_extended_slot_fun",
+  "label": "N5boost8signals26detail29bound_extended_slot_fun",
+  "src": "string"
+ },
+ "0x0069997C": {
+  "cident": "boost_function_0069997C",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0069B33C": {
+  "cident": "boost_function_0069B33C",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0069BC64": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0069BC64",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0069BD64": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0069BD64",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0069BE64": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0069BE64",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0069BF64": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh_0069BF64",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0069C064": {
+  "cident": "N5boost3_bi6bind_tIbNS_4_mfi3mf2IbN4game4enso5gh",
+  "label": "N5boost3_bi6bind_tIbNS_4_mfi3mf2IbN4game4enso5gh",
+  "src": "string"
+ },
+ "0x0069DA54": {
+  "cident": "circular_buffer_0069DA54",
+  "label": "circular_buffer",
+  "src": "string"
+ },
+ "0x006A1580": {
+  "cident": "winpoint_acquire",
+  "label": "winpoint_acquire",
+  "src": "string"
+ },
+ "0x006A3E28": {
+  "cident": "defvariance_first_006A3E28",
+  "label": "defvariance_first",
+  "src": "string"
+ },
+ "0x006ACC10": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf0IvN9TaikoCore5Fu",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf0IvN9TaikoCore5Fu",
+  "src": "string"
+ },
+ "0x006B1F4C": {
+  "cident": "boost_function_006B1F4C",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x006BDD6C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006BDE6C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006BDE6C",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006C15AC": {
+  "cident": "N5boost3_bi6bind_tIvPFvRSt4pairIN9TaikoCore4Defs",
+  "label": "N5boost3_bi6bind_tIvPFvRSt4pairIN9TaikoCore4Defs",
+  "src": "string"
+ },
+ "0x006C5AB4": {
+  "cident": "prob_heart",
+  "label": "prob_heart",
+  "src": "string"
+ },
+ "0x006C8FD4": {
+  "cident": "timing_progress_006C8FD4",
+  "label": "timing_progress",
+  "src": "string"
+ },
+ "0x006C94E0": {
+  "cident": "correctionfactor_inc",
+  "label": "correctionfactor_inc",
+  "src": "string"
+ },
+ "0x006CB480": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CB480",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CD334": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CD334",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CD434": {
+  "cident": "N5boost3_bi6bind_tIvPFvPKvRN4game4enso6waiwai13W",
+  "label": "N5boost3_bi6bind_tIvPFvPKvRN4game4enso6waiwai13W",
+  "src": "string"
+ },
+ "0x006CD52C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CD52C",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CD62C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CD62C",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CD72C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CD72C",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CD82C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CD82C",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CD92C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa_006CD92C",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game4enso6wa",
+  "src": "string"
+ },
+ "0x006CFFB8": {
+  "cident": "set_T_too_long_006CFFB8",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x006D7D04": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game13GameGh",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game13GameGh",
+  "src": "string"
+ },
+ "0x006D7E04": {
+  "cident": "N5boost3_bi6bind_tIvPFvRbRN4game19AttractGameRes",
+  "label": "N5boost3_bi6bind_tIvPFvRbRN4game19AttractGameRes",
+  "src": "string"
+ },
+ "0x006DD16C": {
+  "cident": "flat_map_at_006DD16C",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x006DEBA8": {
+  "cident": "boost_function_006DEBA8",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x006DF7C0": {
+  "cident": "boost_function_006DF7C0",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x006E5764": {
+  "cident": "packeddata_ddp_006E5764",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x006E96CC": {
+  "cident": "song_name",
+  "label": "song_name",
+  "src": "string"
+ },
+ "0x00706F60": {
+  "cident": "SongSelectCategorizeOneSong_lookupList",
+  "label": "SongSelectCategorizeOneSong_lookupList",
+  "src": "symbol"
+ },
+ "0x0070F554": {
+  "cident": "N5boost3_bi6bind_tIvPFvRbRN4game19AttractGameRes_0070F554",
+  "label": "N5boost3_bi6bind_tIvPFvRbRN4game19AttractGameRes",
+  "src": "string"
+ },
+ "0x00713B6C": {
+  "cident": "N5boost6detail13sp_ms_deleterIN4game12musicranki",
+  "label": "N5boost6detail13sp_ms_deleterIN4game12musicranki",
+  "src": "string"
+ },
+ "0x00713BCC": {
+  "cident": "N5boost6detail13sp_ms_deleterIN4game12localranki",
+  "label": "N5boost6detail13sp_ms_deleterIN4game12localranki",
+  "src": "string"
+ },
+ "0x00719408": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game20GameTu",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game20GameTu",
+  "src": "string"
+ },
+ "0x007195D4": {
+  "cident": "boost_function_007195D4",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0071FB08": {
+  "cident": "LumenBoundDelegateInvoke",
+  "label": "LumenBoundDelegateInvoke",
+  "src": "symbol"
+ },
+ "0x0071FF3C": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game20GameWa",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game20GameWa",
+  "src": "string"
+ },
+ "0x00721830": {
+  "cident": "boost_function_00721830",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00723138": {
+  "cident": "boost_exception_ptr_00723138",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x007242C0": {
+  "cident": "SongSelectBuildFilteredList",
+  "label": "SongSelectBuildFilteredList",
+  "src": "symbol"
+ },
+ "0x0072B4F8": {
+  "cident": "set_T_too_long_0072B4F8",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0073AB40": {
+  "cident": "hit_ka_0073AB40",
+  "label": "hit_ka",
+  "src": "string"
+ },
+ "0x0073E444": {
+  "cident": "boost_serialization_save",
+  "label": "boost_serialization_save",
+  "src": "string"
+ },
+ "0x0073E998": {
+  "cident": "boost_serialization_save_0073E998",
+  "label": "boost_serialization_save",
+  "src": "string"
+ },
+ "0x00745F00": {
+  "cident": "boost_function_00745F00",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00758338": {
+  "cident": "telopdata_bin",
+  "label": "telopdata_bin",
+  "src": "string"
+ },
+ "0x0076B000": {
+  "cident": "shop_gameover_lm",
+  "label": "shop_gameover_lm",
+  "src": "string"
+ },
+ "0x0076F258": {
+  "cident": "N5boost3_bi6bind_tIPN5taiko9animation9BaseLumenE",
+  "label": "N5boost3_bi6bind_tIPN5taiko9animation9BaseLumenE",
+  "src": "string"
+ },
+ "0x00770F00": {
+  "cident": "boost_function_00770F00",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x0077170C": {
+  "cident": "boost_function_0077170C",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x00772FCC": {
+  "cident": "N5boost3_bi6bind_tIvPFvPKvbENS0_5list2INS_3argIL",
+  "label": "N5boost3_bi6bind_tIvPFvPKvbENS0_5list2INS_3argIL",
+  "src": "string"
+ },
+ "0x00777598": {
+  "cident": "_02d_02d_02d_00777598",
+  "label": "_02d_02d_02d",
+  "src": "string"
+ },
+ "0x00777DB4": {
+  "cident": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game7service",
+  "label": "N5boost3_bi6bind_tIvNS_4_mfi3mf1IvN4game7service",
+  "src": "string"
+ },
+ "0x0077C420": {
+  "cident": "game_service",
+  "label": "game_service",
+  "src": "string"
+ },
+ "0x0077E12C": {
+  "cident": "N5boost3_bi6bind_tIvPFvPKvjENS0_5list2INS_3argIL",
+  "label": "N5boost3_bi6bind_tIvPFvPKvjENS0_5list2INS_3argIL",
+  "src": "string"
+ },
+ "0x0078851C": {
+  "cident": "boost_match_results_0078851C",
+  "label": "boost_match_results",
+  "src": "string"
+ },
+ "0x007956C0": {
+  "cident": "DataFile_Md5IntegrityCheckThread",
+  "label": "DataFile_Md5IntegrityCheckThread",
+  "src": "symbol"
+ },
+ "0x007AFDD4": {
+  "cident": "ChassisInfo_SerializeXmlOut",
+  "label": "ChassisInfo_SerializeXmlOut",
+  "src": "symbol"
+ },
+ "0x007BE88C": {
+  "cident": "Serialize_SpecialBAIDHeader_load",
+  "label": "Serialize_SpecialBAIDHeader_load",
+  "src": "string"
+ },
+ "0x007BE97C": {
+  "cident": "Serialize_SpecialBAIDData_load",
+  "label": "Serialize_SpecialBAIDData_load",
+  "src": "string"
+ },
+ "0x007BFF28": {
+  "cident": "N5boost6detail13sp_ms_deleterIN6system2fs11Async",
+  "label": "N5boost6detail13sp_ms_deleterIN6system2fs11Async",
+  "src": "string"
+ },
+ "0x007C51D4": {
+  "cident": "AsyncFileLoaderRunTask",
+  "label": "AsyncFileLoaderRunTask",
+  "src": "symbol"
+ },
+ "0x007C6134": {
+  "cident": "AsyncFileLoaderWorkerLoop",
+  "label": "AsyncFileLoaderWorkerLoop",
+  "src": "symbol"
+ },
+ "0x007D6ABC": {
+  "cident": "boost_bad_format_string_007D6ABC",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x007D6B04": {
+  "cident": "boost_too_few_args_007D6B04",
+  "label": "boost_too_few_args",
+  "src": "string"
+ },
+ "0x007D6C0C": {
+  "cident": "boost_too_many_args_007D6C0C",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x007D745C": {
+  "cident": "boost_bad_format_string_007D745C",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x007D908C": {
+  "cident": "MusicInfoContainerDeserialize_fromXml",
+  "label": "MusicInfoContainerDeserialize_fromXml",
+  "src": "symbol"
+ },
+ "0x007DD9A0": {
+  "cident": "Framework_exec",
+  "label": "Framework_exec",
+  "src": "string"
+ },
+ "0x007DDA78": {
+  "cident": "Framework_exec_007DDA78",
+  "label": "Framework_exec",
+  "src": "string"
+ },
+ "0x007E39FC": {
+  "cident": "camera_render_lm",
+  "label": "camera_render_lm",
+  "src": "string"
+ },
+ "0x0080DA74": {
+  "cident": "reward_title",
+  "label": "reward_title",
+  "src": "string"
+ },
+ "0x0080DAFC": {
+  "cident": "reward_song_0080DAFC",
+  "label": "reward_song",
+  "src": "string"
+ },
+ "0x0080DDF0": {
+  "cident": "reward_head",
+  "label": "reward_head",
+  "src": "string"
+ },
+ "0x0080FDB4": {
+  "cident": "boost_bad_any_cast_0080FDB4",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0080FE38": {
+  "cident": "boost_bad_any_cast_0080FE38",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0081D0F8": {
+  "cident": "St10ctype_base",
+  "label": "St10ctype_base",
+  "src": "string"
+ },
+ "0x00827BF8": {
+  "cident": "waiwaiconfig_xml_00827BF8",
+  "label": "waiwaiconfig_xml",
+  "src": "string"
+ },
+ "0x00829D78": {
+  "cident": "flat_map_at_00829D78",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x0083631C": {
+  "cident": "flat_map_at_0083631C",
+  "label": "flat_map_at",
+  "src": "string"
+ },
+ "0x00836CDC": {
+  "cident": "result_normal_lm",
+  "label": "result_normal_lm",
+  "src": "string"
+ },
+ "0x008371BC": {
+  "cident": "result_bg_lm",
+  "label": "result_bg_lm",
+  "src": "string"
+ },
+ "0x0083B224": {
+  "cident": "boost_bad_any_cast_0083B224",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x00840024": {
+  "cident": "set_T_too_long_00840024",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x008409E4": {
+  "cident": "exception_ptr_008409E4",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x008413A4": {
+  "cident": "set_T_iterator_008413A4",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x00841FD4": {
+  "cident": "rankup_lm",
+  "label": "rankup_lm",
+  "src": "string"
+ },
+ "0x008430E0": {
+  "cident": "packeddata_ddp_008430E0",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x00845570": {
+  "cident": "boost_bad_any_cast_00845570",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0084A0F4": {
+  "cident": "boost_exception_ptr_0084A0F4",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0084CA64": {
+  "cident": "packeddata_ddp_0084CA64",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x0084E054": {
+  "cident": "common_bg_lm",
+  "label": "common_bg_lm",
+  "src": "string"
+ },
+ "0x0084E534": {
+  "cident": "dummy_reward_name",
+  "label": "dummy_reward_name",
+  "src": "string"
+ },
+ "0x00855CA4": {
+  "cident": "boost_exception_ptr_00855CA4",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x008583A4": {
+  "cident": "reward_lm",
+  "label": "reward_lm",
+  "src": "string"
+ },
+ "0x00858884": {
+  "cident": "dummy_get_reward_name",
+  "label": "dummy_get_reward_name",
+  "src": "string"
+ },
+ "0x0085A0E4": {
+  "cident": "packeddata_ddp_0085A0E4",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x0085AAA4": {
+  "cident": "boost_bad_any_cast_0085AAA4",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x00860E94": {
+  "cident": "set_T_iterator_00860E94",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x008668C4": {
+  "cident": "exception_ptr_008668C4",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x00868124": {
+  "cident": "set_T_too_long_00868124",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0086A5B4": {
+  "cident": "packeddata_ddp_0086A5B4",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x0086A824": {
+  "cident": "packeddata_ddp_0086A824",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x008709A4": {
+  "cident": "exception_ptr_008709A4",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x00874234": {
+  "cident": "time_counter_lm",
+  "label": "time_counter_lm",
+  "src": "string"
+ },
+ "0x00874714": {
+  "cident": "common_bg_lm_00874714",
+  "label": "common_bg_lm",
+  "src": "string"
+ },
+ "0x008761A0": {
+  "cident": "packeddata_ddp_008761A0",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x00877FB4": {
+  "cident": "set_T_too_long_00877FB4",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x00877FF0": {
+  "cident": "set_T_too_long_00877FF0",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x00878A04": {
+  "cident": "boost_bad_any_cast_00878A04",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x00878A40": {
+  "cident": "boost_bad_any_cast_00878A40",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0087A8A4": {
+  "cident": "set_T_too_long_0087A8A4",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0087A8E0": {
+  "cident": "set_T_too_long_0087A8E0",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0087AA34": {
+  "cident": "set_T_too_long_0087AA34",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0087AA70": {
+  "cident": "set_T_too_long_0087AA70",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x0087B894": {
+  "cident": "set_T_iterator_0087B894",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0087B8D0": {
+  "cident": "set_T_iterator_0087B8D0",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0087C7E4": {
+  "cident": "boost_bad_any_cast_0087C7E4",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0087C820": {
+  "cident": "boost_bad_any_cast_0087C820",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x0087D6E4": {
+  "cident": "boost_exception_ptr_0087D6E4",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0087D720": {
+  "cident": "boost_exception_ptr_0087D720",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0087D784": {
+  "cident": "boost_exception_ptr_0087D784",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0087D7C0": {
+  "cident": "boost_exception_ptr_0087D7C0",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0087DD24": {
+  "cident": "exception_ptr_0087DD24",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x0087DD60": {
+  "cident": "exception_ptr_0087DD60",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x0087DE64": {
+  "cident": "boost_exception_ptr_0087DE64",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0087DEA0": {
+  "cident": "boost_exception_ptr_0087DEA0",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x0087DF54": {
+  "cident": "exception_ptr_0087DF54",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x0087DF90": {
+  "cident": "exception_ptr_0087DF90",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x0087E0E4": {
+  "cident": "dummy_next_reward_name",
+  "label": "dummy_next_reward_name",
+  "src": "string"
+ },
+ "0x0087E120": {
+  "cident": "dummy_next_reward_name_0087E120",
+  "label": "dummy_next_reward_name",
+  "src": "string"
+ },
+ "0x0087E1D4": {
+  "cident": "set_T_iterator_0087E1D4",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x0087E210": {
+  "cident": "set_T_iterator_0087E210",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x008843B4": {
+  "cident": "packeddata_ddp_008843B4",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x00885C14": {
+  "cident": "packeddata_ddp_00885C14",
+  "label": "packeddata_ddp",
+  "src": "string"
+ },
+ "0x008962D4": {
+  "cident": "rankup_lm_008962D4",
+  "label": "rankup_lm",
+  "src": "string"
+ },
+ "0x00896544": {
+  "cident": "rankup_lm_00896544",
+  "label": "rankup_lm",
+  "src": "string"
+ },
+ "0x008A1DD8": {
+  "cident": "boost_function_008A1DD8",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x008A98BC": {
+  "cident": "boost_exception_ptr_008A98BC",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x008ADE18": {
+  "cident": "boost_exception_ptr_008ADE18",
+  "label": "boost_exception_ptr",
+  "src": "string"
+ },
+ "0x008C2494": {
+  "cident": "exception_ptr_008C2494",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x008DB838": {
+  "cident": "set_T_too_long_008DB838",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x008DBA24": {
+  "cident": "set_T_too_long_008DBA24",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x008EDE80": {
+  "cident": "tips_nut",
+  "label": "tips_nut",
+  "src": "string"
+ },
+ "0x008EFBA0": {
+  "cident": "playerIndex",
+  "label": "playerIndex",
+  "src": "string"
+ },
+ "0x008EFC78": {
+  "cident": "playerIndex_008EFC78",
+  "label": "playerIndex",
+  "src": "string"
+ },
+ "0x008EFE64": {
+  "cident": "exception_ptr_008EFE64",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x008EFED0": {
+  "cident": "exception_ptr_008EFED0",
+  "label": "exception_ptr",
+  "src": "string"
+ },
+ "0x008F79FC": {
+  "cident": "localaitaskboard_xml_008F79FC",
+  "label": "localaitaskboard_xml",
+  "src": "string"
+ },
+ "0x00908138": {
+  "cident": "MuchaService_Init",
+  "label": "MuchaService_Init",
+  "src": "derived",
+  "note": "vtable[0x08] for services 0-3: sys_semaphore_create -> obj+4"
+ },
+ "0x009081A4": {
+  "cident": "MuchaService_Cleanup",
+  "label": "MuchaService_Cleanup",
+  "src": "derived",
+  "note": "vtable[0x10] for services 0-3"
+ },
+ "0x00908200": {
+  "cident": "DelayService_exec",
+  "label": "DelayService_exec",
+  "src": "derived",
+  "note": "vtable[0x0C] of service 1"
+ },
+ "0x00908244": {
+  "cident": "ResidentService_exec",
+  "label": "ResidentService_exec",
+  "src": "derived",
+  "note": "vtable[0x0C] of service 0"
+ },
+ "0x00908290": {
+  "cident": "VersionupService_exec",
+  "label": "VersionupService_exec",
+  "src": "derived",
+  "note": "vtable[0x0C] of service 3"
+ },
+ "0x009082D4": {
+  "cident": "PriorityService_exec",
+  "label": "PriorityService_exec",
+  "src": "derived",
+  "note": "vtable[0x0C] of service 2"
+ },
+ "0x00912168": {
+  "cident": "MusicInfoXmlLoaderLoadPushDeque",
+  "label": "MusicInfoXmlLoaderLoadPushDeque",
+  "src": "symbol"
+ },
+ "0x00913DB8": {
+  "cident": "MusicMgrOpenXmlAndDeserialize",
+  "label": "MusicMgrOpenXmlAndDeserialize",
+  "src": "symbol"
+ },
+ "0x0091DA98": {
+  "cident": "boost_bad_format_string_0091DA98",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x0091DC08": {
+  "cident": "boost_bad_format_string_0091DC08",
+  "label": "boost_bad_format_string",
+  "src": "string"
+ },
+ "0x0092667C": {
+  "cident": "boost_too_many_args_0092667C",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x009266C0": {
+  "cident": "boost_too_many_args_009266C0",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x009266F0": {
+  "cident": "boost_too_many_args_009266F0",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x00926994": {
+  "cident": "boost_too_many_args_00926994",
+  "label": "boost_too_many_args",
+  "src": "string"
+ },
+ "0x00926B88": {
+  "cident": "USBAsyncAuth_Cleanup",
+  "label": "USBAsyncAuth_Cleanup",
+  "src": "derived",
+  "note": "vtable[0x10] of service 5 (USBAuthentication)"
+ },
+ "0x00926F8C": {
+  "cident": "VUStorageParams_authenticate",
+  "label": "VUStorageParams_authenticate",
+  "src": "symbol"
+ },
+ "0x00927748": {
+  "cident": "DongleParams_authenticate",
+  "label": "DongleParams_authenticate",
+  "src": "symbol"
+ },
+ "0x00927FD4": {
+  "cident": "VUStorage_ReadVersionUpDataBin",
+  "label": "VUStorage_ReadVersionUpDataBin",
+  "src": "symbol"
+ },
+ "0x009287F4": {
+  "cident": "USBSec_DiscoverDevices",
+  "label": "USBSec_DiscoverDevices",
+  "src": "symbol"
+ },
+ "0x0092953C": {
+  "cident": "USBAsyncAuth_exec",
+  "label": "USBAsyncAuth_exec",
+  "src": "symbol"
+ },
+ "0x00929CC0": {
+  "cident": "MuchaMain_Cleanup",
+  "label": "MuchaMain_Cleanup",
+  "src": "derived",
+  "note": "vtable[0x10] of service 4"
+ },
+ "0x0092A120": {
+  "cident": "MuchaMainSetStatus",
+  "label": "MuchaMainSetStatus",
+  "src": "symbol"
+ },
+ "0x0092A394": {
+  "cident": "MuchaMain_Init",
+  "label": "MuchaMain_Init",
+  "src": "derived",
+  "note": "vtable[0x08] of service 4"
+ },
+ "0x0092AB90": {
+  "cident": "MuchaProcessDownloadRequestLoop",
+  "label": "MuchaProcessDownloadRequestLoop",
+  "src": "symbol"
+ },
+ "0x0092B468": {
+  "cident": "MuchaCheckUpdateNeeded",
+  "label": "MuchaCheckUpdateNeeded",
+  "src": "symbol"
+ },
+ "0x0092BD18": {
+  "cident": "MuchaMainLoop",
+  "label": "MuchaMainLoop",
+  "src": "symbol"
+ },
+ "0x0092C7AC": {
+  "cident": "MuchaMain_DownloadStep",
+  "label": "MuchaMain_DownloadStep",
+  "src": "symbol"
+ },
+ "0x0092D74C": {
+  "cident": "MuchaMain_exec",
+  "label": "MuchaMain_exec",
+  "src": "derived",
+  "note": "vtable[0x0C] of service 4"
+ },
+ "0x009313EC": {
+  "cident": "set_T_iterator_009313EC",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x00931EB0": {
+  "cident": "set_T_iterator_00931EB0",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x00937D0C": {
+  "cident": "game_service_PowerOnTime_Tick_00937D0C",
+  "label": "game_service_PowerOnTime_Tick",
+  "src": "string"
+ },
+ "0x00938F58": {
+  "cident": "cellFsFcntl_QueryVidPid_Discovery",
+  "label": "cellFsFcntl_QueryVidPid_Discovery",
+  "src": "symbol"
+ },
+ "0x00939454": {
+  "cident": "cellFsFcntl_ReadDescriptor_Validator",
+  "label": "cellFsFcntl_ReadDescriptor_Validator",
+  "src": "symbol"
+ },
+ "0x009456B4": {
+  "cident": "proto",
+  "label": "proto",
+  "src": "string"
+ },
+ "0x00948578": {
+  "cident": "lockroot",
+  "label": "lockroot",
+  "src": "string"
+ },
+ "0x00949894": {
+  "cident": "name_00949894",
+  "label": "name",
+  "src": "string"
+ },
+ "0x0094A6D4": {
+  "cident": "width",
+  "label": "width",
+  "src": "string"
+ },
+ "0x00956BE4": {
+  "cident": "set_T_iterator_00956BE4",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x009576CC": {
+  "cident": "set_T_too_long_009576CC",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x00958FBC": {
+  "cident": "add_listener",
+  "label": "add_listener",
+  "src": "string"
+ },
+ "0x009591F8": {
+  "cident": "get_ascii",
+  "label": "get_ascii",
+  "src": "string"
+ },
+ "0x009593A4": {
+  "cident": "get_code",
+  "label": "get_code",
+  "src": "string"
+ },
+ "0x009595F8": {
+  "cident": "is_down",
+  "label": "is_down",
+  "src": "string"
+ },
+ "0x00959870": {
+  "cident": "is_toggled",
+  "label": "is_toggled",
+  "src": "string"
+ },
+ "0x00959AE8": {
+  "cident": "remove_listener",
+  "label": "remove_listener",
+  "src": "string"
+ },
+ "0x0095A030": {
+  "cident": "add_listener_0095A030",
+  "label": "add_listener",
+  "src": "string"
+ },
+ "0x0095A26C": {
+  "cident": "remove_listener_0095A26C",
+  "label": "remove_listener",
+  "src": "string"
+ },
+ "0x009622E4": {
+  "cident": "set_T_iterator_009622E4",
+  "label": "set_T_iterator",
+  "src": "string"
+ },
+ "0x009635C8": {
+  "cident": "set_T_too_long_009635C8",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x00991FD4": {
+  "cident": "tone_icon_00991FD4",
+  "label": "tone_icon",
+  "src": "string"
+ },
+ "0x009A35AC": {
+  "cident": "boost_function_009A35AC",
+  "label": "boost_function",
+  "src": "string"
+ },
+ "0x009BFFBC": {
+  "cident": "ignore_nblinepoint",
+  "label": "ignore_nblinepoint",
+  "src": "string"
+ },
+ "0x009C0058": {
+  "cident": "force_battlespecial_allrelease",
+  "label": "force_battlespecial_allrelease",
+  "src": "string"
+ },
+ "0x009C009C": {
+  "cident": "force_battlespecial_allrelease_009C009C",
+  "label": "force_battlespecial_allrelease",
+  "src": "string"
+ },
+ "0x009E8A3C": {
+  "cident": "boost_match_results_009E8A3C",
+  "label": "boost_match_results",
+  "src": "string"
+ },
+ "0x009E9428": {
+  "cident": "boost_format_error_009E9428",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x009E9770": {
+  "cident": "boost_format_error_009E9770",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x009EA468": {
+  "cident": "boost_format_error_009EA468",
+  "label": "boost_format_error",
+  "src": "string"
+ },
+ "0x009EFFA0": {
+  "cident": "install",
+  "label": "install",
+  "src": "string"
+ },
+ "0x009EFFB4": {
+  "cident": "install_009EFFB4",
+  "label": "install",
+  "src": "string"
+ },
+ "0x009F1BA0": {
+  "cident": "set_T_too_long_009F1BA0",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x009F1D98": {
+  "cident": "set_T_too_long_009F1D98",
+  "label": "set_T_too_long",
+  "src": "string"
+ },
+ "0x00A0CA40": {
+  "cident": "boost_bad_any_cast_00A0CA40",
+  "label": "boost_bad_any_cast",
+  "src": "string"
+ },
+ "0x00A0DAC8": {
+  "cident": "fillrect_2_00A0DAC8",
+  "label": "fillrect_2",
+  "src": "string"
+ },
+ "0x00A0DD2C": {
+  "cident": "fillrect_5",
+  "label": "fillrect_5",
+  "src": "string"
+ },
+ "0x00A0DEFC": {
+  "cident": "fillrect_8",
+  "label": "fillrect_8",
+  "src": "string"
+ },
+ "0x00A0E04C": {
+  "cident": "fillrect_9_00A0E04C",
+  "label": "fillrect_9",
+  "src": "string"
+ },
+ "0x00A0E330": {
+  "cident": "fillrect_10",
+  "label": "fillrect_10",
+  "src": "string"
+ },
+ "0x00A0E8CC": {
+  "cident": "fillrect_12",
+  "label": "fillrect_12",
+  "src": "string"
+ },
+ "0x00A1CFD0": {
+  "cident": "cellGcmGetLastFlipTime",
+  "label": "cellGcmGetLastFlipTime",
+  "src": "symbol"
+ },
+ "0x00A1CFF0": {
+  "cident": "cellAtracSetSecondBuffer",
+  "label": "cellAtracSetSecondBuffer",
+  "src": "symbol"
+ },
+ "0x00A1D010": {
+  "cident": "cellAtracGetChannel",
+  "label": "cellAtracGetChannel",
+  "src": "symbol"
+ },
+ "0x00A1D030": {
+  "cident": "cellAtracCreateDecoderExt",
+  "label": "cellAtracCreateDecoderExt",
+  "src": "symbol"
+ },
+ "0x00A1D050": {
+  "cident": "cellAtracGetStreamDataInfo",
+  "label": "cellAtracGetStreamDataInfo",
+  "src": "symbol"
+ },
+ "0x00A1D070": {
+  "cident": "cellAtracAddStreamData",
+  "label": "cellAtracAddStreamData",
+  "src": "symbol"
+ },
+ "0x00A1D090": {
+  "cident": "cellAtracGetMaxSample",
+  "label": "cellAtracGetMaxSample",
+  "src": "symbol"
+ },
+ "0x00A1D0B0": {
+  "cident": "cellAtracSetDataAndGetMemSize",
+  "label": "cellAtracSetDataAndGetMemSize",
+  "src": "symbol"
+ },
+ "0x00A1D0D0": {
+  "cident": "cellAtracDeleteDecoder",
+  "label": "cellAtracDeleteDecoder",
+  "src": "symbol"
+ },
+ "0x00A1D0F0": {
+  "cident": "cellAtracResetPlayPosition",
+  "label": "cellAtracResetPlayPosition",
+  "src": "symbol"
+ },
+ "0x00A1D110": {
+  "cident": "cellAtracSetLoopNum",
+  "label": "cellAtracSetLoopNum",
+  "src": "symbol"
+ },
+ "0x00A1D130": {
+  "cident": "cellAtracDecode",
+  "label": "cellAtracDecode",
+  "src": "symbol"
+ },
+ "0x00A1D150": {
+  "cident": "cellAtracIsSecondBufferNeeded",
+  "label": "cellAtracIsSecondBufferNeeded",
+  "src": "symbol"
+ },
+ "0x00A1D170": {
+  "cident": "cellAtracGetBufferInfoForResetting",
+  "label": "cellAtracGetBufferInfoForResetting",
+  "src": "symbol"
+ },
+ "0x00A1D190": {
+  "cident": "cellAtracGetLoopInfo",
+  "label": "cellAtracGetLoopInfo",
+  "src": "symbol"
+ },
+ "0x00A1D1B0": {
+  "cident": "cellAtracGetInternalErrorInfo",
+  "label": "cellAtracGetInternalErrorInfo",
+  "src": "symbol"
+ },
+ "0x00A1D1D0": {
+  "cident": "cellAtracGetSecondBufferInfo",
+  "label": "cellAtracGetSecondBufferInfo",
+  "src": "symbol"
+ },
+ "0x00A1D1F0": {
+  "cident": "cellAtracGetVacantSize",
+  "label": "cellAtracGetVacantSize",
+  "src": "symbol"
+ },
+ "0x00A1D210": {
+  "cident": "socketpoll",
+  "label": "socketpoll",
+  "src": "symbol"
+ },
+ "0x00A1D230": {
+  "cident": "sys_net_initialize_network_ex",
+  "label": "sys_net_initialize_network_ex",
+  "src": "symbol"
+ },
+ "0x00A1D250": {
+  "cident": "recvfrom",
+  "label": "recvfrom",
+  "src": "symbol"
+ },
+ "0x00A1D270": {
+  "cident": "listen",
+  "label": "listen",
+  "src": "symbol"
+ },
+ "0x00A1D290": {
+  "cident": "sys_net_get_sockinfo",
+  "label": "sys_net_get_sockinfo",
+  "src": "symbol"
+ },
+ "0x00A1D2B0": {
+  "cident": "socketselect",
+  "label": "socketselect",
+  "src": "symbol"
+ },
+ "0x00A1D2D0": {
+  "cident": "getsockopt",
+  "label": "getsockopt",
+  "src": "symbol"
+ },
+ "0x00A1D2F0": {
+  "cident": "sys_net_errno_loc",
+  "label": "_sys_net_errno_loc",
+  "src": "symbol"
+ },
+ "0x00A1D310": {
+  "cident": "connect",
+  "label": "connect",
+  "src": "symbol"
+ },
+ "0x00A1D330": {
+  "cident": "socketclose",
+  "label": "socketclose",
+  "src": "symbol"
+ },
+ "0x00A1D350": {
+  "cident": "gethostbyname",
+  "label": "gethostbyname",
+  "src": "symbol"
+ },
+ "0x00A1D370": {
+  "cident": "setsockopt",
+  "label": "setsockopt",
+  "src": "symbol"
+ },
+ "0x00A1D390": {
+  "cident": "sys_net_abort_socket",
+  "label": "sys_net_abort_socket",
+  "src": "symbol"
+ },
+ "0x00A1D3B0": {
+  "cident": "sendto",
+  "label": "sendto",
+  "src": "symbol"
+ },
+ "0x00A1D3D0": {
+  "cident": "socket",
+  "label": "socket",
+  "src": "symbol"
+ },
+ "0x00A1D3F0": {
+  "cident": "shutdown",
+  "label": "shutdown",
+  "src": "symbol"
+ },
+ "0x00A1D410": {
+  "cident": "sys_net_get_sockinfo_ex",
+  "label": "sys_net_get_sockinfo_ex",
+  "src": "symbol"
+ },
+ "0x00A1D430": {
+  "cident": "bind",
+  "label": "bind",
+  "src": "symbol"
+ },
+ "0x00A1D450": {
+  "cident": "sys_net_show_ifconfig",
+  "label": "sys_net_show_ifconfig",
+  "src": "symbol"
+ },
+ "0x00A1D470": {
+  "cident": "sys_net_h_errno_loc",
+  "label": "_sys_net_h_errno_loc",
+  "src": "symbol"
+ },
+ "0x00A1D490": {
+  "cident": "accept",
+  "label": "accept",
+  "src": "symbol"
+ },
+ "0x00A1D4B0": {
+  "cident": "inet_ntop",
+  "label": "inet_ntop",
+  "src": "symbol"
+ },
+ "0x00A1D4D0": {
+  "cident": "inet_addr",
+  "label": "inet_addr",
+  "src": "symbol"
+ },
+ "0x00A1D4F0": {
+  "cident": "send",
+  "label": "send",
+  "src": "symbol"
+ },
+ "0x00A1D510": {
+  "cident": "recv",
+  "label": "recv",
+  "src": "symbol"
+ },
+ "0x00A1D530": {
+  "cident": "sys_net_free_thread_context",
+  "label": "sys_net_free_thread_context",
+  "src": "symbol"
+ },
+ "0x00A1D550": {
+  "cident": "cellAudioInit",
+  "label": "cellAudioInit",
+  "src": "symbol"
+ },
+ "0x00A1D570": {
+  "cident": "cellAudioSetNotifyEventQueue",
+  "label": "cellAudioSetNotifyEventQueue",
+  "src": "symbol"
+ },
+ "0x00A1D590": {
+  "cident": "cellAudioGetPortTimestamp",
+  "label": "cellAudioGetPortTimestamp",
+  "src": "symbol"
+ },
+ "0x00A1D5B0": {
+  "cident": "cellAudioPortClose",
+  "label": "cellAudioPortClose",
+  "src": "symbol"
+ },
+ "0x00A1D5D0": {
+  "cident": "cellAudioSetPortLevel",
+  "label": "cellAudioSetPortLevel",
+  "src": "symbol"
+ },
+ "0x00A1D5F0": {
+  "cident": "cellAudioPortStop",
+  "label": "cellAudioPortStop",
+  "src": "symbol"
+ },
+ "0x00A1D610": {
+  "cident": "cellAudioGetPortConfig",
+  "label": "cellAudioGetPortConfig",
+  "src": "symbol"
+ },
+ "0x00A1D630": {
+  "cident": "cellAudioAdd6chData",
+  "label": "cellAudioAdd6chData",
+  "src": "symbol"
+ },
+ "0x00A1D650": {
+  "cident": "cellAudioPortStart",
+  "label": "cellAudioPortStart",
+  "src": "symbol"
+ },
+ "0x00A1D670": {
+  "cident": "cellAudioAdd2chData",
+  "label": "cellAudioAdd2chData",
+  "src": "symbol"
+ },
+ "0x00A1D690": {
+  "cident": "cellAudioQuit",
+  "label": "cellAudioQuit",
+  "src": "symbol"
+ },
+ "0x00A1D6B0": {
+  "cident": "cellAudioPortOpen",
+  "label": "cellAudioPortOpen",
+  "src": "symbol"
+ },
+ "0x00A1D6D0": {
+  "cident": "cellAudioAddData",
+  "label": "cellAudioAddData",
+  "src": "symbol"
+ },
+ "0x00A1D6F0": {
+  "cident": "cellAudioGetPortBlockTag",
+  "label": "cellAudioGetPortBlockTag",
+  "src": "symbol"
+ },
+ "0x00A1D710": {
+  "cident": "cellAudioRemoveNotifyEventQueue",
+  "label": "cellAudioRemoveNotifyEventQueue",
+  "src": "symbol"
+ },
+ "0x00A1D730": {
+  "cident": "cellFsArcadeHddSerialNumber",
+  "label": "cellFsArcadeHddSerialNumber",
+  "src": "symbol"
+ },
+ "0x00A1D750": {
+  "cident": "cellFsClose",
+  "label": "cellFsClose",
+  "src": "symbol"
+ },
+ "0x00A1D770": {
+  "cident": "cellFsOpendir",
+  "label": "cellFsOpendir",
+  "src": "symbol"
+ },
+ "0x00A1D790": {
+  "cident": "cellFsAioWrite",
+  "label": "cellFsAioWrite",
+  "src": "symbol"
+ },
+ "0x00A1D7B0": {
+  "cident": "cellFsRead",
+  "label": "cellFsRead",
+  "src": "symbol"
+ },
+ "0x00A1D7D0": {
+  "cident": "cellFsReaddir",
+  "label": "cellFsReaddir",
+  "src": "symbol"
+ },
+ "0x00A1D7F0": {
+  "cident": "cellFsOpen",
+  "label": "cellFsOpen",
+  "src": "symbol"
+ },
+ "0x00A1D810": {
+  "cident": "cellFsStat",
+  "label": "cellFsStat",
+  "src": "symbol"
+ },
+ "0x00A1D830": {
+  "cident": "cellFsUnlink",
+  "label": "cellFsUnlink",
+  "src": "symbol"
+ },
+ "0x00A1D850": {
+  "cident": "cellFsAioFinish",
+  "label": "cellFsAioFinish",
+  "src": "symbol"
+ },
+ "0x00A1D870": {
+  "cident": "cellFsLseek",
+  "label": "cellFsLseek",
+  "src": "symbol"
+ },
+ "0x00A1D890": {
+  "cident": "cellFsMkdir",
+  "label": "cellFsMkdir",
+  "src": "symbol"
+ },
+ "0x00A1D8B0": {
+  "cident": "cellFsAioRead",
+  "label": "cellFsAioRead",
+  "src": "symbol"
+ },
+ "0x00A1D8D0": {
+  "cident": "cellFsAioInit",
+  "label": "cellFsAioInit",
+  "src": "symbol"
+ },
+ "0x00A1D8F0": {
+  "cident": "cellFsWrite",
+  "label": "cellFsWrite",
+  "src": "symbol"
+ },
+ "0x00A1D910": {
+  "cident": "cellFsFstat",
+  "label": "cellFsFstat",
+  "src": "symbol"
+ },
+ "0x00A1D930": {
+  "cident": "cellFsRename",
+  "label": "cellFsRename",
+  "src": "symbol"
+ },
+ "0x00A1D950": {
+  "cident": "cellFsClosedir",
+  "label": "cellFsClosedir",
+  "src": "symbol"
+ },
+ "0x00A1D970": {
+  "cident": "cellRescSetDsts",
+  "label": "cellRescSetDsts",
+  "src": "symbol"
+ },
+ "0x00A1D990": {
+  "cident": "cellRescAdjustAspectRatio",
+  "label": "cellRescAdjustAspectRatio",
+  "src": "symbol"
+ },
+ "0x00A1D9B0": {
+  "cident": "cellRescSetDisplayMode",
+  "label": "cellRescSetDisplayMode",
+  "src": "symbol"
+ },
+ "0x00A1D9D0": {
+  "cident": "cellRescSetConvertAndFlip",
+  "label": "cellRescSetConvertAndFlip",
+  "src": "symbol"
+ },
+ "0x00A1D9F0": {
+  "cident": "cellRescExit",
+  "label": "cellRescExit",
+  "src": "symbol"
+ },
+ "0x00A1DA10": {
+  "cident": "cellRescSetFlipHandler",
+  "label": "cellRescSetFlipHandler",
+  "src": "symbol"
+ },
+ "0x00A1DA30": {
+  "cident": "cellRescInit",
+  "label": "cellRescInit",
+  "src": "symbol"
+ },
+ "0x00A1DA50": {
+  "cident": "cellRescGetBufferSize",
+  "label": "cellRescGetBufferSize",
+  "src": "symbol"
+ },
+ "0x00A1DA70": {
+  "cident": "cellRescSetSrc",
+  "label": "cellRescSetSrc",
+  "src": "symbol"
+ },
+ "0x00A1DA90": {
+  "cident": "cellRescSetBufferAddress",
+  "label": "cellRescSetBufferAddress",
+  "src": "symbol"
+ },
+ "0x00A1DAB0": {
+  "cident": "cellRescVideoOutResolutionId2RescBufferMode",
+  "label": "cellRescVideoOutResolutionId2RescBufferMode",
+  "src": "symbol"
+ },
+ "0x00A1DAD0": {
+  "cident": "cellRescSetVBlankHandler",
+  "label": "cellRescSetVBlankHandler",
+  "src": "symbol"
+ },
+ "0x00A1DAF0": {
+  "cident": "cellRescCreateInterlaceTable",
+  "label": "cellRescCreateInterlaceTable",
+  "src": "symbol"
+ },
+ "0x00A1DB10": {
+  "cident": "cellSpursAttributeSetNamePrefix",
+  "label": "cellSpursAttributeSetNamePrefix",
+  "src": "symbol"
+ },
+ "0x00A1DB30": {
+  "cident": "cellSpursAttributeEnableSpuPrintfIfAvailable",
+  "label": "cellSpursAttributeEnableSpuPrintfIfAvailable",
+  "src": "symbol"
+ },
+ "0x00A1DB50": {
+  "cident": "cellSpursDestroyTaskset2",
+  "label": "cellSpursDestroyTaskset2",
+  "src": "symbol"
+ },
+ "0x00A1DB70": {
+  "cident": "cellSpursEventFlagDetachLv2EventQueue",
+  "label": "cellSpursEventFlagDetachLv2EventQueue",
+  "src": "symbol"
+ },
+ "0x00A1DB90": {
+  "cident": "cellSpursCreateJobChainWithAttribute",
+  "label": "cellSpursCreateJobChainWithAttribute",
+  "src": "symbol"
+ },
+ "0x00A1DBB0": {
+  "cident": "cellSpursInitializeWithAttribute2",
+  "label": "cellSpursInitializeWithAttribute2",
+  "src": "symbol"
+ },
+ "0x00A1DBD0": {
+  "cident": "cellSpursJobChainAttributeInitialize",
+  "label": "_cellSpursJobChainAttributeInitialize",
+  "src": "symbol"
+ },
+ "0x00A1DBF0": {
+  "cident": "cellSpursEventFlagWait",
+  "label": "cellSpursEventFlagWait",
+  "src": "symbol"
+ },
+ "0x00A1DC10": {
+  "cident": "cellSpursCreateTaskset2",
+  "label": "cellSpursCreateTaskset2",
+  "src": "symbol"
+ },
+ "0x00A1DC30": {
+  "cident": "cellSpursDetachLv2EventQueue",
+  "label": "cellSpursDetachLv2EventQueue",
+  "src": "symbol"
+ },
+ "0x00A1DC50": {
+  "cident": "cellSpursEventFlagInitialize",
+  "label": "_cellSpursEventFlagInitialize",
+  "src": "symbol"
+ },
+ "0x00A1DC70": {
+  "cident": "cellSpursJobGuardInitialize",
+  "label": "cellSpursJobGuardInitialize",
+  "src": "symbol"
+ },
+ "0x00A1DC90": {
+  "cident": "cellSpursShutdownJobChain",
+  "label": "cellSpursShutdownJobChain",
+  "src": "symbol"
+ },
+ "0x00A1DCB0": {
+  "cident": "cellSpursTryJoinTask2",
+  "label": "cellSpursTryJoinTask2",
+  "src": "symbol"
+ },
+ "0x00A1DCD0": {
+  "cident": "cellSpursGetJobChainId",
+  "label": "cellSpursGetJobChainId",
+  "src": "symbol"
+ },
+ "0x00A1DCF0": {
+  "cident": "cellSpursEventFlagAttachLv2EventQueue",
+  "label": "cellSpursEventFlagAttachLv2EventQueue",
+  "src": "symbol"
+ },
+ "0x00A1DD10": {
+  "cident": "cellSpursAttributeInitialize",
+  "label": "_cellSpursAttributeInitialize",
+  "src": "symbol"
+ },
+ "0x00A1DD30": {
+  "cident": "cellSpursJoinTask2",
+  "label": "cellSpursJoinTask2",
+  "src": "symbol"
+ },
+ "0x00A1DD50": {
+  "cident": "cellSpursJoinJobChain",
+  "label": "cellSpursJoinJobChain",
+  "src": "symbol"
+ },
+ "0x00A1DD70": {
+  "cident": "cellSpursInitializeWithAttribute",
+  "label": "cellSpursInitializeWithAttribute",
+  "src": "symbol"
+ },
+ "0x00A1DD90": {
+  "cident": "cellSpursAttachLv2EventQueue",
+  "label": "cellSpursAttachLv2EventQueue",
+  "src": "symbol"
+ },
+ "0x00A1DDB0": {
+  "cident": "cellSpursTasksetAttribute2Initialize",
+  "label": "_cellSpursTasksetAttribute2Initialize",
+  "src": "symbol"
+ },
+ "0x00A1DDD0": {
+  "cident": "cellSpursFinalize",
+  "label": "cellSpursFinalize",
+  "src": "symbol"
+ },
+ "0x00A1DDF0": {
+  "cident": "cellSpursJobGuardNotify",
+  "label": "cellSpursJobGuardNotify",
+  "src": "symbol"
+ },
+ "0x00A1DE10": {
+  "cident": "cellSpursCreateTask2",
+  "label": "cellSpursCreateTask2",
+  "src": "symbol"
+ },
+ "0x00A1DE30": {
+  "cident": "cellSpursRunJobChain",
+  "label": "cellSpursRunJobChain",
+  "src": "symbol"
+ },
+ "0x00A1DE50": {
+  "cident": "cellSpursEventFlagSet",
+  "label": "cellSpursEventFlagSet",
+  "src": "symbol"
+ },
+ "0x00A1DE70": {
+  "cident": "cellSysmoduleUnloadModule",
+  "label": "cellSysmoduleUnloadModule",
+  "src": "symbol"
+ },
+ "0x00A1DE90": {
+  "cident": "cellSysmoduleLoadModule",
+  "label": "cellSysmoduleLoadModule",
+  "src": "symbol"
+ },
+ "0x00A1DEB0": {
+  "cident": "sceNpTerm",
+  "label": "sceNpTerm",
+  "src": "symbol"
+ },
+ "0x00A1DED0": {
+  "cident": "sceNpDrmIsAvailable",
+  "label": "sceNpDrmIsAvailable",
+  "src": "symbol"
+ },
+ "0x00A1DEF0": {
+  "cident": "sceNpInit",
+  "label": "sceNpInit",
+  "src": "symbol"
+ },
+ "0x00A1DF10": {
+  "cident": "cellVideoOutConfigure",
+  "label": "cellVideoOutConfigure",
+  "src": "symbol"
+ },
+ "0x00A1DF30": {
+  "cident": "cellSysutilCheckCallback",
+  "label": "cellSysutilCheckCallback",
+  "src": "symbol"
+ },
+ "0x00A1DF50": {
+  "cident": "cellSysCacheMount",
+  "label": "cellSysCacheMount",
+  "src": "symbol"
+ },
+ "0x00A1DF70": {
+  "cident": "cellSysutilEnableBgmPlayback",
+  "label": "cellSysutilEnableBgmPlayback",
+  "src": "symbol"
+ },
+ "0x00A1DF90": {
+  "cident": "cellSysCacheClear",
+  "label": "cellSysCacheClear",
+  "src": "symbol"
+ },
+ "0x00A1DFB0": {
+  "cident": "cellVideoOutGetNumberOfDevice",
+  "label": "cellVideoOutGetNumberOfDevice",
+  "src": "symbol"
+ },
+ "0x00A1DFD0": {
+  "cident": "cellVideoOutGetState",
+  "label": "cellVideoOutGetState",
+  "src": "symbol"
+ },
+ "0x00A1DFF0": {
+  "cident": "cellSysutilRegisterCallback",
+  "label": "cellSysutilRegisterCallback",
+  "src": "symbol"
+ },
+ "0x00A1E010": {
+  "cident": "cellSysutilGetBgmPlaybackStatus",
+  "label": "cellSysutilGetBgmPlaybackStatus",
+  "src": "symbol"
+ },
+ "0x00A1E030": {
+  "cident": "cellVideoOutGetResolutionAvailability",
+  "label": "cellVideoOutGetResolutionAvailability",
+  "src": "symbol"
+ },
+ "0x00A1E050": {
+  "cident": "cellSysutilDisableBgmPlayback",
+  "label": "cellSysutilDisableBgmPlayback",
+  "src": "symbol"
+ },
+ "0x00A1E070": {
+  "cident": "cellVideoOutGetResolution",
+  "label": "cellVideoOutGetResolution",
+  "src": "symbol"
+ },
+ "0x00A1E090": {
+  "cident": "cellAudioOutGetConfiguration",
+  "label": "cellAudioOutGetConfiguration",
+  "src": "symbol"
+ },
+ "0x00A1E0B0": {
+  "cident": "cellGameGetParamString",
+  "label": "cellGameGetParamString",
+  "src": "symbol"
+ },
+ "0x00A1E0D0": {
+  "cident": "cellGameContentPermit",
+  "label": "cellGameContentPermit",
+  "src": "symbol"
+ },
+ "0x00A1E0F0": {
+  "cident": "cellGameBootCheck",
+  "label": "cellGameBootCheck",
+  "src": "symbol"
+ },
+ "0x00A1E110": {
+  "cident": "cellScreenShotEnable",
+  "label": "cellScreenShotEnable",
+  "src": "symbol"
+ },
+ "0x00A1E130": {
+  "cident": "cellScreenShotSetParameter",
+  "label": "cellScreenShotSetParameter",
+  "src": "symbol"
+ },
+ "0x00A1E150": {
+  "cident": "cellUsbdOpenPipe",
+  "label": "cellUsbdOpenPipe",
+  "src": "symbol"
+ },
+ "0x00A1E170": {
+  "cident": "cellUsbdScanStaticDescriptor",
+  "label": "cellUsbdScanStaticDescriptor",
+  "src": "symbol"
+ },
+ "0x00A1E190": {
+  "cident": "cellUsbdRegisterLdd",
+  "label": "cellUsbdRegisterLdd",
+  "src": "symbol"
+ },
+ "0x00A1E1B0": {
+  "cident": "cellUsbdEnd",
+  "label": "cellUsbdEnd",
+  "src": "symbol"
+ },
+ "0x00A1E1D0": {
+  "cident": "cellUsbdSetThreadPriority2",
+  "label": "cellUsbdSetThreadPriority2",
+  "src": "symbol"
+ },
+ "0x00A1E1F0": {
+  "cident": "cellUsbdClosePipe",
+  "label": "cellUsbdClosePipe",
+  "src": "symbol"
+ },
+ "0x00A1E210": {
+  "cident": "cellUsbdControlTransfer",
+  "label": "cellUsbdControlTransfer",
+  "src": "symbol"
+ },
+ "0x00A1E230": {
+  "cident": "cellUsbdBulkTransfer",
+  "label": "cellUsbdBulkTransfer",
+  "src": "symbol"
+ },
+ "0x00A1E250": {
+  "cident": "cellUsbdInit",
+  "label": "cellUsbdInit",
+  "src": "symbol"
+ },
+ "0x00A1E270": {
+  "cident": "cellSailGraphicsAdapterGetFrame",
+  "label": "cellSailGraphicsAdapterGetFrame",
+  "src": "symbol"
+ },
+ "0x00A1E290": {
+  "cident": "cellSailPlayerSetSoundAdapter",
+  "label": "cellSailPlayerSetSoundAdapter",
+  "src": "symbol"
+ },
+ "0x00A1E2B0": {
+  "cident": "cellSailGraphicsAdapterPtsToTimePosition",
+  "label": "cellSailGraphicsAdapterPtsToTimePosition",
+  "src": "symbol"
+ },
+ "0x00A1E2D0": {
+  "cident": "cellSailPlayerFinalize",
+  "label": "cellSailPlayerFinalize",
+  "src": "symbol"
+ },
+ "0x00A1E2F0": {
+  "cident": "cellSailPlayerSetGraphicsAdapter",
+  "label": "cellSailPlayerSetGraphicsAdapter",
+  "src": "symbol"
+ },
+ "0x00A1E310": {
+  "cident": "cellSailGraphicsAdapterInitialize",
+  "label": "cellSailGraphicsAdapterInitialize",
+  "src": "symbol"
+ },
+ "0x00A1E330": {
+  "cident": "cellSailSoundAdapterSetPreferredFormat",
+  "label": "cellSailSoundAdapterSetPreferredFormat",
+  "src": "symbol"
+ },
+ "0x00A1E350": {
+  "cident": "cellSailPlayerInitialize2",
+  "label": "cellSailPlayerInitialize2",
+  "src": "symbol"
+ },
+ "0x00A1E370": {
+  "cident": "cellSailGraphicsAdapterSetPreferredFormat",
+  "label": "cellSailGraphicsAdapterSetPreferredFormat",
+  "src": "symbol"
+ },
+ "0x00A1E390": {
+  "cident": "cellSailMemAllocatorInitialize",
+  "label": "cellSailMemAllocatorInitialize",
+  "src": "symbol"
+ },
+ "0x00A1E3B0": {
+  "cident": "cellSailPlayerOpenStream",
+  "label": "cellSailPlayerOpenStream",
+  "src": "symbol"
+ },
+ "0x00A1E3D0": {
+  "cident": "cellSailSoundAdapterInitialize",
+  "label": "cellSailSoundAdapterInitialize",
+  "src": "symbol"
+ },
+ "0x00A1E3F0": {
+  "cident": "cellSailGraphicsAdapterUpdateAvSync",
+  "label": "cellSailGraphicsAdapterUpdateAvSync",
+  "src": "symbol"
+ },
+ "0x00A1E410": {
+  "cident": "cellSailPlayerSetParameter",
+  "label": "cellSailPlayerSetParameter",
+  "src": "symbol"
+ },
+ "0x00A1E430": {
+  "cident": "cellSailPlayerGetDescriptorCount",
+  "label": "cellSailPlayerGetDescriptorCount",
+  "src": "symbol"
+ },
+ "0x00A1E450": {
+  "cident": "cellSailGraphicsAdapterFinalize",
+  "label": "cellSailGraphicsAdapterFinalize",
+  "src": "symbol"
+ },
+ "0x00A1E470": {
+  "cident": "cellSailPlayerAddDescriptor",
+  "label": "cellSailPlayerAddDescriptor",
+  "src": "symbol"
+ },
+ "0x00A1E490": {
+  "cident": "cellSailSoundAdapterGetFrame",
+  "label": "cellSailSoundAdapterGetFrame",
+  "src": "symbol"
+ },
+ "0x00A1E4B0": {
+  "cident": "cellSailPlayerCloseStream",
+  "label": "cellSailPlayerCloseStream",
+  "src": "symbol"
+ },
+ "0x00A1E4D0": {
+  "cident": "cellSailPlayerRemoveDescriptor",
+  "label": "cellSailPlayerRemoveDescriptor",
+  "src": "symbol"
+ },
+ "0x00A1E4F0": {
+  "cident": "cellSailPlayerIsPaused",
+  "label": "cellSailPlayerIsPaused",
+  "src": "symbol"
+ },
+ "0x00A1E510": {
+  "cident": "cellSailPlayerBoot",
+  "label": "cellSailPlayerBoot",
+  "src": "symbol"
+ },
+ "0x00A1E530": {
+  "cident": "cellSailSoundAdapterFinalize",
+  "label": "cellSailSoundAdapterFinalize",
+  "src": "symbol"
+ },
+ "0x00A1E550": {
+  "cident": "cellSailPlayerSetPaused",
+  "label": "cellSailPlayerSetPaused",
+  "src": "symbol"
+ },
+ "0x00A1E570": {
+  "cident": "cellSailPlayerCreateDescriptor",
+  "label": "cellSailPlayerCreateDescriptor",
+  "src": "symbol"
+ },
+ "0x00A1E590": {
+  "cident": "cellSailPlayerStart",
+  "label": "cellSailPlayerStart",
+  "src": "symbol"
+ },
+ "0x00A1E5B0": {
+  "cident": "cellSailPlayerStop",
+  "label": "cellSailPlayerStop",
+  "src": "symbol"
+ },
+ "0x00A1E5D0": {
+  "cident": "cellSailSoundAdapterUpdateAvSync",
+  "label": "cellSailSoundAdapterUpdateAvSync",
+  "src": "symbol"
+ },
+ "0x00A1E5F0": {
+  "cident": "cellSailSoundAdapterGetFormat",
+  "label": "cellSailSoundAdapterGetFormat",
+  "src": "symbol"
+ },
+ "0x00A1E610": {
+  "cident": "cellSailPlayerSetRepeatMode",
+  "label": "cellSailPlayerSetRepeatMode",
+  "src": "symbol"
+ },
+ "0x00A1E630": {
+  "cident": "cellSailPlayerDestroyDescriptor",
+  "label": "cellSailPlayerDestroyDescriptor",
+  "src": "symbol"
+ },
+ "0x00A1E650": {
+  "cident": "cellSailGraphicsAdapterGetFormat",
+  "label": "cellSailGraphicsAdapterGetFormat",
+  "src": "symbol"
+ },
+ "0x00A1E670": {
+  "cident": "cellRtcTickAddTicks",
+  "label": "cellRtcTickAddTicks",
+  "src": "symbol"
+ },
+ "0x00A1E690": {
+  "cident": "cellRtcTickAddMinutes",
+  "label": "cellRtcTickAddMinutes",
+  "src": "symbol"
+ },
+ "0x00A1E6B0": {
+  "cident": "cellRtcTickAddYears",
+  "label": "cellRtcTickAddYears",
+  "src": "symbol"
+ },
+ "0x00A1E6D0": {
+  "cident": "cellRtcTickAddDays",
+  "label": "cellRtcTickAddDays",
+  "src": "symbol"
+ },
+ "0x00A1E6F0": {
+  "cident": "cellRtcSetTick",
+  "label": "cellRtcSetTick",
+  "src": "symbol"
+ },
+ "0x00A1E710": {
+  "cident": "cellRtcGetCurrentTick",
+  "label": "cellRtcGetCurrentTick",
+  "src": "symbol"
+ },
+ "0x00A1E730": {
+  "cident": "cellRtcSetTime_t",
+  "label": "cellRtcSetTime_t",
+  "src": "symbol"
+ },
+ "0x00A1E750": {
+  "cident": "cellRtcGetDayOfWeek",
+  "label": "cellRtcGetDayOfWeek",
+  "src": "symbol"
+ },
+ "0x00A1E770": {
+  "cident": "cellRtcConvertUtcToLocalTime",
+  "label": "cellRtcConvertUtcToLocalTime",
+  "src": "symbol"
+ },
+ "0x00A1E790": {
+  "cident": "cellRtcGetTick",
+  "label": "cellRtcGetTick",
+  "src": "symbol"
+ },
+ "0x00A1E7B0": {
+  "cident": "cellRtcGetTime_t",
+  "label": "cellRtcGetTime_t",
+  "src": "symbol"
+ },
+ "0x00A1E7D0": {
+  "cident": "cellRtcTickAddSeconds",
+  "label": "cellRtcTickAddSeconds",
+  "src": "symbol"
+ },
+ "0x00A1E7F0": {
+  "cident": "cellRtcTickAddHours",
+  "label": "cellRtcTickAddHours",
+  "src": "symbol"
+ },
+ "0x00A1E810": {
+  "cident": "cellRtcTickAddMonths",
+  "label": "cellRtcTickAddMonths",
+  "src": "symbol"
+ },
+ "0x00A1E830": {
+  "cident": "cellNetCtlAddHandler",
+  "label": "cellNetCtlAddHandler",
+  "src": "symbol"
+ },
+ "0x00A1E850": {
+  "cident": "cellNetCtlTerm",
+  "label": "cellNetCtlTerm",
+  "src": "symbol"
+ },
+ "0x00A1E870": {
+  "cident": "cellNetCtlGetInfo",
+  "label": "cellNetCtlGetInfo",
+  "src": "symbol"
+ },
+ "0x00A1E890": {
+  "cident": "cellNetCtlGetState",
+  "label": "cellNetCtlGetState",
+  "src": "symbol"
+ },
+ "0x00A1E8B0": {
+  "cident": "cellNetCtlDelHandler",
+  "label": "cellNetCtlDelHandler",
+  "src": "symbol"
+ },
+ "0x00A1E8D0": {
+  "cident": "cellNetCtlInit",
+  "label": "cellNetCtlInit",
+  "src": "symbol"
+ },
+ "0x00A1E8F0": {
+  "cident": "cellHttpCreateTransaction",
+  "label": "cellHttpCreateTransaction",
+  "src": "symbol"
+ },
+ "0x00A1E910": {
+  "cident": "cellHttpResponseGetStatusCode",
+  "label": "cellHttpResponseGetStatusCode",
+  "src": "symbol"
+ },
+ "0x00A1E930": {
+  "cident": "cellHttpClientSetSslCallback",
+  "label": "cellHttpClientSetSslCallback",
+  "src": "symbol"
+ },
+ "0x00A1E950": {
+  "cident": "cellHttpClientCloseAllConnections",
+  "label": "cellHttpClientCloseAllConnections",
+  "src": "symbol"
+ },
+ "0x00A1E970": {
+  "cident": "cellHttpInit",
+  "label": "cellHttpInit",
+  "src": "symbol"
+ },
+ "0x00A1E990": {
+  "cident": "cellHttpTransactionAbortConnection",
+  "label": "cellHttpTransactionAbortConnection",
+  "src": "symbol"
+ },
+ "0x00A1E9B0": {
+  "cident": "cellHttpDestroyTransaction",
+  "label": "cellHttpDestroyTransaction",
+  "src": "symbol"
+ },
+ "0x00A1E9D0": {
+  "cident": "cellHttpRequestGetAllHeaders",
+  "label": "cellHttpRequestGetAllHeaders",
+  "src": "symbol"
+ },
+ "0x00A1E9F0": {
+  "cident": "cellHttpResponseGetContentLength",
+  "label": "cellHttpResponseGetContentLength",
+  "src": "symbol"
+ },
+ "0x00A1EA10": {
+  "cident": "cellHttpCreateClient",
+  "label": "cellHttpCreateClient",
+  "src": "symbol"
+ },
+ "0x00A1EA30": {
+  "cident": "cellHttpsInit",
+  "label": "cellHttpsInit",
+  "src": "symbol"
+ },
+ "0x00A1EA50": {
+  "cident": "cellHttpRequestSetHeader",
+  "label": "cellHttpRequestSetHeader",
+  "src": "symbol"
+ },
+ "0x00A1EA70": {
+  "cident": "cellHttpClientSetKeepAlive",
+  "label": "cellHttpClientSetKeepAlive",
+  "src": "symbol"
+ },
+ "0x00A1EA90": {
+  "cident": "cellHttpRecvResponse",
+  "label": "cellHttpRecvResponse",
+  "src": "symbol"
+ },
+ "0x00A1EAB0": {
+  "cident": "cellHttpDestroyClient",
+  "label": "cellHttpDestroyClient",
+  "src": "symbol"
+ },
+ "0x00A1EAD0": {
+  "cident": "cellHttpTransactionCloseConnection",
+  "label": "cellHttpTransactionCloseConnection",
+  "src": "symbol"
+ },
+ "0x00A1EAF0": {
+  "cident": "cellHttpSendRequest",
+  "label": "cellHttpSendRequest",
+  "src": "symbol"
+ },
+ "0x00A1EB10": {
+  "cident": "cellHttpRequestSetContentLength",
+  "label": "cellHttpRequestSetContentLength",
+  "src": "symbol"
+ },
+ "0x00A1EB30": {
+  "cident": "cellHttpClientSetConnTimeout",
+  "label": "cellHttpClientSetConnTimeout",
+  "src": "symbol"
+ },
+ "0x00A1EB50": {
+  "cident": "cellSslCertGetNotAfter",
+  "label": "cellSslCertGetNotAfter",
+  "src": "symbol"
+ },
+ "0x00A1EB70": {
+  "cident": "cellSslCertGetNotBefore",
+  "label": "cellSslCertGetNotBefore",
+  "src": "symbol"
+ },
+ "0x00A1EB90": {
+  "cident": "cellSslInit",
+  "label": "cellSslInit",
+  "src": "symbol"
+ },
+ "0x00A1EBB0": {
+  "cident": "cellHttpUtilParseUri",
+  "label": "cellHttpUtilParseUri",
+  "src": "symbol"
+ },
+ "0x00A1EBD0": {
+  "cident": "cellCameraStop",
+  "label": "cellCameraStop",
+  "src": "symbol"
+ },
+ "0x00A1EBF0": {
+  "cident": "cellCameraGetBufferInfoEx",
+  "label": "cellCameraGetBufferInfoEx",
+  "src": "symbol"
+ },
+ "0x00A1EC10": {
+  "cident": "cellCameraClose",
+  "label": "cellCameraClose",
+  "src": "symbol"
+ },
+ "0x00A1EC30": {
+  "cident": "cellCameraRead",
+  "label": "cellCameraRead",
+  "src": "symbol"
+ },
+ "0x00A1EC50": {
+  "cident": "cellCameraStart",
+  "label": "cellCameraStart",
+  "src": "symbol"
+ },
+ "0x00A1EC70": {
+  "cident": "cellCameraGetAttribute",
+  "label": "cellCameraGetAttribute",
+  "src": "symbol"
+ },
+ "0x00A1EC90": {
+  "cident": "cellCameraGetType",
+  "label": "cellCameraGetType",
+  "src": "symbol"
+ },
+ "0x00A1ECB0": {
+  "cident": "cellCameraEnd",
+  "label": "cellCameraEnd",
+  "src": "symbol"
+ },
+ "0x00A1ECD0": {
+  "cident": "cellCameraOpenEx",
+  "label": "cellCameraOpenEx",
+  "src": "symbol"
+ },
+ "0x00A1ECF0": {
+  "cident": "cellCameraIsStarted",
+  "label": "cellCameraIsStarted",
+  "src": "symbol"
+ },
+ "0x00A1ED10": {
+  "cident": "cellCameraIsAttached",
+  "label": "cellCameraIsAttached",
+  "src": "symbol"
+ },
+ "0x00A1ED30": {
+  "cident": "cellCameraReset",
+  "label": "cellCameraReset",
+  "src": "symbol"
+ },
+ "0x00A1ED50": {
+  "cident": "cellCameraSetAttribute",
+  "label": "cellCameraSetAttribute",
+  "src": "symbol"
+ },
+ "0x00A1ED70": {
+  "cident": "cellCameraInit",
+  "label": "cellCameraInit",
+  "src": "symbol"
+ },
+ "0x00A1ED90": {
+  "cident": "cellCameraIsOpen",
+  "label": "cellCameraIsOpen",
+  "src": "symbol"
+ },
+ "0x00A1EDB0": {
+  "cident": "sceSmartTargetTrackingGetResults",
+  "label": "sceSmartTargetTrackingGetResults",
+  "src": "symbol"
+ },
+ "0x00A1EDD0": {
+  "cident": "sceSmartTargetTrackingRun",
+  "label": "sceSmartTargetTrackingRun",
+  "src": "symbol"
+ },
+ "0x00A1EDF0": {
+  "cident": "sceSmartRelease",
+  "label": "sceSmartRelease",
+  "src": "symbol"
+ },
+ "0x00A1EE10": {
+  "cident": "sceSmartCreateLearnedImageTarget",
+  "label": "sceSmartCreateLearnedImageTarget",
+  "src": "symbol"
+ },
+ "0x00A1EE30": {
+  "cident": "sceSmartTargetTrackingStart",
+  "label": "sceSmartTargetTrackingStart",
+  "src": "symbol"
+ },
+ "0x00A1EE50": {
+  "cident": "sceSmartDestroyTarget",
+  "label": "sceSmartDestroyTarget",
+  "src": "symbol"
+ },
+ "0x00A1EE70": {
+  "cident": "sceSmartTargetTrackingStop",
+  "label": "sceSmartTargetTrackingStop",
+  "src": "symbol"
+ },
+ "0x00A1EE90": {
+  "cident": "sceSmartTargetTrackingUnregisterTarget",
+  "label": "sceSmartTargetTrackingUnregisterTarget",
+  "src": "symbol"
+ },
+ "0x00A1EEB0": {
+  "cident": "sceSmartTargetTrackingRegisterTarget",
+  "label": "sceSmartTargetTrackingRegisterTarget",
+  "src": "symbol"
+ },
+ "0x00A1EED0": {
+  "cident": "sceSmartTargetTrackingSetSearchPolicy",
+  "label": "sceSmartTargetTrackingSetSearchPolicy",
+  "src": "symbol"
+ },
+ "0x00A1EEF0": {
+  "cident": "sceSmartTargetTrackingReset",
+  "label": "sceSmartTargetTrackingReset",
+  "src": "symbol"
+ },
+ "0x00A1EF10": {
+  "cident": "sceSmartInit",
+  "label": "sceSmartInit",
+  "src": "symbol"
+ },
+ "0x00A1EF30": {
+  "cident": "cellPadInit",
+  "label": "cellPadInit",
+  "src": "symbol"
+ },
+ "0x00A1EF50": {
+  "cident": "cellKbGetConfiguration",
+  "label": "cellKbGetConfiguration",
+  "src": "symbol"
+ },
+ "0x00A1EF70": {
+  "cident": "cellKbClearBuf",
+  "label": "cellKbClearBuf",
+  "src": "symbol"
+ },
+ "0x00A1EF90": {
+  "cident": "cellKbGetInfo",
+  "label": "cellKbGetInfo",
+  "src": "symbol"
+ },
+ "0x00A1EFB0": {
+  "cident": "cellMouseGetData",
+  "label": "cellMouseGetData",
+  "src": "symbol"
+ },
+ "0x00A1EFD0": {
+  "cident": "cellKbSetLEDStatus",
+  "label": "cellKbSetLEDStatus",
+  "src": "symbol"
+ },
+ "0x00A1EFF0": {
+  "cident": "cellKbInit",
+  "label": "cellKbInit",
+  "src": "symbol"
+ },
+ "0x00A1F010": {
+  "cident": "cellKbCnvRawCode",
+  "label": "cellKbCnvRawCode",
+  "src": "symbol"
+ },
+ "0x00A1F030": {
+  "cident": "cellPadEnd",
+  "label": "cellPadEnd",
+  "src": "symbol"
+ },
+ "0x00A1F050": {
+  "cident": "cellPadSetPortSetting",
+  "label": "cellPadSetPortSetting",
+  "src": "symbol"
+ },
+ "0x00A1F070": {
+  "cident": "cellMouseGetInfo",
+  "label": "cellMouseGetInfo",
+  "src": "symbol"
+ },
+ "0x00A1F090": {
+  "cident": "cellPadGetData",
+  "label": "cellPadGetData",
+  "src": "symbol"
+ },
+ "0x00A1F0B0": {
+  "cident": "cellKbSetCodeType",
+  "label": "cellKbSetCodeType",
+  "src": "symbol"
+ },
+ "0x00A1F0D0": {
+  "cident": "cellPadGetInfo2",
+  "label": "cellPadGetInfo2",
+  "src": "symbol"
+ },
+ "0x00A1F0F0": {
+  "cident": "cellKbEnd",
+  "label": "cellKbEnd",
+  "src": "symbol"
+ },
+ "0x00A1F110": {
+  "cident": "cellMouseInit",
+  "label": "cellMouseInit",
+  "src": "symbol"
+ },
+ "0x00A1F130": {
+  "cident": "cellKbSetReadMode",
+  "label": "cellKbSetReadMode",
+  "src": "symbol"
+ },
+ "0x00A1F150": {
+  "cident": "cellMouseEnd",
+  "label": "cellMouseEnd",
+  "src": "symbol"
+ },
+ "0x00A1F170": {
+  "cident": "cellPadSetActDirect",
+  "label": "cellPadSetActDirect",
+  "src": "symbol"
+ },
+ "0x00A1F190": {
+  "cident": "cellKbRead",
+  "label": "cellKbRead",
+  "src": "symbol"
+ },
+ "0x00A1F1B0": {
+  "cident": "cellGcmGetTiledPitchSize",
+  "label": "cellGcmGetTiledPitchSize",
+  "src": "symbol"
+ },
+ "0x00A1F1D0": {
+  "cident": "cellGcmAddressToOffset",
+  "label": "cellGcmAddressToOffset",
+  "src": "symbol"
+ },
+ "0x00A1F1F0": {
+  "cident": "cellGcmBindTile",
+  "label": "cellGcmBindTile",
+  "src": "symbol"
+ },
+ "0x00A1F210": {
+  "cident": "cellGcmSetFlipMode",
+  "label": "cellGcmSetFlipMode",
+  "src": "symbol"
+ },
+ "0x00A1F230": {
+  "cident": "cellGcmSetUserHandler",
+  "label": "cellGcmSetUserHandler",
+  "src": "symbol"
+ },
+ "0x00A1F250": {
+  "cident": "cellGcmMapMainMemory",
+  "label": "cellGcmMapMainMemory",
+  "src": "symbol"
+ },
+ "0x00A1F270": {
+  "cident": "cellGcmSetFlipHandler",
+  "label": "cellGcmSetFlipHandler",
+  "src": "symbol"
+ },
+ "0x00A1F290": {
+  "cident": "cellGcmSetDisplayBuffer",
+  "label": "cellGcmSetDisplayBuffer",
+  "src": "symbol"
+ },
+ "0x00A1F2B0": {
+  "cident": "cellGcmGetControlRegister",
+  "label": "cellGcmGetControlRegister",
+  "src": "symbol"
+ },
+ "0x00A1F2D0": {
+  "cident": "cellGcmSetVBlankHandler",
+  "label": "cellGcmSetVBlankHandler",
+  "src": "symbol"
+ },
+ "0x00A1F2F0": {
+  "cident": "cellGcmSetTileInfo",
+  "label": "cellGcmSetTileInfo",
+  "src": "symbol"
+ },
+ "0x00A1F310": {
+  "cident": "cellGcmSetInvalidateTile",
+  "label": "cellGcmSetInvalidateTile",
+  "src": "symbol"
+ },
+ "0x00A1F330": {
+  "cident": "cellGcmSetZcull",
+  "label": "cellGcmSetZcull",
+  "src": "symbol"
+ },
+ "0x00A1F350": {
+  "cident": "cellGcmUnbindTile",
+  "label": "cellGcmUnbindTile",
+  "src": "symbol"
+ },
+ "0x00A1F370": {
+  "cident": "cellGcmGetConfiguration",
+  "label": "cellGcmGetConfiguration",
+  "src": "symbol"
+ },
+ "0x00A1F390": {
+  "cident": "cellGcmUnmapEaIoAddress",
+  "label": "cellGcmUnmapEaIoAddress",
+  "src": "symbol"
+ },
+ "0x00A1F3B0": {
+  "cident": "cellGcmGetLabelAddress",
+  "label": "cellGcmGetLabelAddress",
+  "src": "symbol"
+ },
+ "0x00A1F3D0": {
+  "cident": "cellGcmInitBody",
+  "label": "_cellGcmInitBody",
+  "src": "symbol"
+ },
+ "0x00A1F3F0": {
+  "cident": "cellGcmSetFlipCommand",
+  "label": "_cellGcmSetFlipCommand",
+  "src": "symbol"
+ },
+ "0x00A1F410": {
+  "cident": "cellGcmFunc15",
+  "label": "_cellGcmFunc15",
+  "src": "symbol"
+ },
+ "0x00A1F430": {
+  "cident": "cellGcmGetDefaultCommandWordSize",
+  "label": "cellGcmGetDefaultCommandWordSize",
+  "src": "symbol"
+ },
+ "0x00A1F450": {
+  "cident": "cellGcmGetDefaultSegmentWordSize",
+  "label": "cellGcmGetDefaultSegmentWordSize",
+  "src": "symbol"
+ },
+ "0x00A1F470": {
+  "cident": "cellGcmSetDefaultFifoSize",
+  "label": "cellGcmSetDefaultFifoSize",
+  "src": "symbol"
+ },
+ "0x00A1F490": {
+  "cident": "cellGcmSetFlipCommandWithWaitLabel",
+  "label": "_cellGcmSetFlipCommandWithWaitLabel",
+  "src": "symbol"
+ },
+ "0x00A1F4B0": {
+  "cident": "sys_lwmutex_lock",
+  "label": "sys_lwmutex_lock",
+  "src": "symbol"
+ },
+ "0x00A1F4D0": {
+  "cident": "sys_lwmutex_unlock",
+  "label": "sys_lwmutex_unlock",
+  "src": "symbol"
+ },
+ "0x00A1F4F0": {
+  "cident": "sys_ppu_thread_create",
+  "label": "sys_ppu_thread_create",
+  "src": "symbol"
+ },
+ "0x00A1F510": {
+  "cident": "sys_prx_load_module",
+  "label": "sys_prx_load_module",
+  "src": "symbol"
+ },
+ "0x00A1F530": {
+  "cident": "sys_process_atexitspawn",
+  "label": "_sys_process_atexitspawn",
+  "src": "symbol"
+ },
+ "0x00A1F550": {
+  "cident": "sys_lwmutex_create",
+  "label": "sys_lwmutex_create",
+  "src": "symbol"
+ },
+ "0x00A1F570": {
+  "cident": "sys_ppu_thread_get_id",
+  "label": "sys_ppu_thread_get_id",
+  "src": "symbol"
+ },
+ "0x00A1F590": {
+  "cident": "sys_prx_register_library",
+  "label": "sys_prx_register_library",
+  "src": "symbol"
+ },
+ "0x00A1F5B0": {
+  "cident": "sys_spu_printf_initialize",
+  "label": "_sys_spu_printf_initialize",
+  "src": "symbol"
+ },
+ "0x00A1F5D0": {
+  "cident": "sys_game_get_system_sw_version",
+  "label": "sys_game_get_system_sw_version",
+  "src": "symbol"
+ },
+ "0x00A1F5F0": {
+  "cident": "sys_game_process_exitspawn2",
+  "label": "sys_game_process_exitspawn2",
+  "src": "symbol"
+ },
+ "0x00A1F610": {
+  "cident": "sys_game_watchdog_stop",
+  "label": "sys_game_watchdog_stop",
+  "src": "symbol"
+ },
+ "0x00A1F630": {
+  "cident": "sys_initialize_tls",
+  "label": "sys_initialize_tls",
+  "src": "symbol"
+ },
+ "0x00A1F650": {
+  "cident": "sys_prx_stop_module",
+  "label": "sys_prx_stop_module",
+  "src": "symbol"
+ },
+ "0x00A1F670": {
+  "cident": "sys_time_get_system_time",
+  "label": "sys_time_get_system_time",
+  "src": "symbol"
+ },
+ "0x00A1F690": {
+  "cident": "sys_process_at_Exitspawn",
+  "label": "_sys_process_at_Exitspawn",
+  "src": "symbol"
+ },
+ "0x00A1F6B0": {
+  "cident": "sys_game_watchdog_start",
+  "label": "sys_game_watchdog_start",
+  "src": "symbol"
+ },
+ "0x00A1F6D0": {
+  "cident": "sys_prx_start_module",
+  "label": "sys_prx_start_module",
+  "src": "symbol"
+ },
+ "0x00A1F6F0": {
+  "cident": "sys_game_get_rtc_status",
+  "label": "sys_game_get_rtc_status",
+  "src": "symbol"
+ },
+ "0x00A1F710": {
+  "cident": "sys_prx_exitspawn_with_level",
+  "label": "sys_prx_exitspawn_with_level",
+  "src": "symbol"
+ },
+ "0x00A1F730": {
+  "cident": "sys_ppu_thread_once",
+  "label": "sys_ppu_thread_once",
+  "src": "symbol"
+ },
+ "0x00A1F750": {
+  "cident": "sys_game_watchdog_clear",
+  "label": "sys_game_watchdog_clear",
+  "src": "symbol"
+ },
+ "0x00A1F770": {
+  "cident": "sys_lwmutex_trylock",
+  "label": "sys_lwmutex_trylock",
+  "src": "symbol"
+ },
+ "0x00A1F790": {
+  "cident": "sys_ppu_thread_exit",
+  "label": "sys_ppu_thread_exit",
+  "src": "symbol"
+ },
+ "0x00A1F7B0": {
+  "cident": "sys_lwmutex_destroy",
+  "label": "sys_lwmutex_destroy",
+  "src": "symbol"
+ },
+ "0x00A1F7D0": {
+  "cident": "sys_spu_printf_finalize",
+  "label": "_sys_spu_printf_finalize",
+  "src": "symbol"
+ },
+ "0x00A1F7F0": {
+  "cident": "sys_spu_image_close",
+  "label": "sys_spu_image_close",
+  "src": "symbol"
+ },
+ "0x00A1F810": {
+  "cident": "sys_process_exit",
+  "label": "sys_process_exit",
+  "src": "symbol"
+ },
+ "0x00A1F830": {
+  "cident": "sys_game_board_storage_read",
+  "label": "sys_game_board_storage_read",
+  "src": "symbol"
+ },
+ "0x00A1F850": {
+  "cident": "sys_spu_image_import",
+  "label": "sys_spu_image_import",
+  "src": "symbol"
+ },
+ "0x00A1F870": {
+  "cident": "sys_prx_unload_module",
+  "label": "sys_prx_unload_module",
+  "src": "symbol"
+ },
+ "0x08000001": {
+  "cident": "syscall_sys_process_getpid",
+  "label": "syscall_sys_process_getpid",
+  "src": "symbol"
+ },
+ "0x08000013": {
+  "cident": "syscall_sys_process_kill",
+  "label": "syscall_sys_process_kill",
+  "src": "symbol"
+ },
+ "0x0800002B": {
+  "cident": "syscall_sys_ppu_thread_yield",
+  "label": "syscall_sys_ppu_thread_yield",
+  "src": "symbol"
+ },
+ "0x0800002C": {
+  "cident": "syscall_sys_ppu_thread_join",
+  "label": "syscall_sys_ppu_thread_join",
+  "src": "symbol"
+ },
+ "0x0800002D": {
+  "cident": "syscall_sys_ppu_thread_detach",
+  "label": "syscall_sys_ppu_thread_detach",
+  "src": "symbol"
+ },
+ "0x0800002F": {
+  "cident": "syscall_sys_ppu_thread_set_priority",
+  "label": "syscall_sys_ppu_thread_set_priority",
+  "src": "symbol"
+ },
+ "0x08000030": {
+  "cident": "syscall_sys_ppu_thread_get_priority",
+  "label": "syscall_sys_ppu_thread_get_priority",
+  "src": "symbol"
+ },
+ "0x08000031": {
+  "cident": "syscall_sys_ppu_thread_get_stack_information",
+  "label": "syscall_sys_ppu_thread_get_stack_information",
+  "src": "symbol"
+ },
+ "0x08000052": {
+  "cident": "syscall_sys_event_flag_create",
+  "label": "syscall_sys_event_flag_create",
+  "src": "symbol"
+ },
+ "0x08000053": {
+  "cident": "syscall_sys_event_flag_destroy",
+  "label": "syscall_sys_event_flag_destroy",
+  "src": "symbol"
+ },
+ "0x08000055": {
+  "cident": "syscall_sys_event_flag_wait",
+  "label": "syscall_sys_event_flag_wait",
+  "src": "symbol"
+ },
+ "0x08000057": {
+  "cident": "syscall_sys_event_flag_set",
+  "label": "syscall_sys_event_flag_set",
+  "src": "symbol"
+ },
+ "0x0800005A": {
+  "cident": "syscall_sys_semaphore_create",
+  "label": "syscall_sys_semaphore_create",
+  "src": "symbol"
+ },
+ "0x0800005B": {
+  "cident": "syscall_sys_semaphore_destroy",
+  "label": "syscall_sys_semaphore_destroy",
+  "src": "symbol"
+ },
+ "0x0800005C": {
+  "cident": "syscall_sys_semaphore_wait",
+  "label": "syscall_sys_semaphore_wait",
+  "src": "symbol"
+ },
+ "0x0800005D": {
+  "cident": "syscall_sys_semaphore_trywait",
+  "label": "syscall_sys_semaphore_trywait",
+  "src": "symbol"
+ },
+ "0x0800005E": {
+  "cident": "syscall_sys_semaphore_post",
+  "label": "syscall_sys_semaphore_post",
+  "src": "symbol"
+ },
+ "0x08000064": {
+  "cident": "syscall_sys_mutex_create",
+  "label": "syscall_sys_mutex_create",
+  "src": "symbol"
+ },
+ "0x08000065": {
+  "cident": "syscall_sys_mutex_destroy",
+  "label": "syscall_sys_mutex_destroy",
+  "src": "symbol"
+ },
+ "0x08000066": {
+  "cident": "syscall_sys_mutex_lock",
+  "label": "syscall_sys_mutex_lock",
+  "src": "symbol"
+ },
+ "0x08000067": {
+  "cident": "syscall_sys_mutex_trylock",
+  "label": "syscall_sys_mutex_trylock",
+  "src": "symbol"
+ },
+ "0x08000068": {
+  "cident": "syscall_sys_mutex_unlock",
+  "label": "syscall_sys_mutex_unlock",
+  "src": "symbol"
+ },
+ "0x08000069": {
+  "cident": "syscall_sys_cond_create",
+  "label": "syscall_sys_cond_create",
+  "src": "symbol"
+ },
+ "0x0800006A": {
+  "cident": "syscall_sys_cond_destroy",
+  "label": "syscall_sys_cond_destroy",
+  "src": "symbol"
+ },
+ "0x0800006B": {
+  "cident": "syscall_sys_cond_wait",
+  "label": "syscall_sys_cond_wait",
+  "src": "symbol"
+ },
+ "0x0800006C": {
+  "cident": "syscall_sys_cond_signal",
+  "label": "syscall_sys_cond_signal",
+  "src": "symbol"
+ },
+ "0x0800006D": {
+  "cident": "syscall_sys_cond_signal_all",
+  "label": "syscall_sys_cond_signal_all",
+  "src": "symbol"
+ },
+ "0x08000072": {
+  "cident": "syscall_sys_semaphore_get_value",
+  "label": "syscall_sys_semaphore_get_value",
+  "src": "symbol"
+ },
+ "0x08000080": {
+  "cident": "syscall_sys_event_queue_create",
+  "label": "syscall_sys_event_queue_create",
+  "src": "symbol"
+ },
+ "0x08000081": {
+  "cident": "syscall_sys_event_queue_destroy",
+  "label": "syscall_sys_event_queue_destroy",
+  "src": "symbol"
+ },
+ "0x08000082": {
+  "cident": "syscall_sys_event_queue_receive",
+  "label": "syscall_sys_event_queue_receive",
+  "src": "symbol"
+ },
+ "0x08000085": {
+  "cident": "syscall_sys_event_queue_drain",
+  "label": "syscall_sys_event_queue_drain",
+  "src": "symbol"
+ },
+ "0x08000086": {
+  "cident": "syscall_sys_event_port_create",
+  "label": "syscall_sys_event_port_create",
+  "src": "symbol"
+ },
+ "0x08000087": {
+  "cident": "syscall_sys_event_port_destroy",
+  "label": "syscall_sys_event_port_destroy",
+  "src": "symbol"
+ },
+ "0x08000088": {
+  "cident": "syscall_sys_event_port_connect_local",
+  "label": "syscall_sys_event_port_connect_local",
+  "src": "symbol"
+ },
+ "0x08000089": {
+  "cident": "syscall_sys_event_port_disconnect",
+  "label": "syscall_sys_event_port_disconnect",
+  "src": "symbol"
+ },
+ "0x0800008A": {
+  "cident": "syscall_sys_event_port_send",
+  "label": "syscall_sys_event_port_send",
+  "src": "symbol"
+ },
+ "0x0800008D": {
+  "cident": "syscall_sys_timer_usleep",
+  "label": "syscall_sys_timer_usleep",
+  "src": "symbol"
+ },
+ "0x0800008E": {
+  "cident": "syscall_sys_timer_sleep",
+  "label": "syscall_sys_timer_sleep",
+  "src": "symbol"
+ },
+ "0x08000090": {
+  "cident": "syscall_sys_time_get_timezone",
+  "label": "syscall_sys_time_get_timezone",
+  "src": "symbol"
+ },
+ "0x08000091": {
+  "cident": "syscall_sys_time_get_current_time",
+  "label": "syscall_sys_time_get_current_time",
+  "src": "symbol"
+ },
+ "0x08000093": {
+  "cident": "syscall_sys_time_get_timebase_frequency",
+  "label": "syscall_sys_time_get_timebase_frequency",
+  "src": "symbol"
+ },
+ "0x080000A9": {
+  "cident": "syscall_sys_spu_initialize",
+  "label": "syscall_sys_spu_initialize",
+  "src": "symbol"
+ },
+ "0x080000AA": {
+  "cident": "syscall_sys_spu_thread_group_create",
+  "label": "syscall_sys_spu_thread_group_create",
+  "src": "symbol"
+ },
+ "0x080000AB": {
+  "cident": "syscall_sys_spu_thread_group_destroy",
+  "label": "syscall_sys_spu_thread_group_destroy",
+  "src": "symbol"
+ },
+ "0x080000AC": {
+  "cident": "syscall_sys_spu_thread_initialize",
+  "label": "syscall_sys_spu_thread_initialize",
+  "src": "symbol"
+ },
+ "0x080000AD": {
+  "cident": "syscall_sys_spu_thread_group_start",
+  "label": "syscall_sys_spu_thread_group_start",
+  "src": "symbol"
+ },
+ "0x080000B2": {
+  "cident": "syscall_sys_spu_thread_group_join",
+  "label": "syscall_sys_spu_thread_group_join",
+  "src": "symbol"
+ },
+ "0x080000B5": {
+  "cident": "syscall_sys_spu_thread_write_ls",
+  "label": "syscall_sys_spu_thread_write_ls",
+  "src": "symbol"
+ },
+ "0x080000B6": {
+  "cident": "syscall_sys_spu_thread_read_ls",
+  "label": "syscall_sys_spu_thread_read_ls",
+  "src": "symbol"
+ },
+ "0x080000BE": {
+  "cident": "syscall_sys_spu_thread_write_spu_mb",
+  "label": "syscall_sys_spu_thread_write_spu_mb",
+  "src": "symbol"
+ },
+ "0x080000BF": {
+  "cident": "syscall_sys_spu_thread_connect_event",
+  "label": "syscall_sys_spu_thread_connect_event",
+  "src": "symbol"
+ },
+ "0x080000C0": {
+  "cident": "syscall_sys_spu_thread_disconnect_event",
+  "label": "syscall_sys_spu_thread_disconnect_event",
+  "src": "symbol"
+ },
+ "0x080000C1": {
+  "cident": "syscall_sys_spu_thread_bind_queue",
+  "label": "syscall_sys_spu_thread_bind_queue",
+  "src": "symbol"
+ },
+ "0x080000C2": {
+  "cident": "syscall_sys_spu_thread_unbind_queue",
+  "label": "syscall_sys_spu_thread_unbind_queue",
+  "src": "symbol"
+ },
+ "0x080000FB": {
+  "cident": "syscall_sys_spu_thread_group_connect_event_all_t",
+  "label": "syscall_sys_spu_thread_group_connect_event_all_threads",
+  "src": "symbol"
+ },
+ "0x080000FC": {
+  "cident": "syscall_sys_spu_thread_group_disconnect_event_al",
+  "label": "syscall_sys_spu_thread_group_disconnect_event_all_threads",
+  "src": "symbol"
+ },
+ "0x08000144": {
+  "cident": "syscall_sys_memory_container_create",
+  "label": "syscall_sys_memory_container_create",
+  "src": "symbol"
+ },
+ "0x08000145": {
+  "cident": "syscall_sys_memory_container_destroy",
+  "label": "syscall_sys_memory_container_destroy",
+  "src": "symbol"
+ },
+ "0x0800015C": {
+  "cident": "syscall_sys_memory_allocate",
+  "label": "syscall_sys_memory_allocate",
+  "src": "symbol"
+ },
+ "0x0800015D": {
+  "cident": "syscall_sys_memory_free",
+  "label": "syscall_sys_memory_free",
+  "src": "symbol"
+ },
+ "0x08000160": {
+  "cident": "syscall_sys_memory_get_user_memory_size",
+  "label": "syscall_sys_memory_get_user_memory_size",
+  "src": "symbol"
+ },
+ "0x08000192": {
+  "cident": "syscall_sys_tty_read",
+  "label": "syscall_sys_tty_read",
+  "src": "symbol"
+ },
+ "0x08000193": {
+  "cident": "syscall_sys_tty_write",
+  "label": "syscall_sys_tty_write",
+  "src": "symbol"
+ },
+ "0x08000321": {
+  "cident": "syscall_sys_fs_open",
+  "label": "syscall_sys_fs_open",
+  "src": "symbol"
+ },
+ "0x08000322": {
+  "cident": "syscall_sys_fs_read",
+  "label": "syscall_sys_fs_read",
+  "src": "symbol"
+ },
+ "0x08000323": {
+  "cident": "syscall_sys_fs_write",
+  "label": "syscall_sys_fs_write",
+  "src": "symbol"
+ },
+ "0x08000324": {
+  "cident": "syscall_sys_fs_close",
+  "label": "syscall_sys_fs_close",
+  "src": "symbol"
+ },
+ "0x08000325": {
+  "cident": "syscall_sys_fs_opendir",
+  "label": "syscall_sys_fs_opendir",
+  "src": "symbol"
+ },
+ "0x08000326": {
+  "cident": "syscall_sys_fs_readdir",
+  "label": "syscall_sys_fs_readdir",
+  "src": "symbol"
+ },
+ "0x08000327": {
+  "cident": "syscall_sys_fs_closedir",
+  "label": "syscall_sys_fs_closedir",
+  "src": "symbol"
+ },
+ "0x08000328": {
+  "cident": "syscall_sys_fs_stat",
+  "label": "syscall_sys_fs_stat",
+  "src": "symbol"
+ },
+ "0x08000329": {
+  "cident": "syscall_sys_fs_fstat",
+  "label": "syscall_sys_fs_fstat",
+  "src": "symbol"
+ },
+ "0x0800032A": {
+  "cident": "syscall_sys_fs_link",
+  "label": "syscall_sys_fs_link",
+  "src": "symbol"
+ },
+ "0x0800032B": {
+  "cident": "syscall_sys_fs_mkdir",
+  "label": "syscall_sys_fs_mkdir",
+  "src": "symbol"
+ },
+ "0x0800032C": {
+  "cident": "syscall_sys_fs_rename",
+  "label": "syscall_sys_fs_rename",
+  "src": "symbol"
+ },
+ "0x0800032D": {
+  "cident": "syscall_sys_fs_rmdir",
+  "label": "syscall_sys_fs_rmdir",
+  "src": "symbol"
+ },
+ "0x0800032E": {
+  "cident": "syscall_sys_fs_unlink",
+  "label": "syscall_sys_fs_unlink",
+  "src": "symbol"
+ },
+ "0x0800032F": {
+  "cident": "syscall_sys_fs_utime",
+  "label": "syscall_sys_fs_utime",
+  "src": "symbol"
+ },
+ "0x08000331": {
+  "cident": "syscall_sys_fs_fcntl",
+  "label": "syscall_sys_fs_fcntl",
+  "src": "symbol"
+ },
+ "0x08000332": {
+  "cident": "syscall_sys_fs_lseek",
+  "label": "syscall_sys_fs_lseek",
+  "src": "symbol"
+ },
+ "0x08000334": {
+  "cident": "syscall_sys_fs_fsync",
+  "label": "syscall_sys_fs_fsync",
+  "src": "symbol"
+ },
+ "0x0800033F": {
+  "cident": "syscall_sys_fs_truncate",
+  "label": "syscall_sys_fs_truncate",
+  "src": "symbol"
+ },
+ "0x08000340": {
+  "cident": "syscall_sys_fs_ftruncate",
+  "label": "syscall_sys_fs_ftruncate",
+  "src": "symbol"
+ },
+ "0x08000342": {
+  "cident": "syscall_sys_fs_chmod",
+  "label": "syscall_sys_fs_chmod",
+  "src": "symbol"
+ },
+ "0x08000368": {
+  "cident": "syscall_sys_ss_get_open_psid",
+  "label": "syscall_sys_ss_get_open_psid",
+  "src": "symbol"
+ },
+ "0x080003DC": {
+  "cident": "syscall_syscall_988",
+  "label": "syscall_syscall_988",
+  "src": "symbol"
+ }
+}
