@@ -124,6 +124,15 @@ The script sets everything needed. Notable pieces:
   of 22 s. `TAIKO_BOOT_VBLANK_HZ` sets the boot rate, `TAIKO_VBLANK_HZ` the play
   rate. Do not raise the play rate — everything frame-paced, including chart and
   audio timing, scales with it.
+  The fast tick exposed a main-thread starvation bug worth knowing about:
+  `drain_batches` in the SDL backend drained the submission queue until it was
+  empty, and every batch presents, so with the 240 Hz producer refilling faster
+  than vsync empties it the main thread never returned to `SDL_PollEvent`.
+  Windows then replaced the window with a grey "Not Responding" ghost while the
+  game kept rendering behind it at full frame rate. The drain now stops after an
+  8 ms budget and the caller pumps events; queue backpressure throttles the
+  producer instead. `[SDL_GPU-STALL]` reports any main-loop iteration over
+  250 ms, split into event-wait and batch-execution time.
 - Boot takes ~1–2 min: security/test screen → Bandai Namco logo → credits →
   attract. The fumen `composition.xml` scan (~850 files) is the long pause.
 

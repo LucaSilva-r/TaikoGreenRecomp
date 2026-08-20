@@ -2104,9 +2104,20 @@ static void process_snapshot_request(void)
     SDL_UnlockMutex(s_sdl.queue_mutex);
 }
 
-static void drain_batches(void)
+static unsigned drain_batches(void)
 {
-    if (!s_sdl.queue_mutex) return;
+    unsigned executed = 0;
+    if (!s_sdl.queue_mutex) return 0;
+    /* Executing a batch presents, and a vsync present blocks for a frame, so
+     * an unbounded drain hands the main thread to the producer: while the boot
+     * fast-forward ticks vblank at 240 Hz the queue refills faster than 60 Hz
+     * presents empty it, the loop never returns, SDL never polls, and the
+     * window desktop-side goes "not responding". Stop at a budget instead and
+     * let the caller pump events; the queue's own backpressure
+     * (rsx_sdl_gpu_backend_queue_has_capacity) throttles the producer. At the
+     * normal rate the queue holds at most a batch or two, so this never
+     * triggers and behaviour is unchanged. */
+    const Uint64 budget_end = SDL_GetTicksNS() + 8000000ull;   /* 8 ms */
     for (;;) {
         rsx_render_batch batch;
         Uint64 enqueue_ns = 0;
@@ -2128,8 +2139,11 @@ static void drain_batches(void)
         if (!have_batch) break;
         execute_batch(&batch, enqueue_ns);
         rsx_render_batch_destroy(&batch);
+        ++executed;
+        if (SDL_GetTicksNS() >= budget_end) break;
     }
     process_snapshot_request();
+    return executed;
 }
 
 int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
@@ -2295,12 +2309,35 @@ fail:
 
 int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
 {
+    /* Work left over from a budget-bounded drain must not sit behind an idle
+     * event wait, or presentation would fall to one batch per timeout. */
+    if (rsx_sdl_gpu_backend_has_pending_batches()) timeout_ms = 0;
+
+    /* This thread owns the window, so it is the one Windows watches: five
+     * seconds without pumping and the desktop replaces the window with a grey
+     * "Not Responding" ghost while the game keeps rendering behind it. Report
+     * any iteration that takes long enough to matter, split into the wait and
+     * the batch execution, so a stall names its own half. */
+    const Uint64 iterate_start_ns = SDL_GetTicksNS();
+
     SDL_Event event;
     if (SDL_WaitEventTimeout(&event, timeout_ms)) {
         handle_event(&event);
         while (SDL_PollEvent(&event)) handle_event(&event);
     }
-    drain_batches();
+    const Uint64 events_done_ns = SDL_GetTicksNS();
+    const unsigned executed = drain_batches();
+    const Uint64 end_ns = SDL_GetTicksNS();
+
+    if (end_ns - iterate_start_ns > 250000000ull) {
+        fprintf(stderr, "[SDL_GPU-STALL] iterate %.0f ms "
+                        "(events %.0f ms, %u batches %.0f ms, timeout %d ms)\n",
+                (double)(end_ns - iterate_start_ns) / 1000000.0,
+                (double)(events_done_ns - iterate_start_ns) / 1000000.0,
+                executed,
+                (double)(end_ns - events_done_ns) / 1000000.0,
+                timeout_ms);
+    }
     return s_sdl.stopping;
 }
 
