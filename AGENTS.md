@@ -511,7 +511,10 @@ sent to one configured host and port over TLS.
   SDL_GPU backend's optional `g_rsx_overlay_frame` hook. That draw is an
   alpha-blended quad, not `SDL_BlitGPUTexture` -- a blit cannot blend, so the
   pill's transparent ends would punch holes in the frame.
-  `TAIKO_OVERLAY_FONT` points at the font; it is not in the repo.
+  The font is `fonts/font.ttf`, tracked, and CMake embeds an 11-glyph subset of
+  it (digits and hyphen, ~3 KB) via `tools/embed_font.py` so the executable is a
+  drop-in. `TAIKO_OVERLAY_FONT` overrides it at runtime;
+  `-DTAIKO_OVERLAY_FONT_FILE=` picks a different face to embed.
 - `TAIKO_NET_TRACE=1` logs the first 40 socket operations.
 
 ## Repository layout and history

@@ -420,6 +420,34 @@ set_source_files_properties(
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_FREETYPE_ROOT}/include/freetype2")
 target_link_libraries(taiko_boot PRIVATE "${TAIKO_FREETYPE_LIB}")
 
+# The overlay font is not in the repository (it is a licensed face). When a copy
+# is present it is subset to the digits and hyphen the pairing overlay draws --
+# about 3 KB -- and linked in, so the executable is a drop-in with no font file
+# beside it. Without a copy the overlay falls back to loading TAIKO_OVERLAY_FONT
+# (or fonts/font.ttf) at runtime, exactly as before.
+set(TAIKO_OVERLAY_FONT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/fonts/font.ttf"
+    CACHE FILEPATH "Font embedded into the executable for the pairing overlay")
+if(EXISTS "${TAIKO_OVERLAY_FONT_FILE}")
+    set(TAIKO_OVERLAY_FONT_C "${CMAKE_BINARY_DIR}/taiko_overlay_font.c")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_font.py"
+                --font "${TAIKO_OVERLAY_FONT_FILE}"
+                --out "${TAIKO_OVERLAY_FONT_C}"
+        RESULT_VARIABLE taiko_embed_font_result
+        OUTPUT_VARIABLE taiko_embed_font_output
+        ERROR_VARIABLE taiko_embed_font_output)
+    if(NOT taiko_embed_font_result EQUAL 0)
+        message(FATAL_ERROR "embed_font.py failed:\n${taiko_embed_font_output}")
+    endif()
+    message(STATUS "Overlay font: ${taiko_embed_font_output}")
+    target_sources(taiko_boot PRIVATE "${TAIKO_OVERLAY_FONT_C}")
+    target_compile_definitions(taiko_boot PRIVATE TAIKO_OVERLAY_FONT_EMBEDDED)
+else()
+    message(STATUS "Overlay font: ${TAIKO_OVERLAY_FONT_FILE} absent, "
+                   "the overlay will load a font at runtime")
+endif()
+
 # Build the runtime from source rather than expecting a prebuilt .lib -- we are
 # cross-compiling, so there is nothing prebuilt to find.
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk" EXCLUDE_FROM_ALL)

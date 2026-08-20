@@ -10,6 +10,12 @@ Hand-written host code only:
 - `ps3recomp/` — the vendored recompilation framework (see below).
 - `tools/`, `scripts/`, `tests/`, `docs/`, `cmake/` — build and analysis
   tooling.
+- `fonts/font.ttf` — the typeface the card-pairing overlay draws its six-digit
+  code in (DFPKanTeiRyu-XB, a commercial DynaFont face; not part of the game
+  dump). The build embeds only the eleven glyphs the overlay uses — the digits
+  and a hyphen — via `tools/embed_font.py`, so the executable carries about 3 KB
+  of it. Point `-DTAIKO_OVERLAY_FONT_FILE=` at another face to embed that
+  instead.
 
 ## What this repository does NOT contain
 

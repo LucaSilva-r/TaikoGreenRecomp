@@ -57,5 +57,5 @@ __pycache__/
 # Runtime online configuration; holds the pairing token.
 taiko_online.cfg
 
-# Local font asset for the overlay (game font, not redistributed here).
-fonts/
+# The overlay font (fonts/font.ttf) IS tracked: the pairing code has to be
+# legible out of the box, and the build embeds a subset of it.
