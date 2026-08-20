@@ -1944,6 +1944,13 @@ static void handle_event(const SDL_Event* event)
     }
     if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
         if (event->key.repeat) return;
+        if (event->key.down && event->key.scancode == SDL_SCANCODE_F11) {
+            /* ponytail: SDL borderless-desktop fullscreen, no mode switching. */
+            SDL_SetWindowFullscreen(s_sdl.window,
+                                    !(SDL_GetWindowFlags(s_sdl.window) &
+                                      SDL_WINDOW_FULLSCREEN));
+            return;
+        }
 #ifndef RSX_SDL_REPLAY_STANDALONE
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F10) {
             const char* path = getenv("RSX_BATCH_CAPTURE");
