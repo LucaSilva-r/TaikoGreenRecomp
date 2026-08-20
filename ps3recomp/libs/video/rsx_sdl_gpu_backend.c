@@ -1220,6 +1220,226 @@ static SDL_GPUTexture* presentation_texture(Uint32* source_width,
     return result;
 }
 
+/* Optional overlay, supplied by the title layer (src/taiko_overlay.c): an
+ * RGBA image drawn over the presented frame. NULL hook means no overlay, which
+ * is what a build without one gets. The blit below cannot blend, so the image
+ * is expected to be opaque where it should be seen. */
+const uint32_t* (*g_rsx_overlay_frame)(int* width, int* height, uint32_t* version);
+
+static struct {
+    SDL_GPUTexture* texture;
+    int width, height;
+    uint32_t version;
+    int uploaded;
+    SDL_GPUGraphicsPipeline* pipeline;
+    SDL_GPUSampler* sampler;
+    SDL_GPUTextureFormat pipeline_format;
+} s_overlay;
+
+/* A textured quad with straight alpha blending -- the overlay artwork has
+ * rounded, transparent ends, and a blit would punch them into the frame as
+ * holes. Four vertices from SV_VertexID, so there is no vertex buffer. */
+static const char* k_overlay_vertex_hlsl =
+    "cbuffer Rect : register(b0, space1) { float4 rect; };\n"
+    "struct Output { float4 position : SV_Position; float2 uv : TEXCOORD0; };\n"
+    "Output main(uint id : SV_VertexID) {\n"
+    "    float2 corner = float2(id & 1u, (id >> 1u) & 1u);\n"
+    "    Output output;\n"
+    "    output.position = float4(rect.xy + corner * rect.zw, 0.0f, 1.0f);\n"
+    "    output.uv = float2(corner.x, 1.0f - corner.y);\n"
+    "    return output;\n"
+    "}\n";
+
+static const char* k_overlay_fragment_hlsl =
+    "Texture2D source : register(t0, space2);\n"
+    "SamplerState state : register(s0, space2);\n"
+    "float4 main(float4 position : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
+    "    return source.Sample(state, uv);\n"
+    "}\n";
+
+static int overlay_pipeline_ready(void)
+{
+    const SDL_GPUTextureFormat format =
+        SDL_GetGPUSwapchainTextureFormat(s_sdl.device, s_sdl.window);
+    if (s_overlay.pipeline && s_overlay.pipeline_format == format)
+        return 1;
+    if (s_overlay.pipeline) {
+        SDL_ReleaseGPUGraphicsPipeline(s_sdl.device, s_overlay.pipeline);
+        s_overlay.pipeline = NULL;
+    }
+
+    SDL_ShaderCross_GraphicsShaderResourceInfo vertex_resources;
+    SDL_ShaderCross_GraphicsShaderResourceInfo fragment_resources;
+    SDL_zero(vertex_resources);
+    SDL_zero(fragment_resources);
+    SDL_GPUShader* vertex = compile_hlsl(k_overlay_vertex_hlsl,
+        SDL_SHADERCROSS_SHADERSTAGE_VERTEX, &vertex_resources, 0);
+    SDL_GPUShader* fragment = compile_hlsl(k_overlay_fragment_hlsl,
+        SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT, &fragment_resources, 1);
+    if (!vertex || !fragment) {
+        if (vertex) SDL_ReleaseGPUShader(s_sdl.device, vertex);
+        if (fragment) SDL_ReleaseGPUShader(s_sdl.device, fragment);
+        return 0;
+    }
+
+    SDL_GPUColorTargetBlendState blend;
+    SDL_zero(blend);
+    blend.enable_blend = true;
+    blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    blend.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    blend.color_write_mask = 0xF;
+
+    SDL_GPUColorTargetDescription target;
+    SDL_zero(target);
+    target.format = format;
+    target.blend_state = blend;
+
+    SDL_GPUGraphicsPipelineCreateInfo info;
+    SDL_zero(info);
+    info.vertex_shader = vertex;
+    info.fragment_shader = fragment;
+    info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLESTRIP;
+    info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    info.target_info.num_color_targets = 1;
+    info.target_info.color_target_descriptions = &target;
+    s_overlay.pipeline = SDL_CreateGPUGraphicsPipeline(s_sdl.device, &info);
+    SDL_ReleaseGPUShader(s_sdl.device, vertex);
+    SDL_ReleaseGPUShader(s_sdl.device, fragment);
+    if (!s_overlay.pipeline) {
+        fprintf(stderr, "[SDL_GPU] overlay pipeline failed: %s\n", SDL_GetError());
+        ++s_sdl.errors;
+        return 0;
+    }
+    s_overlay.pipeline_format = format;
+
+    if (!s_overlay.sampler) {
+        SDL_GPUSamplerCreateInfo sampler;
+        SDL_zero(sampler);
+        sampler.min_filter = SDL_GPU_FILTER_LINEAR;
+        sampler.mag_filter = SDL_GPU_FILTER_LINEAR;
+        sampler.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        sampler.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        sampler.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        s_overlay.sampler = SDL_CreateGPUSampler(s_sdl.device, &sampler);
+    }
+    return s_overlay.sampler != NULL;
+}
+
+/* Upload when the pixels changed, then blit into the frame's top-left. */
+static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapchain,
+                         Uint32 swapchain_width, Uint32 swapchain_height)
+{
+    int width = 0, height = 0;
+    uint32_t version = 0;
+    const uint32_t* pixels =
+        g_rsx_overlay_frame ? g_rsx_overlay_frame(&width, &height, &version) : NULL;
+    if (!pixels || width <= 0 || height <= 0) return;
+
+    if (s_overlay.texture &&
+        (s_overlay.width != width || s_overlay.height != height)) {
+        SDL_ReleaseGPUTexture(s_sdl.device, s_overlay.texture);
+        s_overlay.texture = NULL;
+    }
+    if (!s_overlay.texture) {
+        SDL_GPUTextureCreateInfo info;
+        SDL_zero(info);
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = (Uint32)width;
+        info.height = (Uint32)height;
+        info.layer_count_or_depth = 1;
+        info.num_levels = 1;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        s_overlay.texture = SDL_CreateGPUTexture(s_sdl.device, &info);
+        if (!s_overlay.texture) return;
+        s_overlay.width = width;
+        s_overlay.height = height;
+        s_overlay.uploaded = 0;
+    }
+
+    if (!s_overlay.uploaded || s_overlay.version != version) {
+        const Uint32 size = (Uint32)width * (Uint32)height * 4u;
+        SDL_GPUTransferBufferCreateInfo transfer_info;
+        SDL_zero(transfer_info);
+        transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        transfer_info.size = size;
+        SDL_GPUTransferBuffer* transfer =
+            SDL_CreateGPUTransferBuffer(s_sdl.device, &transfer_info);
+        if (!transfer) return;
+        void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, transfer, false);
+        if (!mapped) {
+            SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
+            return;
+        }
+        memcpy(mapped, pixels, size);
+        SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
+
+        SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+        if (copy) {
+            SDL_GPUTextureTransferInfo upload;
+            SDL_zero(upload);
+            upload.transfer_buffer = transfer;
+            upload.pixels_per_row = (Uint32)width;
+            upload.rows_per_layer = (Uint32)height;
+            SDL_GPUTextureRegion destination;
+            SDL_zero(destination);
+            destination.texture = s_overlay.texture;
+            destination.w = (Uint32)width;
+            destination.h = (Uint32)height;
+            destination.d = 1;
+            SDL_UploadToGPUTexture(copy, &upload, &destination, false);
+            SDL_EndGPUCopyPass(copy);
+            s_overlay.version = version;
+            s_overlay.uploaded = 1;
+        }
+        SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
+    }
+    if (!s_overlay.uploaded || !overlay_pipeline_ready()) return;
+
+    /* A fixed share of the window, so it stays readable at any size, near the
+     * top where the cabinet shows it. */
+    float draw_w = (float)swapchain_width * 0.42f;
+    float draw_h = draw_w * (float)height / (float)width;
+    if (draw_h > (float)swapchain_height * 0.2f) {
+        draw_h = (float)swapchain_height * 0.2f;
+        draw_w = draw_h * (float)width / (float)height;
+    }
+    const float x = ((float)swapchain_width - draw_w) * 0.5f;
+    const float y = (float)swapchain_height * 0.06f;
+
+    /* Pixels -> normalised device coordinates (y grows downwards on screen). */
+    const float rect[4] = {
+        x / (float)swapchain_width * 2.0f - 1.0f,
+        1.0f - y / (float)swapchain_height * 2.0f,
+        draw_w / (float)swapchain_width * 2.0f,
+        -draw_h / (float)swapchain_height * 2.0f,
+    };
+
+    SDL_GPUColorTargetInfo target;
+    SDL_zero(target);
+    target.texture = swapchain;
+    target.load_op = SDL_GPU_LOADOP_LOAD;    /* keep the frame underneath */
+    target.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &target, 1, NULL);
+    if (!pass) return;
+    SDL_BindGPUGraphicsPipeline(pass, s_overlay.pipeline);
+    SDL_GPUTextureSamplerBinding binding;
+    SDL_zero(binding);
+    binding.texture = s_overlay.texture;
+    binding.sampler = s_overlay.sampler;
+    SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+    SDL_PushGPUVertexUniformData(commands, 0, rect, sizeof(rect));
+    SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+}
+
 static int present_display(void)
 {
     if (!s_sdl.display || !s_sdl.window) return -1;
@@ -1258,6 +1478,7 @@ static int present_display(void)
         blit.clear_color.a = 1.0f;
         blit.filter = SDL_GPU_FILTER_LINEAR;
         SDL_BlitGPUTexture(commands, &blit);
+        draw_overlay(commands, swapchain, width, height);
     }
     return submit_commands(commands);
 }

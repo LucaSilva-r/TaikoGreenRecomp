@@ -311,6 +311,7 @@ add_executable(taiko_boot
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_usio.cpp"     # virtual System 357 I/O board
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_card.c"       # virtual BanaPassport card
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pairing.c"    # six-digit card pairing
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_overlay.c"    # on-screen pairing code
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_input.cpp" # portable title input latch
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_lumen.cpp"    # title-local Lumen state fixes
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_vertex_job.cpp" # native SPURS vertex skinning
@@ -397,6 +398,27 @@ target_link_libraries(taiko_boot PRIVATE ${TAIKO_MBEDTLS_LIBS})
 if(WIN32)
     target_link_libraries(taiko_boot PRIVATE bcrypt)
 endif()
+
+# Static FreeType (scripts/build_freetype.sh) rasterizes the overlay text in the
+# game's own font. Vendored for the same reason as mbedTLS: one code path for
+# both targets, and no extra system package for the MinGW build.
+if(WIN32)
+    set(TAIKO_FREETYPE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-mingw")
+else()
+    set(TAIKO_FREETYPE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-linux")
+endif()
+find_library(TAIKO_FREETYPE_LIB freetype
+    PATHS "${TAIKO_FREETYPE_ROOT}/lib" "${TAIKO_FREETYPE_ROOT}/lib64"
+    NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+if(NOT TAIKO_FREETYPE_LIB)
+    message(FATAL_ERROR
+        "FreeType not found under ${TAIKO_FREETYPE_ROOT}. Run "
+        "scripts/build_freetype.sh, then configure again.")
+endif()
+set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_overlay.c"
+    PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+target_link_libraries(taiko_boot PRIVATE "${TAIKO_FREETYPE_LIB}")
 
 # Build the runtime from source rather than expecting a prebuilt .lib -- we are
 # cross-compiling, so there is nothing prebuilt to find.

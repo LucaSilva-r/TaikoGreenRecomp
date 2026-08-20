@@ -17,6 +17,7 @@
  * (MIT, same author); only the transport and the reader plumbing differ.
  */
 #include "taiko_card.h"
+#include "taiko_overlay.h"
 #include "taiko_tls.h"
 
 #include <pthread.h>
@@ -149,6 +150,7 @@ static void apply(const pairing_response* response)
 
     if (!strcmp(response->status, "closed")) {
         g_session[0] = g_ack[0] = g_last_command[0] = g_shown_code[0] = '\0';
+        taiko_overlay_clear();
         return;
     }
 
@@ -163,6 +165,7 @@ static void apply(const pairing_response* response)
                 fprintf(stderr, "[taiko_pairing] card could not be presented (%d)\n", rc);
         }
         g_shown_code[0] = '\0';
+        taiko_overlay_clear();
         return;
     }
 
@@ -170,6 +173,7 @@ static void apply(const pairing_response* response)
         response->expires_in > 0) {
         if (strcmp(response->code, g_shown_code) != 0) {
             snprintf(g_shown_code, sizeof(g_shown_code), "%s", response->code);
+            taiko_overlay_set_pairing(response->code, response->expires_in);
             fprintf(stderr,
                     "[taiko_pairing] pairing code %s -- enter it on %s within %ds "
                     "to put a card on the reader\n",
@@ -179,6 +183,7 @@ static void apply(const pairing_response* response)
     }
 
     g_shown_code[0] = '\0';
+    taiko_overlay_clear();
 }
 
 static void* pairing_thread(void* unused)
@@ -194,6 +199,7 @@ static void* pairing_thread(void* unused)
             pairing_response response;
             (void)pairing_request(0, &response);   /* close the session */
             g_session[0] = g_ack[0] = g_last_command[0] = g_shown_code[0] = '\0';
+            taiko_overlay_clear();
         }
         for (int slept = 0; slept < PAIRING_POLL_MS && g_running; slept += 100)
             sleep_ms(100);

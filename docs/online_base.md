@@ -181,6 +181,26 @@ TAIKO_PAIRING_TOKEN=<token> ./run-taiko-linux.sh
 #   [taiko_pairing] pairing code 163388 -- enter it on <server> within 30s
 ```
 
+The code is drawn on screen as the cabinet shows it: the pill artwork from
+Zucchini (`assets/ui/pairing_pill.png`, baked into `src/taiko_pairing_pill.h`
+by `tools/gen_pairing_pill.py`), with the countdown in the red disc and the
+code as `661-722` across the yellow body, both in the game's own font.
+`src/taiko_overlay.c` rasterizes the text with FreeType (vendored by
+`scripts/build_freetype.sh`) and composites it onto the artwork; the SDL_GPU
+backend draws the result over the presented frame through an optional
+`g_rsx_overlay_frame` hook.
+
+That draw is a small alpha-blended textured quad, not a blit: `SDL_BlitGPUTexture`
+cannot blend, so the pill's rounded transparent ends would be punched into the
+frame as holes. The pipeline is built once from two inline HLSL shaders through
+the shadercross path the backend already uses, and its four vertices come from
+`SV_VertexID`, so there is no vertex buffer. The countdown redraws once a second
+and the overlay clears itself when the code expires or the card arrives.
+
+The font is not in the repo. `TAIKO_OVERLAY_FONT` points at it; the default is
+`fonts/font.ttf` relative to the launcher's working directory (the repository
+root), which is gitignored.
+
 `pairing_token` and `cabinet_id` can also live in `taiko_online.cfg`. The
 cabinet id defaults to eight hex digits derived from the host name, so it is
 stable without a state file.
@@ -194,8 +214,6 @@ Anything else, including `shop` in the wrong case, comes back `status=closed`.
 
 ## Known gaps
 
-- The pairing code is printed to the log, not drawn on screen. The overlay
-  Zucchini renders would need a text renderer in the SDL_GPU backend.
 - The dongle serial is still a constant in `tools/recomp_hand_edits.json`
   (`serial=ABDN0000000` in the PowerOn body); it belongs in `taiko_online.cfg`
   with the rest.

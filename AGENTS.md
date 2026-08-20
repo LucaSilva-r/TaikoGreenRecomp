@@ -493,7 +493,13 @@ sent to one configured host and port over TLS.
   with no server; `TAIKO_PAIRING_TOKEN=<token>` polls the server for one and
   logs the code to enter in its web UI. The card's block 1 is encrypted with
   key material inside the game image, found by its `NBGIC0..7` tags, so a code
-  no profile issued is rejected rather than silently wrong.
+  no profile issued is rejected rather than silently wrong. The code is drawn
+  on screen by `src/taiko_overlay.c` (FreeType, the game's own font, vendored
+  by `scripts/build_freetype.sh`) on Zucchini's pill artwork, drawn through the
+  SDL_GPU backend's optional `g_rsx_overlay_frame` hook. That draw is an
+  alpha-blended quad, not `SDL_BlitGPUTexture` -- a blit cannot blend, so the
+  pill's transparent ends would punch holes in the frame.
+  `TAIKO_OVERLAY_FONT` points at the font; it is not in the repo.
 - `TAIKO_NET_TRACE=1` logs the first 40 socket operations.
 
 ## Repository layout and history
