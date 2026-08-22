@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Runs as Cage's one Wayland client on the TaikOS tty1 session.
+set -Eeuo pipefail
+
+: "${TAIKOS_OUTPUT:=HDMI-A-1}"
+: "${TAIKOS_OUTPUT_MODE:=1920x1080@60Hz}"
+
+# Only meaningful under a Wayland compositor. On the KMSDRM path SDL owns the
+# connector itself and wlr-randr is neither present nor wanted.
+if [[ -n "${WAYLAND_DISPLAY:-}" && -n "${TAIKOS_OUTPUT}" && -n "${TAIKOS_OUTPUT_MODE}" ]]; then
+    wlr-randr --output "${TAIKOS_OUTPUT}" --on --mode "${TAIKOS_OUTPUT_MODE}"
+
+    # Cage can select the first client's 1280x720 surface size when SDL creates
+    # it, undoing the pre-launch HDMI mode. Reapply the appliance mode once the
+    # Wayland surface exists. This changes the physical output only; the game
+    # continues rendering its fixed 1280x720 target and Cage scales it.
+    (
+        sleep 2
+        wlr-randr --output "${TAIKOS_OUTPUT}" --on \
+            --mode "${TAIKOS_OUTPUT_MODE}"
+    ) &
+fi
+
+# The game's stderr does not reach the journal through Cage. Point TAIKOS_LOG
+# at a file when diagnosing; unset it for normal appliance operation.
+if [[ -n "${TAIKOS_LOG:-}" ]]; then
+    exec >>"${TAIKOS_LOG}" 2>&1
+fi
+
+exec /var/lib/taikos/recomp/taiko_boot \
+    /var/lib/taikos/recomp/EBOOT.elf

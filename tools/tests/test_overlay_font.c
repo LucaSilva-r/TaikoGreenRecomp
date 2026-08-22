@@ -1,7 +1,7 @@
-/* Does the embedded, subset overlay font still rasterize?
+/* Does the embedded UI font still rasterize?
  *
- * The subset drops everything but "0123456789-", so the failure mode to catch
- * is a font that loads yet renders blank boxes for the pairing code.
+ * Pairing currently uses "0123456789-"; the complete face is retained for
+ * future UI such as custom-song metadata.
  *
  *   cc tools/tests/test_overlay_font.c build-linux/taiko_overlay_font.c \
  *      -I third_party/freetype-linux/include/freetype2 \
@@ -41,7 +41,7 @@ int main(void)
         assert(ink > 0);
     }
 
-    printf("embedded font ok: %u bytes, '%s', 11 glyphs rasterize\n",
+    printf("embedded font ok: %u bytes, '%s', pairing glyphs rasterize\n",
            taiko_overlay_font_size,
            face->family_name ? face->family_name : "?");
     return 0;

@@ -1,0 +1,31 @@
+[Unit]
+Description=TaikOS TaikoRecomp ARM64 runtime
+After=local-fs.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=taikos
+Group=taikos
+SupplementaryGroups=audio input render video
+WorkingDirectory=/var/lib/taikos/recomp
+Environment=HOME=/var/lib/taikos
+Environment=PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs
+Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
+Environment=FLOW_NOSPILL=1
+Environment=TAIKO_DNS_LOOPBACK=1
+Environment=TAIKO_ONLINE_CONFIG=/dev/null
+Environment=TAIKO_AUDIO_SPU=1
+ExecStart=/var/lib/taikos/recomp/taiko_boot /var/lib/taikos/recomp/EBOOT.elf
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=10s
+Nice=-5
+LimitNOFILE=524288
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

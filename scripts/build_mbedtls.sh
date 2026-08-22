@@ -8,6 +8,7 @@
 #
 #   scripts/build_mbedtls.sh          # both targets
 #   scripts/build_mbedtls.sh linux    # or one of them
+#   scripts/build_mbedtls.sh rpi-arm64
 set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,6 +47,7 @@ build_target() {
         "$@"
     cmake --build "${build_dir}" -j"${TAIKO_MBEDTLS_JOBS:-8}"
     cmake --install "${build_dir}"
+    printf '%s\n' "${version}" > "${prefix}/.taikorecomp-version"
     echo "mbedTLS ${version} -> ${prefix}"
 }
 
@@ -53,6 +55,8 @@ targets=("${@:-linux mingw}")
 for target in ${targets[@]}; do
     case "${target}" in
         linux) build_target linux ;;
+        rpi-arm64) build_target rpi-arm64 \
+                   -DCMAKE_TOOLCHAIN_FILE="${repo_dir}/cmake/raspberry-pi-aarch64.cmake" ;;
         mingw) build_target mingw \
                    -DCMAKE_TOOLCHAIN_FILE="${repo_dir}/mingw-w64.cmake" ;;
         *) echo "unknown target: ${target}" >&2; exit 1 ;;

@@ -105,6 +105,8 @@ void ps3_host_cpu_relax(void)
 {
 #if defined(__x86_64__) || defined(__i386__)
     __asm__ __volatile__("pause" ::: "memory");
+#elif defined(__aarch64__) || defined(__arm__)
+    __asm__ __volatile__("yield" ::: "memory");
 #else
     __asm__ __volatile__("" ::: "memory");
 #endif

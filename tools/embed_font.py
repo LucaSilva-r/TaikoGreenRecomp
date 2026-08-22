@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Turn the overlay font into a C source file the executable links in.
+"""Turn the complete UI font into a C source file the executable links in.
 
-The pairing overlay draws digits and a hyphen and nothing else, so the font is
-subset to those glyphs first: a 6.7 MB face becomes ~20 KB, small enough to
-carry as a plain byte array. Without fontTools the whole file is embedded.
+The pairing overlay currently draws only digits and a hyphen, but later UI such
+as custom-song metadata needs the rest of the face. Keep every glyph so build
+results do not depend on whether the host happens to have fontTools installed.
 
 The font itself is never committed -- this runs at configure time against the
 local copy in fonts/ (or --font), and CMake simply skips the embed when that
@@ -13,70 +13,6 @@ file is absent.
 """
 
 import argparse
-import io
-import shutil
-import struct
-import subprocess
-import sys
-
-GLYPHS = "0123456789-"
-
-
-def repair_os2(data: bytes) -> bytes:
-    """This face declares OS/2 version 5 in a table only long enough for
-    version 4, so every reader that decompiles OS/2 raises on it (FreeType
-    does not care, fontTools does). Downgrade the declared version to what
-    actually fits; the trailing fields are only Unicode range hints."""
-    sizes = {5: 100, 4: 96, 3: 96, 2: 96, 1: 86, 0: 78}
-    count = struct.unpack(">H", data[4:6])[0]
-    for i in range(count):
-        entry = 12 + i * 16
-        tag, _, offset, length = struct.unpack(">4sIII", data[entry:entry + 16])
-        if tag != b"OS/2":
-            continue
-        version = struct.unpack(">H", data[offset:offset + 2])[0]
-        if sizes.get(version, 0) <= length:
-            return data
-        fixed = max(v for v, size in sizes.items() if size <= length)
-        print(f"embed_font: OS/2 claims version {version} in {length} bytes, "
-              f"reading it as version {fixed}", file=sys.stderr)
-        return (data[:offset] + struct.pack(">H", fixed)
-                + data[offset + 2:])
-    return data
-
-
-def subset(data: bytes) -> bytes:
-    """Reduce the font to GLYPHS. Returns the input unchanged if fontTools is
-    missing; raises if subsetting produced a font without every glyph."""
-    try:
-        from fontTools import subset as ft_subset
-        from fontTools.ttLib import TTFont
-    except ImportError:
-        print("embed_font: fontTools not available, embedding the whole font "
-              "(pip install fonttools to shrink it to ~3 KB)", file=sys.stderr)
-        return data
-
-    font = TTFont(io.BytesIO(repair_os2(data)))
-    options = ft_subset.Options()
-    options.desubroutinize = True
-    options.drop_tables += ["DSIG", "FFTM"]
-    # This face ships a truncated version-5 OS/2 table; reading it back to
-    # rewrite the range bits raises, and the bits do not matter for rendering.
-    options.prune_unicode_ranges = False
-    options.prune_codepage_ranges = False
-    subsetter = ft_subset.Subsetter(options=options)
-    subsetter.populate(text=GLYPHS)
-    subsetter.subset(font)
-
-    out = io.BytesIO()
-    font.save(out)
-    result = out.getvalue()
-
-    cmap = TTFont(io.BytesIO(result)).getBestCmap()
-    missing = [c for c in GLYPHS if ord(c) not in cmap]
-    if missing:
-        raise SystemExit(f"embed_font: subset lost glyphs {missing!r}")
-    return result
 
 
 def emit(data: bytes, path: str, name: str) -> None:
@@ -90,26 +26,6 @@ def emit(data: bytes, path: str, name: str) -> None:
             f"const unsigned {name}_size = {len(data)}u;\n")
 
 
-def reexec_with_fonttools() -> None:
-    """CMake picks its own Python, which may not be the one with fontTools
-    installed. Hand the job to an interpreter that has it before falling back
-    to embedding the whole 6.7 MB face."""
-    try:
-        import fontTools  # noqa: F401
-        return
-    except ImportError:
-        pass
-    for name in ("python3", "/usr/bin/python3"):
-        exe = shutil.which(name) or (name if name.startswith("/") else None)
-        if not exe or exe == sys.executable:
-            continue
-        probe = subprocess.run([exe, "-c", "import fontTools"],
-                               capture_output=True)
-        if probe.returncode != 0:
-            continue
-        sys.exit(subprocess.run([exe, __file__] + sys.argv[1:]).returncode)
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--font", required=True)
@@ -117,13 +33,10 @@ def main() -> None:
     ap.add_argument("--name", default="taiko_overlay_font")
     args = ap.parse_args()
 
-    reexec_with_fonttools()
-
     with open(args.font, "rb") as f:
         data = f.read()
-    packed = subset(data)
-    emit(packed, args.out, args.name)
-    print(f"embed_font: {args.font} {len(data)} bytes -> {len(packed)} bytes")
+    emit(data, args.out, args.name)
+    print(f"embed_font: embedded complete font ({len(data)} bytes)")
 
 
 if __name__ == "__main__":

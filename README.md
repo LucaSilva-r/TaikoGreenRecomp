@@ -199,6 +199,11 @@ scripts/setup_sdl_gpu_linux.sh    # the same, for the native Linux build
 scripts/build_ffmpeg_mingw.sh     # minimal static ATRAC3plus decoder
 ```
 
+Raspberry Pi 5 has a playable ARM64 SDL_GPU build with Vulkan graphics, SDL3
+input and audio, and in-process ATRAC decoding. Its containerized cross-build,
+deployment, and measured Pi-side behavior are documented in
+[docs/raspberry_pi_arm64.md](docs/raspberry_pi_arm64.md).
+
 Then lift and build:
 
 ```sh

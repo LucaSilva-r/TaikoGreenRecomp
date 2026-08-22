@@ -53,6 +53,23 @@ extern "C" {
 /* Align a value up to `align` (must be power of 2) */
 #define VM_ALIGN_UP(val, align) (((val) + (align) - 1) & ~((align) - 1))
 
+/* Guest pages are 4 KiB, but a host protection boundary can be larger. Linux
+ * on Raspberry Pi commonly uses 16 KiB pages; asking mprotect() for a 4 KiB
+ * guard there protects the whole 16 KiB host page. Stack allocations must use
+ * the host granularity so a guard never overlaps the usable guest stack. */
+static inline uint32_t vm_host_page_size(void)
+{
+#ifdef _WIN32
+    return VM_PAGE_SIZE;
+#else
+    long value = sysconf(_SC_PAGESIZE);
+    if (value < (long)VM_PAGE_SIZE || value > (long)UINT32_MAX ||
+        (value & (value - 1)) != 0)
+        return VM_PAGE_SIZE;
+    return (uint32_t)value;
+#endif
+}
+
 /* ---------------------------------------------------------------------------
  * Global base pointer
  *
@@ -236,10 +253,11 @@ static inline void vm_stack_alloc_init(vm_stack_alloc* sa)
  */
 static inline uint32_t vm_stack_allocate(vm_stack_alloc* sa, uint32_t stack_size)
 {
-    stack_size = VM_ALIGN_UP(stack_size, VM_PAGE_SIZE);
+    const uint32_t page_size = vm_host_page_size();
+    stack_size = VM_ALIGN_UP(stack_size, page_size);
 
-    /* Add a guard page */
-    uint32_t total = stack_size + VM_PAGE_SIZE;
+    /* Add one host-page guard. */
+    uint32_t total = stack_size + page_size;
 
     if (sa->next_addr + total > sa->region_end)
         return 0; /* out of stack space */
@@ -248,9 +266,9 @@ static inline uint32_t vm_stack_allocate(vm_stack_alloc* sa, uint32_t stack_size
     sa->next_addr += total;
 
     /* Guard page at the bottom (no access) */
-    vm_protect(base, VM_PAGE_SIZE, 0, 0, 0);
+    vm_protect(base, page_size, 0, 0, 0);
 
-    return base + VM_PAGE_SIZE; /* skip the guard page */
+    return base + page_size; /* skip the guard page */
 }
 
 /* ---------------------------------------------------------------------------

@@ -26,6 +26,33 @@ static const char* value_after(const char* argument, const char* prefix)
     return strncmp(argument, prefix, length) == 0 ? argument + length : NULL;
 }
 
+static int write_owned_blob(const char* prefix, const char* suffix,
+                            const rsx_owned_blob* blob)
+{
+    char path[1200];
+    int written = snprintf(path, sizeof(path), "%s.%s.bin", prefix, suffix);
+    if (written < 0 || (size_t)written >= sizeof(path)) return -1;
+    FILE* file = fopen(path, "wb");
+    if (!file) return -1;
+    int result = fwrite(blob->data, 1, (size_t)blob->size, file) == blob->size
+        ? 0 : -1;
+    fclose(file);
+    return result;
+}
+
+static void undo_draw_override(rsx_render_batch* batches, u32 first, u32 last,
+                               rsx_draw_op_data* saved,
+                               rsx_render_batch* references,
+                               u32 reference_count)
+{
+    if (saved) {
+        for (u32 i = 0; i <= last - first; ++i)
+            batches[0].operations[first + i].data.draw = saved[i];
+        free(saved);
+    }
+    rsxb_free_batches(references, reference_count);
+}
+
 int main(int argc, char** argv)
 {
     const char* backend = NULL;
@@ -37,6 +64,13 @@ int main(int argc, char** argv)
     u32 blend_override_sfactor = 0;
     u32 blend_override_dfactor = 0;
     int have_blend_override = 0;
+    u32 draw_override_first = 0, draw_override_last = 0;
+    u32 draw_override_ref_first = 0;
+    char draw_override_path[1024] = {0};
+    int have_draw_override = 0;
+    u32 dump_draw_op = 0;
+    char dump_draw_prefix[1024] = {0};
+    int have_dump_draw = 0;
     int inspect = 0, inspect_only = 0;
     for (int i = 1; i < argc; ++i) {
         const char* value;
@@ -67,6 +101,26 @@ int main(int argc, char** argv)
             blend_override_dfactor = (u32)dfactor;
             have_blend_override = 1;
         }
+        else if ((value = value_after(argv[i], "--draw-range-override="))) {
+            char tail;
+            if (sscanf(value, "%u,%u,%1023[^,],%u%c",
+                       &draw_override_first, &draw_override_last,
+                       draw_override_path, &draw_override_ref_first,
+                       &tail) != 4 || draw_override_last < draw_override_first) {
+                fprintf(stderr, "invalid draw range override: %s\n", value);
+                return 2;
+            }
+            have_draw_override = 1;
+        }
+        else if ((value = value_after(argv[i], "--dump-draw="))) {
+            char tail;
+            if (sscanf(value, "%u,%1023s%c", &dump_draw_op,
+                       dump_draw_prefix, &tail) != 2) {
+                fprintf(stderr, "invalid draw dump: %s\n", value);
+                return 2;
+            }
+            have_dump_draw = 1;
+        }
         else if (strcmp(argv[i], "--inspect") == 0) inspect = 1;
         else if (strcmp(argv[i], "--inspect-only") == 0)
             inspect = inspect_only = 1;
@@ -80,7 +134,9 @@ int main(int argc, char** argv)
                 "usage: rsx_replay --backend=sdl_gpu --input=FILE "
                 "--output-dir=DIR [--inspect|--inspect-only] "
                 "[--stop-after-op=N] [--dump-textures=DIR] "
-                "[--blend-override=OP,SFACTOR,DFACTOR]\n");
+                "[--blend-override=OP,SFACTOR,DFACTOR] "
+                "[--draw-range-override=FIRST,LAST,REF_FILE,REF_FIRST] "
+                "[--dump-draw=OP,PREFIX]\n");
         return 2;
     }
     rsx_render_batch* batches = NULL;
@@ -90,9 +146,74 @@ int main(int argc, char** argv)
         fprintf(stderr, "rsx_replay: %s\n", error);
         return 1;
     }
+    if (have_dump_draw) {
+        if (!count || dump_draw_op >= batches[0].operation_count ||
+            batches[0].operations[dump_draw_op].type != RSX_RENDER_OP_DRAW) {
+            fprintf(stderr, "rsx_replay: draw dump operation is invalid\n");
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        const rsx_draw_op_data* draw =
+            &batches[0].operations[dump_draw_op].data.draw;
+        if (write_owned_blob(dump_draw_prefix, "vertices", &draw->vertex_data) ||
+            write_owned_blob(dump_draw_prefix, "constants", &draw->vertex_constants) ||
+            write_owned_blob(dump_draw_prefix, "vertex_shader", &draw->vertex_shader) ||
+            write_owned_blob(dump_draw_prefix, "fragment_shader", &draw->fragment_shader)) {
+            fprintf(stderr, "rsx_replay: draw dump write failed: %s\n",
+                    dump_draw_prefix);
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+    }
+    rsx_render_batch* reference_batches = NULL;
+    u32 reference_count = 0;
+    rsx_draw_op_data* saved_draws = NULL;
+    if (have_draw_override) {
+        if (rsxb_read_file(draw_override_path, &reference_batches,
+                           &reference_count, error, sizeof(error)) != 0) {
+            fprintf(stderr, "rsx_replay: reference: %s\n", error);
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        const u32 override_count = draw_override_last - draw_override_first + 1u;
+        if (!count || !reference_count ||
+            draw_override_last >= batches[0].operation_count ||
+            draw_override_ref_first + override_count >
+                reference_batches[0].operation_count) {
+            fprintf(stderr, "rsx_replay: draw override range is out of bounds\n");
+            rsxb_free_batches(reference_batches, reference_count);
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        saved_draws = calloc(override_count, sizeof(*saved_draws));
+        if (!saved_draws) {
+            fprintf(stderr, "rsx_replay: draw override allocation failed\n");
+            rsxb_free_batches(reference_batches, reference_count);
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        for (u32 i = 0; i < override_count; ++i) {
+            rsx_render_op* destination =
+                &batches[0].operations[draw_override_first + i];
+            const rsx_render_op* source =
+                &reference_batches[0].operations[draw_override_ref_first + i];
+            if (destination->type != RSX_RENDER_OP_DRAW ||
+                source->type != RSX_RENDER_OP_DRAW) {
+                fprintf(stderr, "rsx_replay: draw override includes a non-draw\n");
+                free(saved_draws);
+                rsxb_free_batches(reference_batches, reference_count);
+                rsxb_free_batches(batches, count);
+                return 1;
+            }
+            saved_draws[i] = destination->data.draw;
+            destination->data.draw = source->data.draw;
+        }
+    }
     if (make_directory(output_dir) != 0 && errno != EEXIST) {
         fprintf(stderr, "rsx_replay: cannot create %s: %s\n",
                 output_dir, strerror(errno));
+        undo_draw_override(batches, draw_override_first, draw_override_last,
+                           saved_draws, reference_batches, reference_count);
         rsxb_free_batches(batches, count);
         return 1;
     }
@@ -100,6 +221,8 @@ int main(int argc, char** argv)
         make_directory(dump_texture_dir) != 0 && errno != EEXIST) {
         fprintf(stderr, "rsx_replay: cannot create %s: %s\n",
                 dump_texture_dir, strerror(errno));
+        undo_draw_override(batches, draw_override_first, draw_override_last,
+                           saved_draws, reference_batches, reference_count);
         rsxb_free_batches(batches, count);
         return 1;
     }
@@ -255,12 +378,16 @@ int main(int argc, char** argv)
         }
     }
     if (inspect_only) {
+        undo_draw_override(batches, draw_override_first, draw_override_last,
+                           saved_draws, reference_batches, reference_count);
         rsxb_free_batches(batches, count);
         return 0;
     }
     if (ps3_host_sdl_init(PS3_HOST_SDL_VIDEO | PS3_HOST_SDL_GAMEPAD) != 0 ||
         rsx_sdl_gpu_backend_main_init(1280, 720, "RSX batch replay") != 0) {
         ps3_host_sdl_shutdown();
+        undo_draw_override(batches, draw_override_first, draw_override_last,
+                           saved_draws, reference_batches, reference_count);
         rsxb_free_batches(batches, count);
         return 1;
     }
@@ -302,6 +429,8 @@ int main(int argc, char** argv)
     unsigned errors = rsx_sdl_gpu_backend_error_count();
     rsx_sdl_gpu_backend_main_shutdown();
     ps3_host_sdl_shutdown();
+    undo_draw_override(batches, draw_override_first, draw_override_last,
+                       saved_draws, reference_batches, reference_count);
     rsxb_free_batches(batches, count);
     if (errors) {
         fprintf(stderr, "rsx_replay: renderer reported %u errors\n", errors);

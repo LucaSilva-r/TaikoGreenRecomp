@@ -118,11 +118,22 @@ set(PS3RECOMP_INPUT_BACKEND "${TAIKO_INPUT_BACKEND}" CACHE STRING
     "ps3recomp input backend" FORCE)
 set(PS3RECOMP_AUDIO_BACKEND "${TAIKO_AUDIO_BACKEND}" CACHE STRING
     "ps3recomp audio backend" FORCE)
-set(TAIKO_FFMPEG_ROOT "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-mingw"
-    CACHE PATH "Prefix produced by scripts/build_ffmpeg_mingw.sh")
+if(WIN32)
+    set(_TAIKO_FFMPEG_ROOT_DEFAULT
+        "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-mingw")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(_TAIKO_FFMPEG_ROOT_DEFAULT
+        "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-rpi-arm64")
+else()
+    set(_TAIKO_FFMPEG_ROOT_DEFAULT "")
+endif()
+set(TAIKO_FFMPEG_ROOT "${_TAIKO_FFMPEG_ROOT_DEFAULT}"
+    CACHE PATH "Optional target prefix containing the minimal static FFmpeg build")
 
 if(WIN32)
     set(_TAIKO_SDL_GPU_ROOT_DEFAULT "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-mingw")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(_TAIKO_SDL_GPU_ROOT_DEFAULT "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-rpi-arm64")
 else()
     set(_TAIKO_SDL_GPU_ROOT_DEFAULT "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-linux")
 endif()
@@ -186,6 +197,18 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
         set(_TAIKO_FIND_ROOT_INCLUDE "${CMAKE_FIND_ROOT_PATH_MODE_INCLUDE}")
         set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
         set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+    elseif(CMAKE_CROSSCOMPILING)
+        # The pinned AArch64 DXC is staged inside the source tree, outside the
+        # Debian target sysroot.  Give shadercross's package module exact target
+        # paths so CMake does not prepend CMAKE_FIND_ROOT_PATH to them.
+        set(DirectXShaderCompiler_INCLUDE_PATH
+            "${DirectXShaderCompiler_ROOT}/include/dxc" CACHE PATH "" FORCE)
+        set(DirectXShaderCompiler_dxcompiler_LIBRARY
+            "${DirectXShaderCompiler_ROOT}/lib/libdxcompiler.so"
+            CACHE FILEPATH "" FORCE)
+        set(DirectXShaderCompiler_dxil_LIBRARY
+            "${DirectXShaderCompiler_ROOT}/lib/libdxil.so"
+            CACHE FILEPATH "" FORCE)
     endif()
     # SDL_shadercross's config resolves SPIRV-Cross through ordinary cached
     # package variables.  A build directory reused between native and MinGW
@@ -342,7 +365,7 @@ target_include_directories(taiko_boot PRIVATE
 )
 
 if(TAIKO_INPROCESS_ATRAC)
-    if(WIN32)
+    if(TAIKO_FFMPEG_ROOT)
         set(TAIKO_FFMPEG_LIBS
             "${TAIKO_FFMPEG_ROOT}/lib/libavformat.a"
             "${TAIKO_FFMPEG_ROOT}/lib/libavcodec.a"
@@ -351,8 +374,8 @@ if(TAIKO_INPROCESS_ATRAC)
         if(NOT EXISTS "${TAIKO_FFMPEG_ROOT}/include/libavcodec/avcodec.h" OR
            NOT EXISTS "${TAIKO_FFMPEG_ROOT}/lib/libavcodec.a")
             message(FATAL_ERROR
-                "TAIKO_INPROCESS_ATRAC=ON requires the minimal MinGW FFmpeg build. "
-                "Run scripts/build_ffmpeg_mingw.sh, then configure again.")
+                "TAIKO_INPROCESS_ATRAC=ON requires the minimal target FFmpeg "
+                "build at ${TAIKO_FFMPEG_ROOT}.")
         endif()
         set(TAIKO_FFMPEG_INCLUDE_DIRS "${TAIKO_FFMPEG_ROOT}/include")
     else()
@@ -374,10 +397,14 @@ endif()
 # services are HTTPS and the title's own cellSsl is a lifecycle shell. Vendored
 # rather than taken from the host so Linux and MinGW run one code path.
 if(WIN32)
-    set(TAIKO_MBEDTLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-mingw")
+    set(_TAIKO_MBEDTLS_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-mingw")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(_TAIKO_MBEDTLS_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-rpi-arm64")
 else()
-    set(TAIKO_MBEDTLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-linux")
+    set(_TAIKO_MBEDTLS_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-linux")
 endif()
+set(TAIKO_MBEDTLS_ROOT "${_TAIKO_MBEDTLS_ROOT_DEFAULT}" CACHE PATH
+    "Target mbedTLS installation prefix")
 find_library(TAIKO_MBEDTLS_SSL    mbedtls    PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_library(TAIKO_MBEDTLS_X509   mbedx509   PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_library(TAIKO_MBEDTLS_CRYPTO mbedcrypto PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
@@ -403,10 +430,14 @@ endif()
 # game's own font. Vendored for the same reason as mbedTLS: one code path for
 # both targets, and no extra system package for the MinGW build.
 if(WIN32)
-    set(TAIKO_FREETYPE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-mingw")
+    set(_TAIKO_FREETYPE_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-mingw")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(_TAIKO_FREETYPE_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-rpi-arm64")
 else()
-    set(TAIKO_FREETYPE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-linux")
+    set(_TAIKO_FREETYPE_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-linux")
 endif()
+set(TAIKO_FREETYPE_ROOT "${_TAIKO_FREETYPE_ROOT_DEFAULT}" CACHE PATH
+    "Target FreeType installation prefix")
 find_library(TAIKO_FREETYPE_LIB freetype
     PATHS "${TAIKO_FREETYPE_ROOT}/lib" "${TAIKO_FREETYPE_ROOT}/lib64"
     NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
@@ -420,11 +451,10 @@ set_source_files_properties(
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_FREETYPE_ROOT}/include/freetype2")
 target_link_libraries(taiko_boot PRIVATE "${TAIKO_FREETYPE_LIB}")
 
-# The overlay font is not in the repository (it is a licensed face). When a copy
-# is present it is subset to the digits and hyphen the pairing overlay draws --
-# about 3 KB -- and linked in, so the executable is a drop-in with no font file
-# beside it. Without a copy the overlay falls back to loading TAIKO_OVERLAY_FONT
-# (or fonts/font.ttf) at runtime, exactly as before.
+# Embed the complete tracked UI font so future UI such as custom-song metadata
+# retains every glyph and the executable is a drop-in with no font file beside
+# it. A build configured with an absent/empty path falls back
+# to loading TAIKO_OVERLAY_FONT (or fonts/font.ttf) at runtime.
 set(TAIKO_OVERLAY_FONT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/fonts/font.ttf"
     CACHE FILEPATH "Font embedded into the executable for the pairing overlay")
 if(EXISTS "${TAIKO_OVERLAY_FONT_FILE}")
@@ -476,9 +506,14 @@ if(WIN32 AND TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
     taiko_copy_dxc_runtime(taiko_boot)
 endif()
 if(TAIKO_INPROCESS_ATRAC)
-    if(WIN32)
-        target_link_libraries(taiko_boot PRIVATE ${TAIKO_FFMPEG_LIBS}
-            ole32 user32 atomic)
+    if(TAIKO_FFMPEG_ROOT)
+        target_link_libraries(taiko_boot PRIVATE ${TAIKO_FFMPEG_LIBS})
+        if(WIN32)
+            target_link_libraries(taiko_boot PRIVATE ole32 user32 atomic)
+        else()
+            target_link_libraries(taiko_boot PRIVATE Threads::Threads m
+                ${CMAKE_DL_LIBS})
+        endif()
     else()
         target_link_libraries(taiko_boot PRIVATE PkgConfig::TAIKO_FFMPEG)
     endif()
@@ -525,7 +560,15 @@ endif()
 # so multi-megabyte fills stall for tens of seconds each and read as the
 # intermittent "stuck on LOADING" hang. Raising to -O2 buys throughput at the
 # cost of build time; drop back to -O1 if compiling becomes intolerable.
-set_source_files_properties(${RECOMP_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-w")
+# Lifted VMX code intentionally views each vector-register union through byte,
+# halfword, word, float, and double pointers.  GCC's strict-aliasing optimiser
+# can otherwise treat those accesses as independent: on AArch64 this caused
+# func_0051F8EC's matrix inverse to return its input unchanged while the same
+# generated source worked on x86-64.  ps3recomp's runtime and project template
+# already require this flag for their endian/register unions; the lifted TUs
+# need it for the same reason.
+set_source_files_properties(${RECOMP_SOURCES}
+    PROPERTIES COMPILE_OPTIONS "-O2;-w;-fno-strict-aliasing")
 if(MINGW)
     # MinGW's scalar fmaf implementation is a sizeable software routine. The
     # lifted audio mixer executes four fmaf calls for every SPU FMA instruction,
@@ -551,6 +594,14 @@ set_property(GLOBAL PROPERTY JOB_POOLS taiko_compile=${TAIKO_COMPILE_JOBS} taiko
 set_target_properties(taiko_boot PROPERTIES
     JOB_POOL_COMPILE taiko_compile
     JOB_POOL_LINK    taiko_link)
+if(NOT WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$" AND
+   TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
+    # The Pi artifact is deployed as bundle/{taiko_boot,lib/libdxcompiler.so}.
+    # Do not bake the cross-build container's /src path into the executable.
+    set_target_properties(taiko_boot PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN/lib")
+endif()
 
 include(CTest)
 if(BUILD_TESTING AND TAIKO_RSX_BACKEND STREQUAL "null" AND

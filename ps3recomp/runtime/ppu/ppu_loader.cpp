@@ -197,11 +197,7 @@ static inline void resv_lock(volatile int* L)
 {
     while (__atomic_exchange_n(L, 1, __ATOMIC_ACQUIRE))
         while (__atomic_load_n(L, __ATOMIC_RELAXED))
-#ifdef _WIN32
-            YieldProcessor();
-#else
-            __builtin_ia32_pause();
-#endif
+            ps3_host_cpu_relax();
 }
 static inline void resv_unlock(volatile int* L) { __atomic_store_n(L, 0, __ATOMIC_RELEASE); }
 
@@ -579,8 +575,13 @@ uint16_t vm_read16(uint64_t a) { if (vm_oob((uint32_t)a,2)) return 0;
       } } else { last=(uint32_t)a; n=0; } }
     return __builtin_bswap16(v); }
 uint32_t vm_read32(uint64_t a) { if (vm_oob((uint32_t)a,4)) return 0;
-    if (!g_vm_diag_enabled) { uint32_t v; memcpy(&v, vm_base + (uint32_t)a, 4); return __builtin_bswap32(v); }
-    uint32_t v; memcpy(&v, vm_base + (uint32_t)a, 4);
+    uint32_t v;
+    if ((uint32_t)a >= 0x03002000u && (uint32_t)a <= 0x03002008u &&
+        !((uint32_t)a & 3u))
+        v = __atomic_load_n((uint32_t*)(vm_base + (uint32_t)a), __ATOMIC_ACQUIRE);
+    else
+        memcpy(&v, vm_base + (uint32_t)a, 4);
+    if (!g_vm_diag_enabled) return __builtin_bswap32(v);
     g_last_rd_addr = (uint32_t)a; g_last_rd_val = __builtin_bswap32(v);
     { static int64_t rw=-2; if (rw==-2) { const char* e=getenv("YDKJ_RWATCH"); rw=e?(int64_t)strtoul(e,0,0):-1; }
       if (rw>=0) { uint32_t ea=(uint32_t)a; if (ea>=(uint32_t)rw && ea<(uint32_t)rw+0x80) {
@@ -730,7 +731,16 @@ void vm_write16(uint64_t a, uint16_t v) { if (vm_oob((uint32_t)a,2)) return;
         fprintf(stderr,"[WWATCH] write16 0x%08X = 0x%04X  ra=%p\n", ea, v, __builtin_return_address(0)); } }
     v = __builtin_bswap16(v); memcpy(vm_base + (uint32_t)a, &v, 2); }
 void vm_write32(uint64_t a, uint32_t v) { if (vm_oob((uint32_t)a,4)) return;
-    if (!g_vm_diag_enabled) { v = __builtin_bswap32(v); memcpy(vm_base + (uint32_t)a, &v, 4); return; }
+    if (!g_vm_diag_enabled) {
+        v = __builtin_bswap32(v);
+        if ((uint32_t)a >= 0x03002000u && (uint32_t)a <= 0x03002008u &&
+            !((uint32_t)a & 3u))
+            __atomic_store_n((uint32_t*)(vm_base + (uint32_t)a), v,
+                             __ATOMIC_RELEASE);
+        else
+            memcpy(vm_base + (uint32_t)a, &v, 4);
+        return;
+    }
     { static int64_t w=-2; if (w==-2) { const char* e=getenv("YDKJ_WWATCH"); w = e?(int64_t)strtoul(e,0,0):-1; }
       if (w>=0) { uint32_t ea=(uint32_t)a; if (ea>=(uint32_t)w && ea<(uint32_t)w+0x40) {
 #ifdef _WIN32
@@ -822,7 +832,13 @@ void vm_write32(uint64_t a, uint32_t v) { if (vm_oob((uint32_t)a,4)) return;
         for(int i=0;i<fr;i++) p+=snprintf(ln+p,sizeof(ln)-p," %llX",(unsigned long long)((char*)bt[i]-mb));
         fprintf(stderr,"%s\n",ln); } } }
 #endif
-    v = __builtin_bswap32(v); memcpy(vm_base + (uint32_t)a, &v, 4); }
+    v = __builtin_bswap32(v);
+    if ((uint32_t)a >= 0x03002000u && (uint32_t)a <= 0x03002008u &&
+        !((uint32_t)a & 3u))
+        __atomic_store_n((uint32_t*)(vm_base + (uint32_t)a), v,
+                         __ATOMIC_RELEASE);
+    else
+        memcpy(vm_base + (uint32_t)a, &v, 4); }
 void vm_write64(uint64_t a, uint64_t v) { if (vm_oob((uint32_t)a,8)) return;
     if (!g_vm_diag_enabled) { v = __builtin_bswap64(v); memcpy(vm_base + (uint32_t)a, &v, 8); return; }
     { static int64_t w=-2; if (w==-2) { const char* e=getenv("YDKJ_WWATCH"); w = e?(int64_t)strtoul(e,0,0):-1; }

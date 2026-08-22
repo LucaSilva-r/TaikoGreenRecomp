@@ -209,15 +209,15 @@ the shadercross path the backend already uses, and its four vertices come from
 and the overlay clears itself when the code expires or the card arrives.
 
 The font is `fonts/font.ttf` (DFPKanTeiRyu-XB, the face the title itself uses),
-tracked so the code is legible without any setup. CMake subsets it at configure
-time to the eleven glyphs the overlay draws -- ten digits and a hyphen, 6.7 MB
-down to about 3 KB -- with `tools/embed_font.py`, and links the result in, so
-the executable needs no font file beside it. `TAIKO_OVERLAY_FONT` still points
+tracked so the code is legible without any setup. CMake embeds the complete
+face with `tools/embed_font.py` and links it in, preserving all glyphs for
+future UI such as custom-song metadata while requiring no font file beside the
+executable. `TAIKO_OVERLAY_FONT` still points
 the overlay at a file at runtime and wins over the embedded copy;
 `-DTAIKO_OVERLAY_FONT_FILE=` selects which font gets embedded, and a build with
 that file absent simply falls back to loading one at runtime.
-`tools/tests/test_overlay_font.c` rasterizes all eleven glyphs from the embedded
-copy, which is what catches a subset that loads but draws blank boxes.
+`tools/tests/test_overlay_font.c` rasterizes all eleven pairing glyphs from the
+embedded copy, which catches a font that loads but draws blank boxes.
 
 `pairing_token` and `cabinet_id` can also live in `taiko_online.cfg`. The
 cabinet id defaults to eight hex digits derived from the host name, so it is

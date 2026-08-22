@@ -61,7 +61,14 @@ static inline uint16_t vm_read16(uint32_t addr)
 static inline uint32_t vm_read32(uint32_t addr)
 {
     uint32_t raw;
-    memcpy(&raw, vm_ptr8(addr), sizeof(raw));
+    /* The guest publishes GCM FIFO work through the control register while a
+     * host thread consumes it. Plain memcpy loads/stores happened to work on
+     * x86, but ARM can expose PUT before the command and resource writes that
+     * precede it. Treat all three control words as release/acquire handoffs. */
+    if (addr >= 0x03002000u && addr <= 0x03002008u && !(addr & 3u))
+        raw = __atomic_load_n(vm_ptr32(addr), __ATOMIC_ACQUIRE);
+    else
+        memcpy(&raw, vm_ptr8(addr), sizeof(raw));
     return ps3_bswap32(raw);
 }
 
@@ -124,7 +131,10 @@ static inline void vm_write16(uint32_t addr, uint16_t val)
 static inline void vm_write32(uint32_t addr, uint32_t val)
 {
     uint32_t raw = ps3_bswap32(val);
-    memcpy(vm_ptr8(addr), &raw, sizeof(raw));
+    if (addr >= 0x03002000u && addr <= 0x03002008u && !(addr & 3u))
+        __atomic_store_n(vm_ptr32(addr), raw, __ATOMIC_RELEASE);
+    else
+        memcpy(vm_ptr8(addr), &raw, sizeof(raw));
     if (g_resv_store_active > 0) ppu_resv_break_store(addr);
 }
 

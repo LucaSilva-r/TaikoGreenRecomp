@@ -1,0 +1,70 @@
+[Unit]
+Description=TaikOS TaikoRecomp ARM64 SDL kiosk
+After=systemd-user-sessions.service systemd-logind.service sound.target network-online.target
+Wants=systemd-user-sessions.service network-online.target
+Conflicts=getty@tty1.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=taikos
+Group=taikos
+SupplementaryGroups=audio input render video
+PAMName=login
+UtmpIdentifier=tty1
+TTYPath=/dev/tty1
+StandardInput=tty-force
+StandardOutput=journal
+StandardError=journal
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+WorkingDirectory=/var/lib/taikos/recomp
+EnvironmentFile=-/etc/taikos/taikos.env
+Environment=HOME=/var/lib/taikos
+Environment=XDG_CONFIG_HOME=/var/lib/taikos/config
+Environment=XDG_CACHE_HOME=/var/lib/taikos/cache
+Environment=XDG_DATA_HOME=/var/lib/taikos/data
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=LD_LIBRARY_PATH=/var/lib/taikos/recomp/lib
+Environment=SDL_VIDEODRIVER=wayland
+Environment=SDL_AUDIODRIVER=alsa
+Environment=TAIKOS_OUTPUT_MODE=1920x1080@60Hz
+Environment=TAIKO_GPU_DRIVER=vulkan
+Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*
+Environment=PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs
+Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
+Environment=FLOW_NOSPILL=1
+Environment=TAIKO_DNS_LOOPBACK=1
+Environment=TAIKO_AUDIO_SPU=1
+# V3DV needs completed display targets kept separate from the texture sampled
+# by presentation. Three targets preserve that synchronization without a
+# full-GPU fence every frame; match the SDL swapchain depth to the target ring.
+Environment=TAIKO_GPU_SERIAL_PRESENT=1
+Environment=TAIKO_GPU_PIPELINED_PRESENT=1
+# Three in-flight frames. One was tried and is a net regression: it helped the
+# 169-draw scene but took the ordinary 149-draw scenes from a flat 60.0 down to
+# a 54.2 median. Do not lower this without measuring the light scenes too.
+Environment=TAIKO_FRAMES_IN_FLIGHT=3
+# V3DV also needs a queue submission boundary between dynamic buffer uploads
+# and draws; without it, stale vertex/constant data appears as atlas rectangles.
+Environment=TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1
+# Keep F10 useful on the appliance without auto-capturing during startup.
+# The fixed path bounds disk use: a later capture replaces the previous one.
+Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb
+Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=30
+# RSX_VERTEX_TRACE and TAIKO_VERTEX_RACE_TRACE are deliberately absent: the
+# race trace hashes every skin job and vertex buffer and scans indexed
+# triangles, which costs several FPS. Add them to /etc/taikos/taikos.env only
+# while diagnosing.
+ExecStart=/usr/bin/cage -d -s -- /usr/local/bin/taiko-recomp-session
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=10s
+Nice=-5
+LimitNOFILE=524288
+
+[Install]
+WantedBy=multi-user.target

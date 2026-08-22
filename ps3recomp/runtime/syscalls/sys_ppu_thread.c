@@ -198,6 +198,7 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
 
     if (stack_size == 0) stack_size = VM_PPU_STACK_SIZE;
     if (stack_size < 0x4000) stack_size = 0x4000; /* 16 KB minimum */
+    stack_size = VM_ALIGN_UP(stack_size, vm_host_page_size());
 
     table_lock();
 
