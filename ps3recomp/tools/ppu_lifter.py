@@ -42,6 +42,15 @@ HEADER_PREAMBLE = """\
 #include <stdint.h>
 #include <string.h>
 
+/* Guest memory barriers. x86 is TSO, so lifting sync/isync to nothing
+ * happened to work there; AArch64 reorders freely and the C compiler reorders
+ * on every target, so the guest's own barriers must survive the lift. Dropping
+ * them shows up as a consumer thread reading a half-published buffer: missing
+ * triangles, untextured quads, stale display lists. */
+#define PPU_SYNC()   __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#define PPU_LWSYNC() __atomic_thread_fence(__ATOMIC_ACQ_REL)
+#define PPU_ISYNC()  __atomic_thread_fence(__ATOMIC_ACQUIRE)
+
 /* 128-bit vector register for VMX/AltiVec */
 typedef union {
     uint8_t  b[16];
@@ -122,7 +131,13 @@ static inline uint16_t ppu_vm_read16_fast(uint64_t addr) {
 static inline uint32_t ppu_vm_read32_fast(uint64_t addr) {
     uint32_t ea = (uint32_t)addr, v;
     if (ppu_vm_needs_slow_path(ea, 4)) return vm_read32(addr);
-    memcpy(&v, vm_base + ea, 4); return __builtin_bswap32(v);
+    /* GCM PUT/GET/REF are a cross-thread producer/consumer handoff. ARM needs
+     * explicit ordering so PUT cannot become visible before FIFO payloads. */
+    if (ea >= 0x03002000u && ea <= 0x03002008u && !(ea & 3u))
+        v = __atomic_load_n((uint32_t*)(vm_base + ea), __ATOMIC_ACQUIRE);
+    else
+        memcpy(&v, vm_base + ea, 4);
+    return __builtin_bswap32(v);
 }
 static inline uint64_t ppu_vm_read64_fast(uint64_t addr) {
     uint32_t ea = (uint32_t)addr; uint64_t v;
@@ -142,7 +157,11 @@ static inline void ppu_vm_write16_fast(uint64_t addr, uint16_t v) {
 static inline void ppu_vm_write32_fast(uint64_t addr, uint32_t v) {
     uint32_t ea = (uint32_t)addr;
     if (ppu_vm_needs_slow_path(ea, 4)) { vm_write32(addr, v); return; }
-    v = __builtin_bswap32(v); memcpy(vm_base + ea, &v, 4);
+    v = __builtin_bswap32(v);
+    if (ea >= 0x03002000u && ea <= 0x03002008u && !(ea & 3u))
+        __atomic_store_n((uint32_t*)(vm_base + ea), v, __ATOMIC_RELEASE);
+    else
+        memcpy(vm_base + ea, &v, 4);
 }
 static inline void ppu_vm_write64_fast(uint64_t addr, uint64_t v) {
     uint32_t ea = (uint32_t)addr;
@@ -345,8 +364,10 @@ static inline uint64_t ppu_res_bswap64(uint64_t v) {
     return ((uint64_t)ppu_res_bswap32((uint32_t)v) << 32) | ppu_res_bswap32((uint32_t)(v >> 32));
 }
 static inline uint32_t ppu_res_lwarx(ppu_context* ctx, uint64_t ea) {
-    uint32_t raw;
-    memcpy(&raw, vm_base + (uint32_t)ea, 4);
+    /* Acquire: a guest lock taken with lwarx/stwcx must order the loads
+     * that follow it. The guest's isync does that on hardware; keep the
+     * ordering here too so a relaxed load cannot hoist past the lock. */
+    uint32_t raw = __atomic_load_n((uint32_t*)(vm_base + (uint32_t)ea), __ATOMIC_ACQUIRE);
     ctx->reserve_addr  = (uint32_t)ea;
     ctx->reserve_value = raw;              /* raw guest (big-endian) bytes */
     ctx->reserve_valid = 1;
@@ -371,8 +392,10 @@ static inline void ppu_res_stwcx(ppu_context* ctx, uint64_t ea, uint32_t val) {
                  :  (ctx->cr & ~(0xFu << 28));
 }
 static inline uint64_t ppu_res_ldarx(ppu_context* ctx, uint64_t ea) {
-    uint64_t raw;
-    memcpy(&raw, vm_base + (uint32_t)ea, 8);
+    /* Acquire: a guest lock taken with lwarx/stwcx must order the loads
+     * that follow it. The guest's isync does that on hardware; keep the
+     * ordering here too so a relaxed load cannot hoist past the lock. */
+    uint64_t raw = __atomic_load_n((uint64_t*)(vm_base + (uint32_t)ea), __ATOMIC_ACQUIRE);
     ctx->reserve_addr  = (uint32_t)ea;
     ctx->reserve_value = raw;
     ctx->reserve_valid = 1;
@@ -2137,9 +2160,16 @@ class PPULifter:
             return (f"{{ uint64_t ea = ({_xea(ra,rb)}) & ~0x7FULL; "
                     f"memset(vm_base + (uint32_t)ea, 0, 128); }}")
 
-        if mn in ("dcbt", "dcbtst", "dcbf", "dcbst", "dcba", "icbi",
-                  "sync", "eieio", "isync", "lwsync", "ptesync"):
-            return f"/* {mn}: cache/sync — no-op */;"
+        if mn in ("dcbt", "dcbtst", "dcbf", "dcbst", "dcba", "icbi"):
+            return f"/* {mn}: cache hint — no-op */;"
+
+        # Real barriers. See PPU_SYNC in the header preamble.
+        if mn in ("sync", "eieio", "ptesync"):
+            return f"PPU_SYNC(); /* {mn} */"
+        if mn == "lwsync":
+            return "PPU_LWSYNC();"
+        if mn == "isync":
+            return "PPU_ISYNC();"
 
         # ------- addme/subfme/subfze (carry arithmetic, 2-op) -------
         if mn.startswith("addme"):

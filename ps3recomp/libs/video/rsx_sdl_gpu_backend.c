@@ -26,6 +26,10 @@
 #define SDL_RSX_MAX_SAMPLERS 64u
 #define SDL_RSX_SHADER_DIALECT_VERSION 2u
 #define SDL_RSX_PACE_SAMPLES 256u
+/* Four, not three: with three, the slot chosen for presentation is the same
+ * slot the next batch renders into, so a frame that runs long lets the next
+ * clear and draws land in the texture the present blit is still reading. */
+#define SDL_RSX_PRESENT_SLOTS 4u
 
 typedef struct shader_entry {
     u64 hash;
@@ -96,6 +100,12 @@ typedef struct gamepad_slot {
     unsigned levels;
 } gamepad_slot;
 
+typedef struct dynamic_upload {
+    SDL_GPUBuffer* buffer;
+    SDL_GPUTransferBuffer* transfer;
+    u32 capacity;
+} dynamic_upload;
+
 typedef struct sdl_rsx_state {
     SDL_Window* window;
     SDL_GPUDevice* device;
@@ -103,6 +113,7 @@ typedef struct sdl_rsx_state {
     SDL_Condition* queue_space;
     SDL_Condition* snapshot_done;
     queued_batch queue[SDL_RSX_QUEUE_DEPTH];
+    unsigned queue_limit;   /* 0 until init; queue_depth() treats that as full depth */
     unsigned queue_read;
     unsigned queue_write;
     unsigned queue_count;
@@ -110,6 +121,15 @@ typedef struct sdl_rsx_state {
     gpu_surface surfaces[SDL_RSX_MAX_SURFACES];
     unsigned surface_count;
     SDL_GPUTexture* display;
+    SDL_GPUTexture* presentation_override;
+    int fence_present;
+    SDL_GPUTexture* presentation_slots[SDL_RSX_PRESENT_SLOTS];
+    SDL_GPUFence* presentation_fences[SDL_RSX_PRESENT_SLOTS];
+    unsigned presentation_write;
+    unsigned presentation_last;
+    unsigned presentation_submitted;
+    int presentation_valid;
+    int presentation_pipeline_disabled;
     gamepad_slot gamepads[2];
     shader_entry shaders[SDL_RSX_MAX_SHADERS];
     unsigned shader_count;
@@ -122,6 +142,8 @@ typedef struct sdl_rsx_state {
     u64 texture_evictions;
     SDL_GPUTexture* white_texture;
     SDL_GPUSampler* default_sampler;
+    dynamic_upload vertex_constants_upload;
+    dynamic_upload vertices_upload;
     sampler_entry samplers[SDL_RSX_MAX_SAMPLERS];
     unsigned sampler_count;
     unsigned errors;
@@ -134,6 +156,9 @@ typedef struct sdl_rsx_state {
     Uint64 perf_vertices_ns;
     Uint64 perf_render_ns;
     Uint64 perf_present_ns;
+    Uint64 perf_acquire_ns;
+    Uint64 perf_blit_ns;
+    Uint64 perf_fence_ns;
     Uint64 perf_render_passes;
     unsigned last_batch_draws;
     int fps_log;
@@ -335,6 +360,125 @@ static int submit_commands(SDL_GPUCommandBuffer* commands)
         ++s_sdl.errors;
         return -1;
     }
+    return 0;
+}
+
+static int submit_commands_and_wait(SDL_GPUCommandBuffer* commands)
+{
+    if (!commands) return -1;
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
+    if (!fence) {
+        fprintf(stderr, "[SDL_GPU] fenced command submission failed: %s\n",
+                SDL_GetError());
+        ++s_sdl.errors;
+        return -1;
+    }
+    SDL_GPUFence* fences[] = { fence };
+    int result = 0;
+    if (!SDL_WaitForGPUFences(s_sdl.device, true, fences, 1)) {
+        fprintf(stderr, "[SDL_GPU] render/present fence wait failed: %s\n",
+                SDL_GetError());
+        ++s_sdl.errors;
+        result = -1;
+    }
+    SDL_ReleaseGPUFence(s_sdl.device, fence);
+    return result;
+}
+
+static int wait_and_release_fence(SDL_GPUFence** fence_ptr)
+{
+    if (!fence_ptr || !*fence_ptr) return 0;
+    SDL_GPUFence* fences[] = { *fence_ptr };
+    int result = 0;
+    if (!SDL_WaitForGPUFences(s_sdl.device, true, fences, 1)) {
+        fprintf(stderr, "[SDL_GPU] pipelined presentation fence failed: %s\n",
+                SDL_GetError());
+        ++s_sdl.errors;
+        result = -1;
+    }
+    SDL_ReleaseGPUFence(s_sdl.device, *fence_ptr);
+    *fence_ptr = NULL;
+    return result;
+}
+
+static SDL_GPUTexture* create_presentation_slot(void)
+{
+    SDL_GPUTextureCreateInfo info;
+    SDL_zero(info);
+    info.type = SDL_GPU_TEXTURETYPE_2D;
+    info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET |
+                 SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width = SDL_RSX_WIDTH;
+    info.height = SDL_RSX_HEIGHT;
+    info.layer_count_or_depth = 1;
+    info.num_levels = 1;
+    info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    return SDL_CreateGPUTexture(s_sdl.device, &info);
+}
+
+/* Rotate complete display render targets. Frame N renders into one target
+ * while the previous completed target is presented, avoiding both the unsafe
+ * render/sample overlap and a driver-problematic texture-copy operation. */
+static int submit_pipelined_display(SDL_GPUCommandBuffer* commands)
+{
+    if (s_sdl.presentation_pipeline_disabled) return -1;
+    if (!s_sdl.presentation_slots[0]) {
+        s_sdl.presentation_slots[0] = s_sdl.display;
+        for (unsigned i = 1; i < SDL_RSX_PRESENT_SLOTS; ++i) {
+            s_sdl.presentation_slots[i] = create_presentation_slot();
+            if (!s_sdl.presentation_slots[i]) {
+                fprintf(stderr,
+                        "[SDL_GPU] presentation target creation failed: %s\n",
+                        SDL_GetError());
+                ++s_sdl.errors;
+                s_sdl.presentation_pipeline_disabled = 1;
+                return -1;
+            }
+        }
+        s_sdl.presentation_write = 0;
+    }
+    const unsigned slot = s_sdl.presentation_write;
+    if (wait_and_release_fence(&s_sdl.presentation_fences[slot]) != 0) {
+        s_sdl.presentation_pipeline_disabled = 1;
+        return -1;
+    }
+
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
+    if (!fence) {
+        fprintf(stderr, "[SDL_GPU] pipelined display submission failed: %s\n",
+                SDL_GetError());
+        ++s_sdl.errors;
+        s_sdl.presentation_pipeline_disabled = 1;
+        return -1;
+    }
+    s_sdl.presentation_fences[slot] = fence;
+
+    unsigned completed;
+    if (!s_sdl.presentation_valid) {
+        completed = slot;
+    } else if (s_sdl.presentation_submitted < 2u) {
+        completed = s_sdl.presentation_last;
+    } else {
+        /* (slot + 2) is the frame submitted two turns earlier: its GPU work
+         * has had two full CPU preparation windows. The write cursor advances
+         * by one, so this slot is not reused as a render target until two more
+         * frames have passed and its presentation blit is long finished. */
+        completed = (slot + 2u) % SDL_RSX_PRESENT_SLOTS;
+    }
+    if (wait_and_release_fence(&s_sdl.presentation_fences[completed]) != 0) {
+        /* The render command buffer was consumed already. Keep presenting the
+         * previous complete target, then use the fully serialized fallback on
+         * subsequent frames. */
+        s_sdl.presentation_pipeline_disabled = 1;
+        return 1;
+    }
+    s_sdl.presentation_override = s_sdl.presentation_slots[completed];
+    s_sdl.presentation_last = completed;
+    s_sdl.presentation_write = (slot + 1u) % SDL_RSX_PRESENT_SLOTS;
+    s_sdl.display = s_sdl.presentation_slots[s_sdl.presentation_write];
+    ++s_sdl.presentation_submitted;
+    s_sdl.presentation_valid = 1;
     return 0;
 }
 
@@ -774,40 +918,68 @@ static SDL_GPUGraphicsPipeline* get_pipeline(const rsx_render_op* op)
     return pipeline;
 }
 
-static SDL_GPUBuffer* upload_buffer(const void* data, u64 size,
-                                    SDL_GPUBufferUsageFlags usage)
+static void release_dynamic_upload(dynamic_upload* upload)
 {
-    if (!data || !size || size > UINT32_MAX) return NULL;
-    SDL_GPUBufferCreateInfo buffer_info;
-    SDL_zero(buffer_info);
-    buffer_info.usage = usage;
-    buffer_info.size = (u32)size;
-    SDL_GPUBuffer* buffer = SDL_CreateGPUBuffer(s_sdl.device, &buffer_info);
-    SDL_GPUTransferBufferCreateInfo transfer_info;
-    SDL_zero(transfer_info);
-    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transfer_info.size = (u32)size;
-    SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(
-        s_sdl.device, &transfer_info);
-    if (!buffer || !transfer) goto fail;
-    void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, transfer, false);
-    if (!mapped) goto fail;
-    memcpy(mapped, data, (size_t)size);
-    SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
-    SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
-    if (!commands) goto fail;
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
-    if (!copy) { SDL_CancelGPUCommandBuffer(commands); goto fail; }
-    SDL_GPUTransferBufferLocation source = {transfer, 0};
-    SDL_GPUBufferRegion destination = {buffer, 0, (u32)size};
-    SDL_UploadToGPUBuffer(copy, &source, &destination, false);
-    SDL_EndGPUCopyPass(copy);
-    if (submit_commands(commands) != 0) goto fail;
-    SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
-    return buffer;
+    if (upload->transfer)
+        SDL_ReleaseGPUTransferBuffer(s_sdl.device, upload->transfer);
+    if (upload->buffer)
+        SDL_ReleaseGPUBuffer(s_sdl.device, upload->buffer);
+    memset(upload, 0, sizeof(*upload));
+}
+
+static void* map_dynamic_upload(dynamic_upload* upload, u64 size,
+                                SDL_GPUBufferUsageFlags usage)
+{
+    if (!upload || !size || size > UINT32_MAX)
+        return NULL;
+    if (upload->capacity < size) {
+        u32 capacity = 65536u;
+        while (capacity < size && capacity <= UINT32_MAX / 2u)
+            capacity *= 2u;
+        if (capacity < size) capacity = (u32)size;
+        release_dynamic_upload(upload);
+
+        SDL_GPUBufferCreateInfo buffer_info;
+        SDL_zero(buffer_info);
+        buffer_info.usage = usage;
+        buffer_info.size = capacity;
+        upload->buffer = SDL_CreateGPUBuffer(s_sdl.device, &buffer_info);
+
+        SDL_GPUTransferBufferCreateInfo transfer_info;
+        SDL_zero(transfer_info);
+        transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        transfer_info.size = capacity;
+        upload->transfer = SDL_CreateGPUTransferBuffer(s_sdl.device,
+                                                       &transfer_info);
+        if (!upload->buffer || !upload->transfer) {
+            release_dynamic_upload(upload);
+            goto fail;
+        }
+        upload->capacity = capacity;
+    }
+    void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, upload->transfer, true);
+    if (mapped) return mapped;
 fail:
-    if (transfer) SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
-    if (buffer) SDL_ReleaseGPUBuffer(s_sdl.device, buffer);
+    fprintf(stderr, "[SDL_GPU] buffer map failed: %s\n", SDL_GetError());
+    ++s_sdl.errors;
+    return NULL;
+}
+
+static SDL_GPUBuffer* commit_dynamic_upload(SDL_GPUCommandBuffer* commands,
+                                            dynamic_upload* upload, u64 size)
+{
+    if (!commands || !upload || !upload->buffer || !upload->transfer ||
+        !size || size > upload->capacity)
+        return NULL;
+    SDL_UnmapGPUTransferBuffer(s_sdl.device, upload->transfer);
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+    if (!copy) goto fail;
+    SDL_GPUTransferBufferLocation source = {upload->transfer, 0};
+    SDL_GPUBufferRegion destination = {upload->buffer, 0, (u32)size};
+    SDL_UploadToGPUBuffer(copy, &source, &destination, true);
+    SDL_EndGPUCopyPass(copy);
+    return upload->buffer;
+fail:
     fprintf(stderr, "[SDL_GPU] buffer upload failed: %s\n", SDL_GetError());
     ++s_sdl.errors;
     return NULL;
@@ -1070,9 +1242,13 @@ static SDL_GPURenderPass* begin_draw_pass(SDL_GPUCommandBuffer* commands,
         depth.clear_depth = 1.0f;
         depth.clear_stencil = 0;
         depth.load_op = SDL_GPU_LOADOP_CLEAR;
-        depth.store_op = SDL_GPU_STOREOP_STORE;
         depth.stencil_load_op = SDL_GPU_LOADOP_CLEAR;
-        depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
+        /* Every pass clears depth/stencil on entry and nothing samples the
+         * buffer, so its contents are never read back. Storing it anyway costs
+         * a full tile write-out per pass, which a tiler like the Pi's V3D pays
+         * in raw memory bandwidth: ten passes a frame at 1280x720 is ~36 MB/f. */
+        depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
+        depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
         depth_ptr = &depth;
     }
     if (!color_count) return NULL;
@@ -1198,7 +1374,8 @@ static void execute_draw(SDL_GPUCommandBuffer* commands,
 static SDL_GPUTexture* presentation_texture(Uint32* source_width,
                                             Uint32* source_height)
 {
-    SDL_GPUTexture* result = s_sdl.display;
+    SDL_GPUTexture* result = s_sdl.presentation_override
+        ? s_sdl.presentation_override : s_sdl.display;
     *source_width = SDL_RSX_WIDTH;
     *source_height = SDL_RSX_HEIGHT;
     const char* requested = getenv("SDL_GPU_VIEW_SURFACE");
@@ -1440,16 +1617,23 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
     SDL_EndGPURenderPass(pass);
 }
 
-static int present_display(void)
+static int present_display(SDL_GPUCommandBuffer* commands)
 {
     if (!s_sdl.display || !s_sdl.window) return -1;
     Uint32 source_width, source_height;
     SDL_GPUTexture* source_texture = presentation_texture(
         &source_width, &source_height);
-    SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+    /* Keep the display render and its presentation blit in one command buffer.
+     * Besides avoiding a needless submit boundary, this gives drivers an
+     * explicit render-target-to-sampled-texture dependency.  V3DV on the Pi 5
+     * otherwise occasionally sampled an incomplete display texture; waiting
+     * on a fence fixed that but serialized every frame and cost 10-20 FPS. */
+    if (!commands)
+        commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
     if (!commands) { ++s_sdl.errors; return -1; }
     SDL_GPUTexture* swapchain = NULL;
     Uint32 width = 0, height = 0;
+    const Uint64 acquire_start_ns = SDL_GetTicksNS();
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(commands, s_sdl.window,
                                                &swapchain, &width, &height)) {
         fprintf(stderr, "[SDL_GPU] swapchain acquisition failed: %s\n", SDL_GetError());
@@ -1457,6 +1641,8 @@ static int present_display(void)
         submit_commands(commands);
         return -1;
     }
+    const Uint64 acquire_end_ns = SDL_GetTicksNS();
+    s_sdl.perf_acquire_ns += acquire_end_ns - acquire_start_ns;
     if (swapchain && width && height) {
         Uint32 draw_w = width;
         Uint32 draw_h = (Uint32)(((Uint64)width * source_height) / source_width);
@@ -1481,7 +1667,22 @@ static int present_display(void)
         draw_overlay(commands, swapchain, width, height,
                      blit.destination.x, blit.destination.y, draw_w, draw_h);
     }
-    return submit_commands(commands);
+    /* V3DV presents a swapchain image whose GPU work is not finished: the
+     * frame shows a diagonal band of completed 128x64 tiles -- V3D's tile size
+     * and supertile order -- while the rest keeps the previous frame or the
+     * blit's clear. Fencing the presentation submission is what removes it.
+     *
+     * Measured on a Pi 5 over 200 s samples of the compositor output, scoring
+     * each frame's edge energy on the tile grid against off-grid: unfenced
+     * reproduces the artifact repeatedly, and merely bounding run-ahead to one
+     * frame (waiting on the *previous* present) does not help -- only the full
+     * wait does. TAIKO_GPU_UNFENCED_PRESENT opts out on drivers that behave. */
+    const Uint64 blit_end_ns = SDL_GetTicksNS();
+    s_sdl.perf_blit_ns += blit_end_ns - acquire_end_ns;
+    const int result = s_sdl.fence_present ? submit_commands_and_wait(commands)
+                                           : submit_commands(commands);
+    s_sdl.perf_fence_ns += SDL_GetTicksNS() - blit_end_ns;
+    return result;
 }
 
 static void update_window_title(void)
@@ -1503,8 +1704,8 @@ static void update_window_title(void)
     if (s_sdl.fps_log)
         fprintf(stderr,
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
-                "cpu_ms(prep=%.2f const=%.2f vert=%.2f render=%.2f present=%.2f) "
-                "passes=%.1f\n",
+                "cpu_ms(prep=%.2f const=%.2f vert=%.2f render=%.2f present=%.2f"
+                "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f\n",
                 fps, s_sdl.last_batch_draws, s_sdl.errors,
                 s_sdl.perf_batches ? (double)s_sdl.perf_prepare_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
@@ -1516,6 +1717,12 @@ static void update_window_title(void)
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_present_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_acquire_ns /
+                    (double)s_sdl.perf_batches / 1000000.0 : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_blit_ns /
+                    (double)s_sdl.perf_batches / 1000000.0 : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_fence_ns /
+                    (double)s_sdl.perf_batches / 1000000.0 : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_render_passes /
                     (double)s_sdl.perf_batches : 0.0);
     s_sdl.fps_window_start_ns = now;
@@ -1526,6 +1733,9 @@ static void update_window_title(void)
     s_sdl.perf_vertices_ns = 0;
     s_sdl.perf_render_ns = 0;
     s_sdl.perf_present_ns = 0;
+    s_sdl.perf_acquire_ns = 0;
+    s_sdl.perf_blit_ns = 0;
+    s_sdl.perf_fence_ns = 0;
     s_sdl.perf_render_passes = 0;
 }
 
@@ -1682,11 +1892,25 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                 s_sdl.sampler_count - old_samplers);
     perf_start = perf_mark;
 
+    /* Record dynamic buffer uploads, display rendering, and presentation into
+     * one command buffer. The previous per-buffer submissions cost several
+     * milliseconds each on V3DV and made the heavy attract frames miss 60 Hz. */
+    SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+    if (!commands) {
+        fprintf(stderr, "[SDL_GPU] batch command acquisition failed: %s\n",
+                SDL_GetError());
+        ++s_sdl.errors;
+        goto done;
+    }
+
     u64 constant_bytes = needs_constants
         ? (u64)batch->operation_count * constant_stride : 0;
     if (constant_bytes && constant_bytes <= UINT32_MAX) {
-        u8* packed = (u8*)calloc(1, (size_t)constant_bytes);
+        u8* packed = (u8*)map_dynamic_upload(
+            &s_sdl.vertex_constants_upload, constant_bytes,
+            SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ);
         if (packed) {
+            memset(packed, 0, (size_t)constant_bytes);
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW) continue;
@@ -1711,10 +1935,8 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                     constants[513][3] = 0.0f;
                 }
             }
-            vertex_constants = upload_buffer(
-                packed, constant_bytes,
-                SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ);
-            free(packed);
+            vertex_constants = commit_dynamic_upload(
+                commands, &s_sdl.vertex_constants_upload, constant_bytes);
         }
     }
     perf_mark = SDL_GetTicksNS();
@@ -1724,7 +1946,9 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
     if (batch->operation_count && vertex_bytes && vertex_bytes <= UINT32_MAX) {
         vertex_offsets = (u32*)malloc(
             (size_t)batch->operation_count * sizeof(*vertex_offsets));
-        u8* packed = (u8*)malloc((size_t)vertex_bytes);
+        u8* packed = (u8*)map_dynamic_upload(
+            &s_sdl.vertices_upload, vertex_bytes,
+            SDL_GPU_BUFFERUSAGE_VERTEX);
         if (vertex_offsets)
             memset(vertex_offsets, 0xff,
                    (size_t)batch->operation_count * sizeof(*vertex_offsets));
@@ -1741,22 +1965,36 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                        (size_t)op->data.draw.vertex_data.size);
                 offset += op->data.draw.vertex_data.size;
             }
-            vertices = upload_buffer(packed, vertex_bytes,
-                                     SDL_GPU_BUFFERUSAGE_VERTEX);
+            vertices = commit_dynamic_upload(
+                commands, &s_sdl.vertices_upload, vertex_bytes);
+        } else if (packed) {
+            SDL_UnmapGPUTransferBuffer(s_sdl.device,
+                                       s_sdl.vertices_upload.transfer);
         }
-        free(packed);
     }
     perf_mark = SDL_GetTicksNS();
     s_sdl.perf_vertices_ns += perf_mark - perf_start;
     perf_start = perf_mark;
 
-    SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
-    if (!commands) {
-        fprintf(stderr, "[SDL_GPU] batch command acquisition failed: %s\n",
-                SDL_GetError());
-        ++s_sdl.errors;
-        goto done;
+    /* V3DV has produced stale vertex/constant data when a command buffer both
+     * uploads and consumes these buffers. Splitting at the queue boundary
+     * preserves asynchronous execution while making the transfer-to-graphics
+     * dependency explicit. Other drivers retain the single-submit path. */
+    if (getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT") &&
+        (vertex_constants || vertices)) {
+        if (submit_commands(commands) != 0) {
+            commands = NULL;
+            goto done;
+        }
+        commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+        if (!commands) {
+            fprintf(stderr, "[SDL_GPU] render command acquisition failed: %s\n",
+                    SDL_GetError());
+            ++s_sdl.errors;
+            goto done;
+        }
     }
+
     SDL_GPURenderPass* active_pass = NULL;
     const rsx_render_op* active_attachments = NULL;
     for (unsigned i = 0; i < batch->operation_count; ++i) {
@@ -1796,19 +2034,45 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
         }
     }
     if (active_pass) SDL_EndGPURenderPass(active_pass);
-    submit_commands(commands);
+    if (getenv("TAIKO_GPU_SERIAL_PRESENT")) {
+        const int pipelined = getenv("TAIKO_GPU_PIPELINED_PRESENT") != NULL;
+        static int announced_mode;
+        if (!announced_mode++) {
+            if (pipelined)
+                fprintf(stderr,
+                        "[SDL_GPU] pipelined presentation with %u display targets\n",
+                        SDL_RSX_PRESENT_SLOTS);
+            else
+                fprintf(stderr,
+                        "[SDL_GPU] serializing display render before present\n");
+        }
+        if (pipelined && !s_sdl.presentation_pipeline_disabled) {
+            const int result = submit_pipelined_display(commands);
+            if (result < 0) {
+                fprintf(stderr,
+                        "[SDL_GPU] pipelined presentation disabled; "
+                        "using serialized fallback\n");
+                s_sdl.presentation_override = NULL;
+                submit_commands_and_wait(commands);
+            } else if (result > 0) {
+                fprintf(stderr,
+                        "[SDL_GPU] pipelined presentation disabled after "
+                        "submission; retaining last complete frame\n");
+            }
+        } else {
+            s_sdl.presentation_override = NULL;
+            submit_commands_and_wait(commands);
+        }
+        commands = NULL;
+    }
 done:
     perf_mark = SDL_GetTicksNS();
     s_sdl.perf_render_ns += perf_mark - perf_start;
     s_sdl.perf_render_passes += render_passes;
     perf_start = perf_mark;
     free(vertex_offsets);
-    if (vertices)
-        SDL_ReleaseGPUBuffer(s_sdl.device, vertices);
-    if (vertex_constants)
-        SDL_ReleaseGPUBuffer(s_sdl.device, vertex_constants);
     const Uint64 present_start_ns = perf_start;
-    if (present_display() == 0)
+    if (present_display(commands) == 0)
         ++s_sdl.fps_window_frames;
     perf_mark = SDL_GetTicksNS();
     s_sdl.perf_present_ns += perf_mark - perf_start;
@@ -1817,12 +2081,17 @@ done:
     update_window_title();
 }
 
+static unsigned queue_depth(void)
+{
+    return s_sdl.queue_limit ? s_sdl.queue_limit : 2u;
+}
+
 static int consumer_submit(void* userdata, const rsx_render_batch* batch)
 {
     (void)userdata;
     if (!batch || !s_sdl.queue_mutex) return -1;
     SDL_LockMutex(s_sdl.queue_mutex);
-    while (s_sdl.queue_count == SDL_RSX_QUEUE_DEPTH && !s_sdl.stopping)
+    while (s_sdl.queue_count >= queue_depth() && !s_sdl.stopping)
         SDL_WaitCondition(s_sdl.queue_space, s_sdl.queue_mutex);
     if (s_sdl.stopping) {
         SDL_UnlockMutex(s_sdl.queue_mutex);
@@ -1953,8 +2222,13 @@ static void handle_event(const SDL_Event* event)
         }
 #ifndef RSX_SDL_REPLAY_STANDALONE
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F10) {
-            const char* path = getenv("RSX_BATCH_CAPTURE");
-            const char* frames = getenv("RSX_BATCH_CAPTURE_FRAMES");
+            /* Hotkey-specific variables do not auto-arm the recorder during
+             * startup. Fall back to the auto-capture names for compatibility
+             * with existing desktop launch scripts. */
+            const char* path = getenv("RSX_BATCH_CAPTURE_HOTKEY");
+            const char* frames = getenv("RSX_BATCH_CAPTURE_HOTKEY_FRAMES");
+            if (!path || !path[0]) path = getenv("RSX_BATCH_CAPTURE");
+            if (!frames || !frames[0]) frames = getenv("RSX_BATCH_CAPTURE_FRAMES");
             rsx_recorder_arm_capture(path && path[0] ? path : "rsx_capture.rsxb",
                                      frames ? (u32)strtoul(frames, NULL, 0) : 1u);
             fprintf(stderr, "[SDL_GPU] F10 armed portable RSX capture\n");
@@ -2166,6 +2440,22 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     snprintf(s_sdl.base_title, sizeof(s_sdl.base_title), "%s",
              title ? title : "Taiko no Tatsujin (ps3recomp)");
     s_sdl.fps_log = getenv("RSX_FPS_LOG") != NULL;
+    s_sdl.fence_present = getenv("TAIKO_GPU_UNFENCED_PRESENT") == NULL;
+    /* The producer is already paced to 60 Hz by the guest's vblank, so queueing
+     * several finished frames buys no throughput -- it only adds latency, and
+     * when the queue does fill the producer blocks until the consumer's next
+     * vsync-locked present, which costs it a whole vblank. Measured at depth 4:
+     * batches waited 41 ms before display and the submit interval went bimodal
+     * at 16.7/33.3 ms. At depth 2 the same scenes waited 7-8 ms with no FPS
+     * cost, so 2 is the default and the full depth stays available. */
+    s_sdl.queue_limit = 2u;
+    const char* depth_text = getenv("TAIKO_RSX_QUEUE_DEPTH");
+    if (depth_text) {
+        int depth = atoi(depth_text);
+        if (depth >= 1 && depth <= (int)SDL_RSX_QUEUE_DEPTH)
+            s_sdl.queue_limit = (unsigned)depth;
+    }
+    fprintf(stderr, "[SDL_GPU] batch queue depth %u\n", s_sdl.queue_limit);
     s_sdl.pace_trace = getenv("RSX_FRAME_PACING_TRACE") != NULL;
     const SDL_InitFlags required_subsystems = SDL_INIT_VIDEO | SDL_INIT_GAMEPAD;
     if ((SDL_WasInit(required_subsystems) & required_subsystems) !=
@@ -2177,10 +2467,19 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
         fprintf(stderr, "[SDL_GPU] shadercross init failed: %s\n", SDL_GetError());
         return -1;
     }
+    /* A kiosk wants the surface fullscreen from the first frame, and not only
+     * for looks: wlroots only hands a buffer straight to the display controller
+     * when one fullscreen surface covers the output and nothing (a cursor, a
+     * second surface) has to be blended over it. As a plain resizable toplevel
+     * the compositor composited every frame instead, which measured 16.6% of
+     * the Pi's GPU -- more than the game itself was using. */
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
+    if (getenv("TAIKO_FULLSCREEN")) window_flags |= SDL_WINDOW_FULLSCREEN;
     s_sdl.window = SDL_CreateWindow(s_sdl.base_title,
                                     SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
-                                    SDL_WINDOW_RESIZABLE);
+                                    window_flags);
     if (!s_sdl.window) goto fail;
+    if (getenv("TAIKO_HIDE_CURSOR")) SDL_HideCursor();
     const char* requested_driver = getenv("TAIKO_GPU_DRIVER");
     if (requested_driver && !requested_driver[0]) requested_driver = NULL;
     s_sdl.device = SDL_CreateGPUDevice(SDL_ShaderCross_GetHLSLShaderFormats(),
@@ -2345,7 +2644,7 @@ int rsx_sdl_gpu_backend_queue_has_capacity(void)
 {
     if (!s_sdl.queue_mutex) return 0;
     SDL_LockMutex(s_sdl.queue_mutex);
-    int result = s_sdl.queue_count < SDL_RSX_QUEUE_DEPTH && !s_sdl.stopping;
+    int result = s_sdl.queue_count < queue_depth() && !s_sdl.stopping;
     SDL_UnlockMutex(s_sdl.queue_mutex);
     return result;
 }
@@ -2466,10 +2765,22 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
         for (unsigned i = 0; i < s_sdl.surface_count; ++i)
             if (s_sdl.surfaces[i].texture)
                 SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.surfaces[i].texture);
+        for (unsigned i = 0; i < SDL_RSX_PRESENT_SLOTS; ++i) {
+            if (s_sdl.presentation_fences[i])
+                SDL_ReleaseGPUFence(s_sdl.device,
+                                    s_sdl.presentation_fences[i]);
+            /* Slot zero is the original display texture and is owned by the
+             * persistent surface table above. */
+            if (i && s_sdl.presentation_slots[i])
+                SDL_ReleaseGPUTexture(s_sdl.device,
+                                      s_sdl.presentation_slots[i]);
+        }
         if (s_sdl.white_texture)
             SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.white_texture);
         if (s_sdl.default_sampler)
             SDL_ReleaseGPUSampler(s_sdl.device, s_sdl.default_sampler);
+        release_dynamic_upload(&s_sdl.vertices_upload);
+        release_dynamic_upload(&s_sdl.vertex_constants_upload);
         if (s_sdl.window) SDL_ReleaseWindowFromGPUDevice(s_sdl.device, s_sdl.window);
         SDL_DestroyGPUDevice(s_sdl.device);
     }

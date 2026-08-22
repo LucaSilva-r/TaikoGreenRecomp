@@ -1533,7 +1533,11 @@ int lv2_try_syscall(ppu_context* ctx)
      * why libsre asserts ESRCH in event_helper.c. Snapshot args BEFORE handler. */
     uint32_t _a3 = (uint32_t)ctx->gpr[3], _a4 = (uint32_t)ctx->gpr[4], _a5 = (uint32_t)ctx->gpr[5];
     ctx->gpr[3] = (uint64_t)h(ctx);
-    if (getenv("YDKJ_GFXSCAN") && num >= 128 && num <= 141) {
+    /* getenv() is a linear scan of environ; this runs on every guest syscall,
+     * so read it once. It measured 1.4% of process CPU when called per call. */
+    static int gfxscan = -1;
+    if (gfxscan < 0) gfxscan = getenv("YDKJ_GFXSCAN") ? 1 : 0;
+    if (gfxscan && num >= 128 && num <= 141) {
         static int _e = 0; if (_e++ < 60)
             fprintf(stderr, "[EVT-SC] #%u(r3=0x%08X r4=0x%08X r5=0x%08X) -> 0x%08X lr=0x%08X\n",
                     num, _a3, _a4, _a5, (uint32_t)ctx->gpr[3], (uint32_t)ctx->lr);

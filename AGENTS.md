@@ -148,6 +148,9 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   of backend-neutral render batches to a `.rsxb`. This replaces the old F9
   capture and is the main tool: it captures what the recorder saw, so a bad
   frame can be replayed offline, repeatedly, without the game running.
+  These variables auto-arm capture at recorder startup. For an F10-only
+  capture, use `RSX_BATCH_CAPTURE_HOTKEY=<file>` and
+  `RSX_BATCH_CAPTURE_HOTKEY_FRAMES=N`; the file is not created until F10.
 - `build-linux/rsx_replay --backend=sdl_gpu <file.rsxb>` — replay a capture.
   Deterministic, and the fastest way to tell a recorder bug from a renderer
   bug: if the capture replays correctly in a fresh process, the defect is in
@@ -292,6 +295,16 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   replay of the 419-operation reproduction exercised continuous eviction and
   was byte-identical to the normal 1024-entry render. For stress testing,
   `RSX_TEXTURE_CACHE_LIMIT=16..1024` lowers the active limit.
+- **Raspberry Pi atlas rectangles are repaired** (2026-08-21; replay
+  validated). A 30-frame F10 capture of the title entrance replayed cleanly on
+  desktop Vulkan but produced random rectangular pieces of the character/title
+  atlases on V3DV. This was stale vertex or vertex-constant buffer data, not a
+  texture budget: V3DV did not reliably expose dynamic buffer uploads to draws
+  later in the same SDL_GPU command buffer. The Pi service now sets
+  `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, which submits uploads before acquiring
+  the render command buffer. GPU queue order keeps the split asynchronous. The
+  exact capture rendered all 30 frames cleanly on the Pi both serialized and
+  with buffer cycling plus three-target pipelined presentation.
 - **Gameplay rainbow masking is repaired** (2026-08-16; capture validated).
   The rainbow transition is a two-draw stencil sequence: an invisible black
   952x384 texture alpha-tests a clean arch into stencil with `ALWAYS`, ref 1,
@@ -520,11 +533,44 @@ sent to one configured host and port over TLS.
   SDL_GPU backend's optional `g_rsx_overlay_frame` hook. That draw is an
   alpha-blended quad, not `SDL_BlitGPUTexture` -- a blit cannot blend, so the
   pill's transparent ends would punch holes in the frame.
-  The font is `fonts/font.ttf`, tracked, and CMake embeds an 11-glyph subset of
-  it (digits and hyphen, ~3 KB) via `tools/embed_font.py` so the executable is a
-  drop-in. `TAIKO_OVERLAY_FONT` overrides it at runtime;
+  The font is `fonts/font.ttf`, tracked, and CMake embeds the complete face via
+  `tools/embed_font.py` so future UI such as custom-song metadata keeps its
+  full glyph set and the executable remains a drop-in. `TAIKO_OVERLAY_FONT` overrides it at runtime;
   `-DTAIKO_OVERLAY_FONT_FILE=` picks a different face to embed.
 - `TAIKO_NET_TRACE=1` logs the first 40 socket operations.
+
+## ARM64 / weakly ordered targets (2026-08-21)
+
+The Raspberry Pi 5 port exposed two defects that x86 hides completely. Both are
+worth checking first on any new weakly ordered target, Android included.
+
+**The lifter dropped every guest memory barrier.** `sync`, `isync`, `lwsync` and
+`eieio` lifted to a comment -- 4774 and 4916 sites respectively in the current
+snapshot. On x86 TSO that costs only compiler ordering; on AArch64 it removes
+the ordering the guest relies on between its seventeen threads. `lwarx`/`ldarx`
+were also plain relaxed loads against an acquire-release `stwcx.` CAS, so guest
+spinlocks had no acquire side. They now emit `PPU_SYNC` / `PPU_LWSYNC` /
+`PPU_ISYNC` fences and acquire loads. A correct ARM64 binary has thousands of
+`dmb` instructions in the lifted code -- `objdump -d | grep -c dmb` is the check.
+
+The symptom class is "a consumer thread read a half-published buffer": missing
+triangles, untextured quads, corrupt geometry, all non-deterministic and all
+absent on desktop.
+
+**V3DV presents swapchain images whose GPU work is unfinished.** The frame shows
+a diagonal staircase of completed 128x64 blocks -- V3D's tile size in its
+supertile order -- over the previous frame or the blit's clear. Only fencing the
+presentation submission removes it; rotating more display targets and bounding
+run-ahead to one frame both fail. See `docs/raspberry_pi_arm64.md`.
+
+Do not diagnose a tile-shaped artifact as "the tiler is broken". Tiling never
+moves geometry; a tile-aligned artifact means something read a framebuffer
+before its tile store finished, and the block size names the GPU.
+
+Useful technique: `grim` the compositor output a few hundred times, then rank
+frames by the ratio of edge energy on the 128/64 grid to edge energy off it.
+Partial frames score 4-5, real artwork scores 1.3-1.6, and comparing ranked
+lists across a change is a clean A/B that needs nobody watching the screen.
 
 ## Repository layout and history
 

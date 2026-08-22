@@ -673,18 +673,59 @@ static u32 resolve_vertex(const rsx_state* state, u32 encoded, u32 byte_offset)
     return cellGcmResolveLocated(local, offset);
 }
 
-static void read_vertex_float4x16(const rsx_state* state, u32 vertex,
-                                  float output[16][4])
+/* Every vertex is expanded to all sixteen attribute slots because that is the
+ * layout the translated vertex shaders read. Walking all sixteen per vertex to
+ * re-test `enabled` and re-store the (0,0,0,1) default was the hottest function
+ * in the whole process (10.1% of cycles): a sprite uses two or three slots, and
+ * the draw's attribute set cannot change between its own vertices. Collect the
+ * live slots once per draw, then per vertex copy the default block and fill
+ * only those. */
+typedef struct vertex_plan_slot {
+    u32 slot;
+    u32 offset;
+    u32 stride;
+    u32 type;
+    u32 lanes;
+} vertex_plan_slot;
+
+typedef struct vertex_plan {
+    vertex_plan_slot slots[16];
+    u32 count;
+} vertex_plan;
+
+static const float k_vertex_defaults[16][4] = {
+    {0,0,0,1},{0,0,0,1},{0,0,0,1},{0,0,0,1},
+    {0,0,0,1},{0,0,0,1},{0,0,0,1},{0,0,0,1},
+    {0,0,0,1},{0,0,0,1},{0,0,0,1},{0,0,0,1},
+    {0,0,0,1},{0,0,0,1},{0,0,0,1},{0,0,0,1},
+};
+
+static void build_vertex_plan(const rsx_state* state, vertex_plan* plan)
 {
+    plan->count = 0;
     for (u32 attribute = 0; attribute < 16; ++attribute) {
-        float* out = output[attribute];
-        out[0] = out[1] = out[2] = 0.0f; out[3] = 1.0f;
         const rsx_vertex_attrib* input = &state->vertex_attribs[attribute];
         if (!input->enabled || !input->stride) continue;
+        vertex_plan_slot* out = &plan->slots[plan->count++];
+        u32 lanes = input->size ? input->size : 4u;
+        out->slot = attribute;
+        out->offset = input->offset;
+        out->stride = input->stride;
+        out->type = input->type;
+        out->lanes = lanes > 4 ? 4u : lanes;
+    }
+}
+
+static void read_vertex_planned(const rsx_state* state, const vertex_plan* plan,
+                                u32 vertex, float output[16][4])
+{
+    memcpy(output, k_vertex_defaults, sizeof(k_vertex_defaults));
+    for (u32 i = 0; i < plan->count; ++i) {
+        const vertex_plan_slot* input = &plan->slots[i];
+        float* out = output[input->slot];
         const u8* source = vm_base + resolve_vertex(state, input->offset,
                                                     vertex * input->stride);
-        u32 lanes = input->size ? input->size : 4u;
-        if (lanes > 4) lanes = 4;
+        const u32 lanes = input->lanes;
         for (u32 lane = 0; lane < lanes; ++lane) {
             switch (input->type) {
             case 1: {
@@ -709,17 +750,6 @@ typedef struct fallback_vertex {
     float color[4];
     float texcoord[2];
 } fallback_vertex;
-
-static void read_vertex_fallback(const rsx_state* state, u32 vertex,
-                                 fallback_vertex* out)
-{
-    float slots[16][4];
-    read_vertex_float4x16(state, vertex, slots);
-    out->position[0] = slots[0][0]; out->position[1] = slots[0][1];
-    out->position[2] = slots[0][2];
-    memcpy(out->color, slots[3], sizeof(out->color));
-    out->texcoord[0] = slots[0][2]; out->texcoord[1] = slots[0][3];
-}
 
 static u32 read_index(const rsx_state* state, u32 index)
 {
@@ -829,13 +859,22 @@ static int snapshot_draw(rsx_render_op* op, u32 primitive, u32 first, u32 count,
         return -1;
     }
     u8* vertices = op->data.draw.vertex_data.data;
+    vertex_plan plan;
+    build_vertex_plan(state, &plan);
     for (u32 i = 0; i < expanded_count; ++i) {
-        if (layout == RSX_VERTEX_LAYOUT_FLOAT4_X16)
-            read_vertex_float4x16(state, expanded[i],
+        if (layout == RSX_VERTEX_LAYOUT_FLOAT4_X16) {
+            read_vertex_planned(state, &plan, expanded[i],
                 (float (*)[4])(vertices + (u64)i * stride));
-        else
-            read_vertex_fallback(state, expanded[i],
-                (fallback_vertex*)(vertices + (u64)i * stride));
+        } else {
+            float slots[16][4];
+            fallback_vertex* out =
+                (fallback_vertex*)(vertices + (u64)i * stride);
+            read_vertex_planned(state, &plan, expanded[i], slots);
+            out->position[0] = slots[0][0]; out->position[1] = slots[0][1];
+            out->position[2] = slots[0][2];
+            memcpy(out->color, slots[3], sizeof(out->color));
+            out->texcoord[0] = slots[0][2]; out->texcoord[1] = slots[0][3];
+        }
     }
     free(expanded);
     op->data.draw.vertex_count = expanded_count;
@@ -855,6 +894,34 @@ static int snapshot_draw(rsx_render_op* op, u32 primitive, u32 first, u32 count,
         }
     }
 geometry_complete:
+    {
+        static int trace_left = -1;
+        if (trace_left < 0) {
+            const char* setting = getenv("RSX_VERTEX_TRACE");
+            trace_left = setting ? atoi(setting) : 0;
+            if (setting && trace_left <= 0) trace_left = 120;
+        }
+        if (trace_left > 0 && op->data.draw.vertex_count >= 5000u) {
+            --trace_left;
+            fprintf(stderr,
+                    "[RSX-VERTEX] verts=%u indexed=%d first=%u count=%u "
+                    "base=%08X base_index=%u index=%08X dma=%08X",
+                    op->data.draw.vertex_count, indexed, first, count,
+                    state->vertex_data_base_offset,
+                    state->vertex_data_base_index,
+                    state->index_array_offset, state->index_array_dma);
+            for (u32 attribute = 0; attribute < 16; ++attribute) {
+                const rsx_vertex_attrib* input =
+                    &state->vertex_attribs[attribute];
+                if (!input->enabled || !input->stride) continue;
+                fprintf(stderr, " a%u=%08X/raw%08X/s%u/t%u/n%u",
+                        attribute, resolve_vertex(state, input->offset, 0),
+                        input->offset, input->stride, input->type,
+                        input->size);
+            }
+            fprintf(stderr, "\n");
+        }
+    }
     if (s_recorder.profiling) {
         prof_mark = ps3_host_monotonic_ns();
         s_recorder.prof_vertex_ns += prof_mark - prof_start;
