@@ -153,6 +153,7 @@ typedef struct sdl_rsx_state {
     Uint64 perf_batches;
     Uint64 perf_prepare_ns;
     Uint64 perf_constants_ns;
+    Uint64 perf_vertex_bytes;
     Uint64 perf_vertices_ns;
     Uint64 perf_render_ns;
     Uint64 perf_present_ns;
@@ -160,6 +161,9 @@ typedef struct sdl_rsx_state {
     Uint64 perf_blit_ns;
     Uint64 perf_fence_ns;
     Uint64 perf_render_passes;
+    Uint64 perf_blits;
+    Uint64 perf_copy_passes;
+    Uint64 perf_submits;
     unsigned last_batch_draws;
     int fps_log;
     int pace_trace;
@@ -354,6 +358,7 @@ static SDL_GPUTexture* get_surface(const rsx_surface_ref* ref)
 
 static int submit_commands(SDL_GPUCommandBuffer* commands)
 {
+    ++s_sdl.perf_submits;
     if (!commands) return -1;
     if (!SDL_SubmitGPUCommandBuffer(commands)) {
         fprintf(stderr, "[SDL_GPU] command submission failed: %s\n", SDL_GetError());
@@ -592,6 +597,25 @@ static SDL_GPUShader* compile_hlsl(const char* source,
     return result;
 }
 
+static u32 vertex_input_mask(const rsx_draw_op_data* draw)
+{
+    /* Layouts older than PACKED carry every slot; a PACKED draw carries
+     * exactly what its vertex program reads, which is derived from the same
+     * ucode the producer used. */
+    if (draw->pipeline.vertex_layout != RSX_VERTEX_LAYOUT_PACKED ||
+        !draw->vertex_shader.size)
+        return 0xFFFFu;
+    return rsx_vp_input_mask(draw->vertex_shader.data,
+                             (u32)draw->vertex_shader.size);
+}
+
+static unsigned vertex_slot_count(u32 mask)
+{
+    unsigned count = 0;
+    for (unsigned i = 0; i < 16; ++i) if (mask & (1u << i)) ++count;
+    return count;
+}
+
 static shader_entry* get_shader(const rsx_render_op* op,
                                 SDL_ShaderCross_ShaderStage stage)
 {
@@ -602,7 +626,9 @@ static shader_entry* get_shader(const rsx_render_op* op,
         ? rsx_fp_program_structure_hash(blob->data, (u32)blob->size)
         : blob->hash;
     unsigned flags = stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT
-        ? draw->pipeline.fragment_32bit_exports : draw->pipeline.vertex_layout;
+        ? draw->pipeline.fragment_32bit_exports |
+              (draw->pipeline.color_target_count << 1)
+        : draw->pipeline.vertex_layout;
     flags |= SDL_RSX_SHADER_DIALECT_VERSION << 16;
     for (unsigned i = 0; i < s_sdl.shader_count; ++i)
         if (s_sdl.shaders[i].hash == hash && s_sdl.shaders[i].stage == (unsigned)stage &&
@@ -620,7 +646,8 @@ static shader_entry* get_shader(const rsx_render_op* op,
     unsigned sampler_unit_count = 0;
     if (stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX && blob->size) {
         result = rsx_vp_decompile(blob->data, (u32)blob->size,
-                                  source, 512u * 1024u);
+                                  source, 512u * 1024u,
+                                  vertex_input_mask(draw));
         for (unsigned i = 0; i < 16; ++i) {
             char from[16], to[20];
             snprintf(from, sizeof(from), "ATTR%u", i);
@@ -652,7 +679,9 @@ static shader_entry* get_shader(const rsx_render_op* op,
     } else if (stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT && blob->size) {
         result = rsx_fp_decompile_dynamic(
             blob->data, (u32)blob->size, source, 512u * 1024u,
-            draw->pipeline.fragment_32bit_exports);
+            draw->pipeline.fragment_32bit_exports,
+            draw->pipeline.color_target_count ? draw->pipeline.color_target_count
+                                              : 1u);
         if (result >= 0)
             replace_all(source, 512u * 1024u, "struct PSInput",
                         "#define RSX_SHADER_REMAP 1\nstruct PSInput");
@@ -824,22 +853,42 @@ static SDL_GPUGraphicsPipeline* get_pipeline(const rsx_render_op* op)
     shader_entry* vertex = get_shader(op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
     shader_entry* fragment = get_shader(op, SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT);
     if (!vertex || !fragment) return NULL;
+    const unsigned packed_slots =
+        vertex_slot_count(vertex_input_mask(&op->data.draw));
+    {   /* The producer packed the vertex from its own reading of this ucode;
+         * if the two disagree every vertex is fetched at the wrong stride. */
+        const rsx_draw_op_data* draw = &op->data.draw;
+        u64 expected = (u64)draw->vertex_count * packed_slots * 16u;
+        if (draw->pipeline.vertex_layout == RSX_VERTEX_LAYOUT_PACKED &&
+            draw->vertex_count && draw->vertex_data.size != expected) {
+            static unsigned reported;
+            if (reported++ < 8)
+                fprintf(stderr, "[SDL_GPU] packed vertex stride mismatch: "
+                        "vp=%016llx slots=%u verts=%u bytes=%llu expected=%llu\n",
+                        (unsigned long long)draw->pipeline.vertex_shader_hash,
+                        packed_slots, draw->vertex_count,
+                        (unsigned long long)draw->vertex_data.size,
+                        (unsigned long long)expected);
+        }
+    }
     SDL_GPUVertexBufferDescription buffer_description;
     SDL_zero(buffer_description);
     buffer_description.slot = 0;
-    buffer_description.pitch = key->vertex_layout == RSX_VERTEX_LAYOUT_FLOAT4_X16
-        ? 16u * 4u * sizeof(float) : 9u * sizeof(float);
+    buffer_description.pitch =
+        key->vertex_layout == RSX_VERTEX_LAYOUT_FALLBACK_36
+            ? 9u * sizeof(float) : packed_slots * 4u * (unsigned)sizeof(float);
     buffer_description.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
     SDL_GPUVertexAttribute attributes[16];
     SDL_zero(attributes);
-    unsigned attribute_count = key->vertex_layout == RSX_VERTEX_LAYOUT_FLOAT4_X16 ? 16 : 3;
+    unsigned attribute_count =
+        key->vertex_layout == RSX_VERTEX_LAYOUT_FALLBACK_36 ? 3 : packed_slots;
     for (unsigned i = 0; i < attribute_count; ++i) {
         attributes[i].location = i;
         attributes[i].buffer_slot = 0;
         attributes[i].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
         attributes[i].offset = i * 4u * sizeof(float);
     }
-    if (attribute_count == 3) {
+    if (key->vertex_layout == RSX_VERTEX_LAYOUT_FALLBACK_36) {
         attributes[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3;
         attributes[0].offset = 0;
         attributes[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
@@ -973,6 +1022,7 @@ static SDL_GPUBuffer* commit_dynamic_upload(SDL_GPUCommandBuffer* commands,
         return NULL;
     SDL_UnmapGPUTransferBuffer(s_sdl.device, upload->transfer);
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+    ++s_sdl.perf_copy_passes;
     if (!copy) goto fail;
     SDL_GPUTransferBufferLocation source = {upload->transfer, 0};
     SDL_GPUBufferRegion destination = {upload->buffer, 0, (u32)size};
@@ -1095,6 +1145,7 @@ static SDL_GPUTexture* get_sample_texture(const rsx_texture_source* source)
     SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
     if (!commands) goto fail;
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+    ++s_sdl.perf_copy_passes;
     if (!copy) { SDL_CancelGPUCommandBuffer(commands); goto fail; }
     SDL_GPUTextureTransferInfo upload;
     SDL_zero(upload);
@@ -1215,17 +1266,32 @@ static void execute_diagnostic_fallback(SDL_GPUCommandBuffer* commands,
     SDL_EndGPURenderPass(pass);
 }
 
+/* `clear` is a guest clear of the same attachments that immediately precedes
+ * this pass. Folding it in as a colour LOADOP_CLEAR is exactly equivalent --
+ * execute_clear() clears the whole attachment, with no scissor -- and saves a
+ * whole render pass: on a tiler that is a full tile-buffer store plus the load
+ * this pass would otherwise have done. Half of the passes in a Taiko frame are
+ * clear-then-draw pairs on the same target. */
 static SDL_GPURenderPass* begin_draw_pass(SDL_GPUCommandBuffer* commands,
-                                          const rsx_render_op* op)
+                                          const rsx_render_op* op,
+                                          const rsx_render_op* clear)
 {
     SDL_GPUColorTargetInfo colors[4];
     SDL_zero(colors);
     unsigned color_count = 0;
+    const int clear_color = clear && (clear->data.clear.flags & 0xf0u);
     for (unsigned i = 0; i < op->color_count && i < 4; ++i) {
         SDL_GPUTexture* texture = get_surface(&op->color[i]);
         if (!texture) continue;
         colors[color_count].texture = texture;
-        colors[color_count].load_op = SDL_GPU_LOADOP_LOAD;
+        colors[color_count].load_op = clear_color ? SDL_GPU_LOADOP_CLEAR
+                                                  : SDL_GPU_LOADOP_LOAD;
+        if (clear_color) {
+            colors[color_count].clear_color.r = clear->data.clear.color[0];
+            colors[color_count].clear_color.g = clear->data.clear.color[1];
+            colors[color_count].clear_color.b = clear->data.clear.color[2];
+            colors[color_count].clear_color.a = clear->data.clear.color[3];
+        }
         colors[color_count].store_op = SDL_GPU_STOREOP_STORE;
         ++color_count;
     }
@@ -1561,6 +1627,8 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
         SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
 
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+        ++s_sdl.perf_copy_passes;
+    ++s_sdl.perf_copy_passes;
         if (copy) {
             SDL_GPUTextureTransferInfo upload;
             SDL_zero(upload);
@@ -1643,6 +1711,15 @@ static int present_display(SDL_GPUCommandBuffer* commands)
     }
     const Uint64 acquire_end_ns = SDL_GetTicksNS();
     s_sdl.perf_acquire_ns += acquire_end_ns - acquire_start_ns;
+    {   /* The swapchain size decides who upscales: a compositor can only
+         * scan out a buffer that already matches the output. */
+        static Uint32 announced_w, announced_h;
+        if (width != announced_w || height != announced_h) {
+            announced_w = width; announced_h = height;
+            fprintf(stderr, "[SDL_GPU] swapchain %ux%u (source %ux%u)\n",
+                    width, height, source_width, source_height);
+        }
+    }
     if (swapchain && width && height) {
         Uint32 draw_w = width;
         Uint32 draw_h = (Uint32)(((Uint64)width * source_height) / source_width);
@@ -1664,6 +1741,7 @@ static int present_display(SDL_GPUCommandBuffer* commands)
         blit.clear_color.a = 1.0f;
         blit.filter = SDL_GPU_FILTER_LINEAR;
         SDL_BlitGPUTexture(commands, &blit);
+        ++s_sdl.perf_blits;
         draw_overlay(commands, swapchain, width, height,
                      blit.destination.x, blit.destination.y, draw_w, draw_h);
     }
@@ -1705,7 +1783,8 @@ static void update_window_title(void)
         fprintf(stderr,
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
                 "cpu_ms(prep=%.2f const=%.2f vert=%.2f render=%.2f present=%.2f"
-                "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f\n",
+                "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f vert_kib=%.0f "
+                "gpu(blits=%.1f copies=%.1f submits=%.1f)\n",
                 fps, s_sdl.last_batch_draws, s_sdl.errors,
                 s_sdl.perf_batches ? (double)s_sdl.perf_prepare_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
@@ -1724,6 +1803,14 @@ static void update_window_title(void)
                 s_sdl.perf_batches ? (double)s_sdl.perf_fence_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_render_passes /
+                    (double)s_sdl.perf_batches : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_vertex_bytes /
+                    (double)s_sdl.perf_batches / 1024.0 : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_blits /
+                    (double)s_sdl.perf_batches : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_copy_passes /
+                    (double)s_sdl.perf_batches : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_submits /
                     (double)s_sdl.perf_batches : 0.0);
     s_sdl.fps_window_start_ns = now;
     s_sdl.fps_window_frames = 0;
@@ -1737,6 +1824,10 @@ static void update_window_title(void)
     s_sdl.perf_blit_ns = 0;
     s_sdl.perf_fence_ns = 0;
     s_sdl.perf_render_passes = 0;
+    s_sdl.perf_blits = 0;
+    s_sdl.perf_copy_passes = 0;
+    s_sdl.perf_submits = 0;
+    s_sdl.perf_vertex_bytes = 0;
 }
 
 static void upload_surface_init(const rsx_surface_init* init)
@@ -1761,6 +1852,7 @@ static void upload_surface_init(const rsx_surface_init* init)
     SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
     SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
     SDL_GPUCopyPass* copy = commands ? SDL_BeginGPUCopyPass(commands) : NULL;
+    if (copy) ++s_sdl.perf_copy_passes;
     if (!copy) {
         if (commands) SDL_CancelGPUCommandBuffer(commands);
         SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
@@ -1820,6 +1912,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             vertex_bytes = aligned + op->data.draw.vertex_data.size;
         }
     s_sdl.last_batch_draws = draw_count;
+    s_sdl.perf_vertex_bytes += vertex_bytes <= UINT32_MAX ? vertex_bytes : 0;
 
     /* Resource creation and texture uploads may submit copy command buffers.
      * Finish all of those before acquiring the shared render command buffer. */
@@ -1910,7 +2003,10 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             &s_sdl.vertex_constants_upload, constant_bytes,
             SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ);
         if (packed) {
-            memset(packed, 0, (size_t)constant_bytes);
+            /* No full-buffer clear: a draw reads only its own slot, and the
+             * recorder always records the complete constant file, so only a
+             * short payload needs its tail zeroed. Clearing all of it wrote
+             * another 1.2 MiB to write-combined memory every Pi frame. */
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW) continue;
@@ -1919,6 +2015,9 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                 if (bytes)
                     memcpy(packed + (u64)i * constant_stride,
                            op->data.draw.vertex_constants.data, (size_t)bytes);
+                if (bytes < constant_stride)
+                    memset(packed + (u64)i * constant_stride + bytes, 0,
+                           (size_t)(constant_stride - bytes));
                 /* RSXB v2's VP epilogue constants are defined in clip space.
                  * Canonicalize x/y at the consumer boundary as well so early
                  * v2 captures produced before the recorder-side fix remain
@@ -1997,6 +2096,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
 
     SDL_GPURenderPass* active_pass = NULL;
     const rsx_render_op* active_attachments = NULL;
+    const rsx_render_op* pending_clear = NULL;
     for (unsigned i = 0; i < batch->operation_count; ++i) {
         const rsx_render_op* op = &batch->operations[i];
         if (op->type == RSX_RENDER_OP_CLEAR) {
@@ -2005,8 +2105,13 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                 active_pass = NULL;
                 active_attachments = NULL;
             }
-            execute_clear(commands, op);
-            ++render_passes;
+            /* Hold the clear back: if draws to the same attachments follow, it
+             * becomes their pass's load op instead of a pass of its own. */
+            if (pending_clear) {
+                execute_clear(commands, pending_clear);
+                ++render_passes;
+            }
+            pending_clear = op;
         } else if (op->type == RSX_RENDER_OP_DRAW) {
             int valid = get_pipeline(op) && vertices && vertex_offsets &&
                         vertex_offsets[i] != UINT32_MAX;
@@ -2016,6 +2121,11 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                     active_pass = NULL;
                     active_attachments = NULL;
                 }
+                if (pending_clear) {
+                    execute_clear(commands, pending_clear);
+                    ++render_passes;
+                    pending_clear = NULL;
+                }
                 execute_diagnostic_fallback(commands, op);
                 ++render_passes;
                 continue;
@@ -2023,7 +2133,20 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             if (!active_pass ||
                 !same_draw_attachments(active_attachments, op)) {
                 if (active_pass) SDL_EndGPURenderPass(active_pass);
-                active_pass = begin_draw_pass(commands, op);
+                const rsx_render_op* fold = NULL;
+                if (pending_clear) {
+                    static int no_merge = -1;
+                    if (no_merge < 0)
+                        no_merge = getenv("TAIKO_GPU_NO_CLEAR_MERGE") ? 1 : 0;
+                    if (!no_merge && same_draw_attachments(pending_clear, op)) {
+                        fold = pending_clear;
+                    } else {
+                        execute_clear(commands, pending_clear);
+                        ++render_passes;
+                    }
+                    pending_clear = NULL;
+                }
+                active_pass = begin_draw_pass(commands, op, fold);
                 active_attachments = active_pass ? op : NULL;
                 if (active_pass) ++render_passes;
             }
@@ -2034,6 +2157,11 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
         }
     }
     if (active_pass) SDL_EndGPURenderPass(active_pass);
+    if (pending_clear) {
+        execute_clear(commands, pending_clear);
+        ++render_passes;
+        pending_clear = NULL;
+    }
     if (getenv("TAIKO_GPU_SERIAL_PRESENT")) {
         const int pipelined = getenv("TAIKO_GPU_PIPELINED_PRESENT") != NULL;
         static int announced_mode;
@@ -2685,6 +2813,7 @@ int rsx_sdl_gpu_backend_save_display_bmp(const char* path)
         goto fail;
     }
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+    ++s_sdl.perf_copy_passes;
     if (!copy) goto fail_commands;
     SDL_GPUTextureRegion source;
     SDL_zero(source);

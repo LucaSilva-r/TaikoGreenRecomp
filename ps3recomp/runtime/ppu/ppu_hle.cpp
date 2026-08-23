@@ -221,7 +221,8 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
         return;
     }
     /* GFX-SCAN: is the menu .gfx ever inflated into guest RAM? (magic 'GFX'=47 46 58) */
-    { static long _c=0; if(getenv("YDKJ_GFXSCAN") && (++_c % 200000)==0){ extern uint8_t* vm_base;
+    { static long _c=0; static const bool _gfxscan = getenv("YDKJ_GFXSCAN") != nullptr;
+      if(_gfxscan && (++_c % 200000)==0){ extern uint8_t* vm_base;
         int gfx=0,dds=0,png=0; for(uint32_t a=0x10000; a<0x0FF00000u; a++){
           uint8_t m0=vm_base[a],m1=vm_base[a+1],m2=vm_base[a+2],vv=vm_base[a+3];
           if(m0==0x47&&m1==0x46&&(m2==0x58||m2==0x43)&&(vv>=8&&vv<=12)){ if(gfx<3)fprintf(stderr,"[GFX-SCAN] GFX movie @0x%08X %c%c%c ver=%d\n",a,m0,m1,m2,vv); gfx++; }

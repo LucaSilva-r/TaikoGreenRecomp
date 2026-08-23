@@ -144,6 +144,11 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
 `CELLMARK_DUMP`, `TEX_RAW_DUMP`, `CLEAR_DBG`, `FP_NOWHITE`, `D3D12_IQ`,
 `VP_LEQUAL_LESS`) are **gone** -- do not document or reach for them.
 
+- `RSX_BATCH_CAPTURE_SKIP=N` — delay arming until N batches have been
+  submitted, so a later scene can be captured with no keyboard to press F10 on.
+- `TAIKO_RSX_FAT_VERTICES=1` — make the recorder emit the old sixteen-float4
+  vertex layout instead of packing only the slots the vertex program reads.
+  The A/B lever for geometry bugs; see `docs/raspberry_pi_arm64.md`.
 - `RSX_BATCH_CAPTURE=<file>` + `RSX_BATCH_CAPTURE_FRAMES=N` — record N frames
   of backend-neutral render batches to a `.rsxb`. This replaces the old F9
   capture and is the main tool: it captures what the recorder saw, so a bad
@@ -152,6 +157,8 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   capture, use `RSX_BATCH_CAPTURE_HOTKEY=<file>` and
   `RSX_BATCH_CAPTURE_HOTKEY_FRAMES=N`; the file is not created until F10.
 - `build-linux/rsx_replay --backend=sdl_gpu <file.rsxb>` — replay a capture.
+  `--loop=N` repeats it, which is how a capture becomes a steady load to sample
+  GPU counters against (`TAIKO_RPI_BUILD_REPLAY=1` cross-builds it for the Pi).
   Deterministic, and the fastest way to tell a recorder bug from a renderer
   bug: if the capture replays correctly in a fresh process, the defect is in
   what was recorded, not in how it was drawn.
@@ -562,6 +569,20 @@ a diagonal staircase of completed 128x64 blocks -- V3D's tile size in its
 supertile order -- over the previous frame or the blit's clear. Only fencing the
 presentation submission removes it; rotating more display targets and bounding
 run-ahead to one frame both fail. See `docs/raspberry_pi_arm64.md`.
+
+**The kiosk's HDMI mode is the biggest Pi performance lever.** Cage always
+composites and makes its client fullscreen at the output size, so a 1920x1080
+mode makes both the game's presentation blit and the compositor's pass cover
+2.25x the game's own 1280x720. Measured: 50% of the V3D core and 45 FPS at
+1080p against 25% and 58-60 FPS at 720p, nothing else changed. The appliance
+still defaults to 1080p because the tested monitor refuses a 720p HDMI mode;
+`TAIKOS_OUTPUT_MODE=1280x720@60Hz` takes the frame rate where a display
+accepts it.
+
+**DRM fdinfo must be attributed by `drm-client-id`.** The game inherits Cage's
+render fd, so taking the first `renderD` fd of the process reads *Cage's*
+counters for both. Every "the V3D core is only 11-15% busy" claim in this
+project came from that; corrected, the Pi GPU is saturated at 1080p.
 
 Do not diagnose a tile-shaped artifact as "the tiler is broken". Tiling never
 moves geometry; a tile-aligned artifact means something read a framebuffer

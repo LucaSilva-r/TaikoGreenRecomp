@@ -43,6 +43,12 @@ typedef enum rsx_portable_topology {
 typedef enum rsx_vertex_layout {
     RSX_VERTEX_LAYOUT_FALLBACK_36 = 1,
     RSX_VERTEX_LAYOUT_FLOAT4_X16 = 2,
+    /* One float4 per vertex input the draw's vertex program actually reads,
+     * in ascending slot order. Both the producer and the consumer derive that
+     * set from the program with rsx_vp_input_mask(), so nothing has to travel
+     * with the batch. A sprite reads two or three slots where the X16 layout
+     * always carried sixteen. */
+    RSX_VERTEX_LAYOUT_PACKED = 3,
 } rsx_vertex_layout;
 
 typedef enum rsx_render_op_type {

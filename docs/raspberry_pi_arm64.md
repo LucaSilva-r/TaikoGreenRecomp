@@ -6,9 +6,11 @@ and the in-process FFmpeg ATRAC3plus decoder. RPCS3 is not involved.
 
 The tested machine is a 4 GB Raspberry Pi 5 running a 64-bit Debian-family OS.
 The game renders internally at **1280x720**. The kiosk requests a
-**1920x1080 60 Hz HDMI mode** for monitor compatibility, and Cage scales the
-720p game surface into that output; TaikoRecomp itself is not rendering the
-game at 1080p.
+**1920x1080 60 Hz HDMI mode** because monitors that refuse a 720p HDMI mode are
+common, and the tested display is one of them. That costs real frame rate --
+both the game's presentation blit and Cage's composite then cover 2.25x the
+pixels -- so set `TAIKOS_OUTPUT_MODE=1280x720@60Hz` on a display that accepts
+it.
 
 ## Requirements
 
@@ -193,7 +195,9 @@ That command deliberately forces offline mode for the first graphical test.
 Omit `TAIKO_ONLINE_CONFIG=/dev/null` after installing an online configuration
 as described below.
 
-The session defaults to output `HDMI-A-1` at `1920x1080@60Hz`. Override either
+The session defaults to output `HDMI-A-1` at `1920x1080@60Hz`. Setting
+`1280x720@60Hz` is worth about 13 FPS where the display accepts it; see "The
+output mode is the single biggest lever". Override either
 value through the environment if the connector has another name:
 
 ```sh
@@ -346,10 +350,9 @@ schemes were tried and **both failed**, so do not reintroduce them:
 Only the full wait removes it. `TAIKO_GPU_UNFENCED_PRESENT=1` opts out for a
 driver that does not need it.
 
-Measured cost on the Pi 5: dense scenes go from roughly 51 to 48 FPS. That is
-the price of a complete frame, and it is much smaller than the 41-52 FPS the
-first fenced experiment cost, because the depth store-out and lifter barrier
-work landed in between.
+Measured cost on the Pi 5 when this landed: dense scenes went from roughly 51
+to 48 FPS. A 2026-08-22 re-measure found no difference at all between fenced
+and unfenced -- see "The presentation fence is no longer the cost it was".
 
 The method is worth keeping. `grim` samples the compositor output, and a frame
 assembled from partial tiles has far more edge energy on multiples of 128 and 64
@@ -364,37 +367,54 @@ sustained GPU load.
 
 ## Where the frame time actually goes
 
-The Pi 5 is not the constraint, and "it is only 2D sprites" is the right
-instinct. Measured on the attract loop:
+**Corrected 2026-08-22. The Pi 5 GPU is saturated at 1080p; earlier statements
+in this file that it sat at 11-15% were a measurement bug**, described below.
+Measured on the attract loop at the appliance's 1920x1080 output, attributing
+DRM fds by `drm-client-id`:
 
-- a heavy frame draws **4.0 M pixels, about 4.4x the 1280x720 screen**, as 128
-  blended quads;
-- the V3D core is **11-15% busy** and that figure does *not* rise when the frame
-  rate falls -- 60 FPS and 47 FPS scenes both sit near 13%;
-- no thread of the process exceeds ~34% of a core;
-- per frame the main thread spends ~5 ms of real work and ~15 ms **waiting**.
+| client | GPU | render jobs/s |
+|---|---|---|
+| game | **706.8 ms/s (70.7%)** | 1291 |
+| cage | **323.9 ms/s (32.4%)** | 53 |
 
-So nothing is throughput-bound. The frame rate is set by latency in a
-serialized chain: the presentation fence cannot signal until the frame is
-actually presented, so CPU preparation and GPU execution never overlap, and a
-heavy frame that misses its vsync deadline costs a whole 16.7 ms.
+That is **103% of one V3D core**, so frame rate at 1080p is throughput-bound,
+not latency-bound. The game issued roughly **24 render jobs per frame** at
+0.55 ms each -- on a tiler every job is a full tile load/store over its area --
+and Cage spends **6.1 ms compositing each frame** because it never direct-scans
+out the client buffer. (Folding guest clears into the following pass, below,
+later cut the game to 10.9 ms and 5 passes per frame.)
 
-Read GPU occupancy straight from DRM fdinfo rather than guessing:
+**The measurement bug, because it invalidated months of numbers.** The obvious
+fdinfo recipe takes the first renderD fd of the process:
 
 ```sh
-pid=$(pgrep -f 'taiko_bo[o]t')
 fd=$(for f in /proc/$pid/fd/*; do readlink $f | grep -q renderD && basename $f; done | head -1)
-grep -E 'drm-engine-(bin|render)|v3d-jobs' /proc/$pid/fdinfo/$fd
 ```
 
-Sample it twice around a `sleep` and divide by the wall clock for a busy
+The game is launched *by* Cage and inherits Cage's render fd. `ls` sorts
+lexicographically, so fd `18` (Cage's, inherited) comes before fd `7` (the
+game's own): the recipe reads Cage's counters for both processes. The
+give-away is that the two processes report identical `drm-client-id` and
+byte-identical counters -- two independent workloads never match to 0.1%.
+
+Attribute by client id instead, and treat an id that appears in both processes
+as the ancestor's:
+
+```sh
+for f in /proc/$pid/fd/*; do
+    readlink "$f" | grep -q renderD || continue
+    grep -H -E 'drm-client-id|drm-engine-(bin|render)|v3d-jobs-render' \
+        "/proc/$pid/fdinfo/$(basename "$f")"
+done
+```
+
+Sample twice around a `sleep` and divide by the wall clock for a busy
 percentage. `perf record -F 499 -g -p $pid` profiles the CPU side; that is what
 identified a leftover `getenv("YDKJ_GFXSCAN")` running on **every guest
 syscall** (1.4% of process CPU) and `read_vertex_float4x16` as the single
 hottest function (10.1%).
 
-The compositor is worth measuring too: the same fdinfo read against the `cage`
-process showed it using **12-17% of the GPU**, comparable to the game. Cage
+The compositor is worth measuring too, with the same client-id caveat: Cage
 composites rather than scanning the game's buffer out directly. Making the
 surface fullscreen (`TAIKO_FULLSCREEN=1`, with `TAIKO_HIDE_CURSOR=1`) reduced
 that but did not eliminate it, so direct scanout is still not happening and the
@@ -435,10 +455,196 @@ Settings that were measured and rejected, so they are not retried:
 | unfenced present + 1 frame in flight | faster, and the tile artifact returns. Verified visually, not by score |
 | `TAIKO_FULLSCREEN=1` | Cage GPU 16.6% -> 12.7%, still compositing, no FPS change |
 | SDL KMSDRM (no compositor) | impossible here; see above |
+| unfenced present (2026-08-22 re-measure) | no change at all; the swapchain paces the thread, not the fence |
+| deduplicating identical vertex/constant payloads in the consumer | measured 141 distinct constant files across 149 draws. No gain, reverted |
+| recorder-side sharing of unchanged constant blobs | the 8 KiB compare almost always misses: recorder constant time 0.25 -> 2.76 ms/frame. Reverted |
 
 A caution on the seam detector: the on-grid/off-grid ratio is a *ranking* aid,
 not a threshold. Verified glitch frames have scored as low as 3.55 while clean
 artwork with long straight edges scored 4.7. Always look at the top few frames.
+
+### The output mode is the single biggest lever (2026-08-22)
+
+Cage always composites; it never direct-scans-out the game's buffer. The
+kiosk's HDMI mode therefore sets the pixel count **twice** per frame, because
+Cage makes its one client fullscreen at the output size:
+
+- the game's presentation blit scales its fixed 1280x720 render into a
+  swapchain the size of the output;
+- Cage then composites that surface into its own output framebuffer.
+
+At `1920x1080@60Hz` each pass covers 2.25x the pixels of the game's own
+resolution. Measured on the attract loop, with `drm-engine-bin+render` read
+from `/proc/<pid>/fdinfo` for both processes:
+
+| output mode | ordinary scenes | 185-201 draw scenes |
+|---|---|---|
+| 1920x1080@60Hz | 45-49 FPS | 38-39 FPS |
+| 1280x720@60Hz | 58-60 FPS | 47-48 FPS |
+
+(The per-process GPU percentages first published with this table were the
+inherited-fd artefact described in "Where the frame time actually goes"; the
+frame rates are unaffected. The mechanism is unchanged and is now better
+supported: the GPU is saturated at 1080p, so removing 55% of the pixels from
+both the blit and the composite is exactly where the frame rate came from.)
+
+Nothing else changed between those rows. A monitor that accepts a 720p HDMI
+mode gets that frame rate for free, since it upscales in its own scaler; the
+tested display refuses 720p, so the appliance default stays `1920x1080@60Hz`
+and `TAIKOS_OUTPUT_MODE` selects 720p where it works. The session falls back to
+the display's preferred mode if the requested one is rejected.
+
+A 60 s tile-seam scan (`glitchhunt2`) at the new mode ranked its worst frame at
+2.59, inside the clean-artwork band; verified partial frames score 3.55 and up.
+
+### The presentation fence is no longer the cost it was
+
+`TAIKO_GPU_UNFENCED_PRESENT=1` was re-measured on 2026-08-22 and produced the
+**same** frame rate as the fenced default (45 FPS at 1080p, both). The blocking
+time simply moves inside `SDL_SubmitGPUCommandBuffer`: the swapchain, not our
+fence, is what paces the main thread. Keep the fence -- it costs nothing now
+and it is what keeps whole frames on screen.
+
+### Vertices carry only the inputs the program reads (2026-08-22)
+
+The recorder used to expand every vertex to all sixteen RSX attribute slots as
+float4 -- **256 bytes per vertex** -- because the translated vertex shader
+declared all sixteen inputs. A sprite reads two or three. The attract loop
+consequently packed and uploaded **6.5 MiB of vertex data per frame**, of which
+about four fifths was the constant `(0,0,0,1)` default.
+
+`rsx_vp_input_mask()` returns the set of `v[n]` a vertex program actually
+reads. The recorder emits one float4 per set bit, in ascending slot order
+(`RSX_VERTEX_LAYOUT_PACKED`), and `rsx_vp_decompile()` declares exactly those
+inputs while every unread slot becomes a `float4(0,0,0,1)` literal. **Nothing
+about the layout travels in the batch**: the consumer derives the same mask
+from the same ucode, which is already in the draw. Older `.rsxb` captures keep
+`RSX_VERTEX_LAYOUT_FLOAT4_X16` and the sixteen-slot path, so they still replay.
+
+Measured on the Pi 5 at the 1080p appliance mode, which was 45-49 FPS before:
+
+| | before | after |
+|---|---|---|
+| vertex bytes per frame | 6488 KiB | 1204-1221 KiB |
+| main-thread vertex packing | 3.2 ms | 0.55-0.63 ms |
+| 134-185 draw scenes | 45-49 FPS | 60.00 FPS |
+| 192-201 draw scenes | 38-39 FPS | 57-58 FPS |
+
+`TAIKO_RSX_FAT_VERTICES=1` makes the recorder emit the old sixteen-slot layout.
+That is the A/B lever for this path and it is how the one bug below was caught;
+keep it.
+
+**The trap this hid in:** `get_pipeline` chose the fallback vertex layout with
+`if (attribute_count == 3)`, which had been a safe proxy for
+`RSX_VERTEX_LAYOUT_FALLBACK_36` while the only other layout had sixteen
+attributes. A packed draw whose program reads exactly three inputs -- position,
+colour, texcoord, i.e. most of the UI -- then got the fallback's
+float3/float4/float2 offsets against a 48-byte pitch. Everything textured
+turned into stretched vertical colour bands. Neither the emitted HLSL, the
+packed bytes, nor the vertex stride were wrong, so all three checks passed:
+the pipeline's *attribute description* was what disagreed. A
+`packed vertex stride mismatch` guard in `get_pipeline` now catches the
+producer/consumer half of that class outright.
+
+Validating this needs a scene from *later* than the recorder's first frames,
+and the appliance has no keyboard to press F10 on.
+`RSX_BATCH_CAPTURE_SKIP=<batches>` delays arming until that many batches have
+been submitted, so the title screen can be captured headlessly and replayed.
+Captured with and without `TAIKO_RSX_FAT_VERTICES`, the two replays differ only
+in the twinkling star sprites, which are placed differently by each boot.
+
+### Guest clears fold into the following pass (2026-08-22)
+
+Half of a Taiko frame's render passes were clear-only. The recorder emits the
+guest's `CLEAR` as its own operation, and the backend gave it its own
+`SDL_BeginGPURenderPass`; the draws that follow to the *same* attachments then
+opened a second pass that had to `LOAD` what the clear had just stored. On a
+tiler that is the worst possible shape: a full tile-buffer store followed by a
+full load, per clear, per frame.
+
+A held-back clear is now folded into the next pass as a colour
+`SDL_GPU_LOADOP_CLEAR`. It is exactly equivalent -- `execute_clear()` clears the
+whole attachment with no scissor -- and it is flushed as its own pass if the
+next draw targets different attachments, if a second clear arrives, or at the
+end of the batch. Depth was already `LOADOP_CLEAR` + `STOREOP_DONT_CARE` on
+every draw pass, so nothing about depth changes.
+
+Measured with `rsx_replay --loop` on the Pi against one fixed capture, so the
+content is identical on both sides:
+
+| | passes | render jobs/frame | GPU ms/frame | FPS |
+|---|---|---|---|---|
+| separate clear passes | 10.0 | 22.6 | 25.1 | 33.7 |
+| folded | 5.0 | 17.3 | 22.1 | 36.6 |
+
+Live at the 1080p appliance mode the median went 54.6 -> **60.0 FPS**, the
+dense 185-draw scenes 46-48 -> **50.3**, and the game's own GPU time per frame
+13.3 -> 10.9 ms. Thirty replayed frames are byte-identical with and without the
+fold; `TAIKO_GPU_NO_CLEAR_MERGE=1` restores the old behaviour for an A/B.
+
+### What is left in a frame, and what is not (2026-08-22)
+
+After the clear fold, the title-entrance capture's frame is five passes: one
+1280x720 pass with 138 draws, then four 600x600 character targets with 20 draws
+between them. Splitting it with `--stop-after-op` on the Pi:
+
+- the 1280x720 pass costs **16.5 ms**;
+- the four 600x600 passes cost **6.1 ms**.
+
+**Tile traffic is finished as an optimisation target.** Every guest clear in
+this title carries colour bits (`flags=F3`/`F1`), so after folding, every pass
+begins with `LOADOP_CLEAR` and *no pass loads its target at all*. Depth already
+used `LOADOP_CLEAR` + `STOREOP_DONT_CARE`. What remains is ~9.3 MB of stores per
+frame that have to happen: the display target is presented, and the 600x600
+targets are sampled by the next frame.
+
+Two things were tried against the shading cost and are recorded as **negative
+results**:
+
+- **Trimming the fragment shader's colour outputs** to the pass's attachment
+  count. NV40 programs always define four MRT outputs, and the generated HLSL
+  wrote all four (`_po.c1 = r[2] + h[4]` and so on) even for a single
+  attachment, which keeps `r2..r4`/`h4..h8` live. Emitting only the attached
+  ones measured **22.2 vs 22.1 ms/frame -- no change**: v3dv already prunes
+  outputs with no attachment when it compiles against the render pass. The
+  change is kept because it is byte-identical and the generated code is
+  smaller, not because it bought anything.
+- **The V3D register-allocation fallbacks** (`V3D_DEBUG=perf` reports
+  "Failed to register allocate ... at 4 threads") affect exactly one fragment
+  and one vertex program out of roughly nine of each, and the fragment shader
+  that nearly every draw uses is three instructions long -- one texture sample,
+  one multiply, an alpha test. The fallbacks are not the bottleneck.
+
+What is left is the guest's own fill: 138 blended quads over a 1280x720 target,
+with the overdraw the title itself authored. Reducing that means changing what
+the game draws, which is out of scope for the backend.
+
+### Measuring GPU work on the Pi
+
+`rsx_replay` builds for ARM64 with `TAIKO_RPI_BUILD_REPLAY=1` and
+`--loop=N` replays a capture N times, which turns a 30-frame capture into a
+steady deterministic load worth sampling. Cage needs a seat, so the replay has
+to run *as* the kiosk session -- a drop-in that overrides `ExecStart` to point
+at a small script is enough:
+
+```ini
+# /etc/systemd/system/taikos.service.d/replay.conf
+[Service]
+ExecStart=
+ExecStart=/usr/bin/cage -d -s -- /var/tmp/replay-session
+Restart=no
+```
+
+That script must reapply the HDMI mode itself: without it the output falls back
+to the monitor's preferred mode, which on a 4K display is 3840x2160@30 and
+quietly triples the compositor's cost.
+
+Two counters make the picture complete. `[RSXFPS]` reports what the backend
+asked for -- `passes`, `gpu(blits= copies= submits=)` -- and DRM fdinfo reports
+what the driver did. For the record, on a frame with a single clear pass the
+backend issues 2.6 GPU operations and the driver reports 9.5 render jobs, so
+roughly seven jobs per frame are Mesa/WSI overhead that the backend cannot
+reach. Optimise what the backend controls and measure in GPU milliseconds.
 
 ### Batch queue depth
 
@@ -455,9 +661,16 @@ change. `TAIKO_RSX_QUEUE_DEPTH=1..4` overrides it.
 
 On the tested 4 GB Pi 5:
 
-- the game rendered at 1280x720 into a 1920x1080 60 Hz HDMI output;
-- most boot and title scenes held 59-60 FPS;
-- one dense, repeating 145-169 draw warning animation measured 54-56 FPS;
+- the game rendered at 1280x720 into a 1920x1080 60 Hz HDMI output; with a
+  1280x720 output mode, where the display accepts one, every figure below
+  improves by roughly 13 FPS (see "The output mode is the single biggest
+  lever");
+- most boot and title scenes held 45-49 FPS at 1080p and 58-60 at 720p;
+- the densest repeating 185-201 draw scene measured 38-39 FPS at 1080p and
+  47-48 at 720p;
+- main-thread work per frame is about 4.3 ms: 0.15 prepare, 1.0 constants,
+  1.9 vertices, 1.4 render recording. The rest of the frame is spent blocked in
+  submission;
 - SDL audio delivered about 187.5 mixer blocks/s with zero queue failures,
   races, or stale blocks in the trace;
 - resident memory was about 425-429 MiB with no swap growth;

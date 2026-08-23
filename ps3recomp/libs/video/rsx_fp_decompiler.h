@@ -50,8 +50,11 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size,
  * constants. This variant emits those slots as rsx_fp_constants[] in a
  * second fragment uniform buffer instead of baking their values into HLSL. */
 #define RSX_FP_MAX_INLINE_CONSTANTS 128u
+/* color_targets (1..4) trims the emitted SV_Target outputs to what the pass
+ * actually has attached; the discarded ones otherwise keep registers live. */
 int rsx_fp_decompile_dynamic(const u8* ucode, u32 max_bytes,
-                             char* out, u32 out_size, int exports32);
+                             char* out, u32 out_size, int exports32,
+                             unsigned color_targets);
 
 /* Cache identity excluding inline CONST payload values, plus extraction of
  * those values in instruction order for the dynamic uniform buffer. */

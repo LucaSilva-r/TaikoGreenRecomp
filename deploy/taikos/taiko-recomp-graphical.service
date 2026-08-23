@@ -30,6 +30,12 @@ Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=LD_LIBRARY_PATH=/var/lib/taikos/recomp/lib
 Environment=SDL_VIDEODRIVER=wayland
 Environment=SDL_AUDIODRIVER=alsa
+# Cage always composites and fullscreens its client at the output size, so this
+# mode sets the pixel count of both the game's presentation blit and the
+# compositor's pass. Driving the game's own 1280x720 measured 25% of the V3D
+# core and 58-60 FPS where 1080p measured 50% and 45 FPS. 1080p is the default
+# anyway because monitors that refuse a 720p HDMI mode are common; switch to
+# 1280x720@60Hz on a display that accepts it and take the frame rate.
 Environment=TAIKOS_OUTPUT_MODE=1920x1080@60Hz
 Environment=TAIKO_GPU_DRIVER=vulkan
 Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*

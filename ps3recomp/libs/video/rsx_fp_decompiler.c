@@ -280,9 +280,14 @@ static void dest_mask(u32 op0, char* m)
     m[n] = '\0';
 }
 
+/* NV40 fragment programs always define four MRT colour outputs. Declaring and
+ * writing all four when the pass has fewer attachments is not free: the
+ * discarded ones keep r2..r4 / h4..h8 live, which is what pushed this shader
+ * past V3D's register budget and dropped it to a lower thread count, and each
+ * one still costs a TLB write. `color_targets` (1..4) trims them. */
 static int rsx_fp_decompile_impl(const u8* ucode, u32 max_bytes,
                                 char* out, u32 out_size, int exports32,
-                                int dynamic_constants)
+                                int dynamic_constants, unsigned color_targets)
 {
     if (!ucode || !out || out_size == 0) return -1;
 
@@ -321,9 +326,16 @@ static int rsx_fp_decompile_impl(const u8* ucode, u32 max_bytes,
         "float4 rsx_apply_remap(float4 v,uint u){return v;}\n"
         "#endif\n"
         "SamplerState rsx_samp0 : register(s0); SamplerState rsx_samp1 : register(s1);\n"
-        "SamplerState rsx_samp2 : register(s2); SamplerState rsx_samp3 : register(s3);\n"
-        "struct PSOut { float4 c0:SV_Target0; float4 c1:SV_Target1;\n"
-        "               float4 c2:SV_Target2; float4 c3:SV_Target3; };\n"
+        "SamplerState rsx_samp2 : register(s2); SamplerState rsx_samp3 : register(s3);\n");
+    out_puts(&o, "struct PSOut {\n");
+    for (unsigned target = 0; target < color_targets; ++target) {
+        char line[64];
+        snprintf(line, sizeof(line),
+                 "    float4 c%u:SV_Target%u;\n", target, target);
+        out_puts(&o, line);
+    }
+    out_puts(&o, "};\n");
+    out_puts(&o,
         "PSOut main(PSInput input) {\n"
         "    float4 r[48]; float4 h[48];\n"
         /* Fully initialise both register files: RSX programs routinely read a
@@ -475,9 +487,13 @@ static int rsx_fp_decompile_impl(const u8* ucode, u32 max_bytes,
                         out_puts(&o, "        PSOut _ret; _ret.c0 = r[0];\n");
                     else
                         out_puts(&o, "        PSOut _ret; _ret.c0 = h[0];\n");
+                    if (color_targets > 1)
+                        out_puts(&o, "        _ret.c1 = r[2] + h[4];\n");
+                    if (color_targets > 2)
+                        out_puts(&o, "        _ret.c2 = r[3] + h[6];\n");
+                    if (color_targets > 3)
+                        out_puts(&o, "        _ret.c3 = r[4] + h[8];\n");
                     out_puts(&o,
-                        "        _ret.c1 = r[2] + h[4]; _ret.c2 = r[3] + h[6];\n"
-                        "        _ret.c3 = r[4] + h[8];\n"
                         "        if (rsx_alphatest.x != 0.0) {\n"
                         "            float _a = _ret.c0.a, _r = rsx_alphatest.y;\n"
                         "            int _f = (int)rsx_alphatest.z;\n"
@@ -638,8 +654,13 @@ static int rsx_fp_decompile_impl(const u8* ucode, u32 max_bytes,
         out_puts(&o, "    PSOut _po; _po.c0 = r[0];\n");
     else
         out_puts(&o, "    PSOut _po; _po.c0 = h[0];\n");
-    out_puts(&o, "    _po.c1 = r[2] + h[4]; _po.c2 = r[3] + h[6];\n"
-                 "    _po.c3 = r[4] + h[8];\n"
+    if (color_targets > 1)
+        out_puts(&o, "    _po.c1 = r[2] + h[4];\n");
+    if (color_targets > 2)
+        out_puts(&o, "    _po.c2 = r[3] + h[6];\n");
+    if (color_targets > 3)
+        out_puts(&o, "    _po.c3 = r[4] + h[8];\n");
+    out_puts(&o,
         /* Guest alpha test (D3D12 has none fixed-function): func codes are
          * RSX 0x200+f with f: 0=NEVER 1=LESS 2=EQUAL 3=LEQUAL 4=GREATER
          * 5=NOTEQUAL 6=GEQUAL 7=ALWAYS. */
@@ -661,12 +682,14 @@ int rsx_fp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size,
                      int exports32)
 {
     return rsx_fp_decompile_impl(ucode, max_bytes, out, out_size,
-                                 exports32, 0);
+                                 exports32, 0, 4u);
 }
 
 int rsx_fp_decompile_dynamic(const u8* ucode, u32 max_bytes,
-                             char* out, u32 out_size, int exports32)
+                             char* out, u32 out_size, int exports32,
+                             unsigned color_targets)
 {
+    if (!color_targets || color_targets > 4u) color_targets = 4u;
     return rsx_fp_decompile_impl(ucode, max_bytes, out, out_size,
-                                 exports32, 1);
+                                 exports32, 1, color_targets);
 }

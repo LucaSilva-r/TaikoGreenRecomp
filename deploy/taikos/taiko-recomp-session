@@ -8,16 +8,25 @@ set -Eeuo pipefail
 # Only meaningful under a Wayland compositor. On the KMSDRM path SDL owns the
 # connector itself and wlr-randr is neither present nor wanted.
 if [[ -n "${WAYLAND_DISPLAY:-}" && -n "${TAIKOS_OUTPUT}" && -n "${TAIKOS_OUTPUT_MODE}" ]]; then
-    wlr-randr --output "${TAIKOS_OUTPUT}" --on --mode "${TAIKOS_OUTPUT_MODE}"
-
-    # Cage can select the first client's 1280x720 surface size when SDL creates
-    # it, undoing the pre-launch HDMI mode. Reapply the appliance mode once the
-    # Wayland surface exists. This changes the physical output only; the game
-    # continues rendering its fixed 1280x720 target and Cage scales it.
+    # Keep asking for the appliance mode until the output reports it, for up to
+    # 30 s. Two things need that patience: a display still waking up has no EDID
+    # yet, so the first request simply fails, and Cage can adopt the first
+    # client's 1280x720 surface size when SDL creates it. Never fall back to
+    # `--on` alone -- that lights the connector at its preferred mode, which on
+    # a 4K monitor is 3840x2160@30: four times the pixels for both the game's
+    # presentation blit and Cage's composite, at half the refresh rate.
     (
-        sleep 2
-        wlr-randr --output "${TAIKOS_OUTPUT}" --on \
-            --mode "${TAIKOS_OUTPUT_MODE}"
+        want="${TAIKOS_OUTPUT_MODE%%@*}"
+        for _ in $(seq 30); do
+            if wlr-randr 2>/dev/null |
+                   grep -qE "^ +${want} px.*current"; then
+                sleep 1
+                continue
+            fi
+            wlr-randr --output "${TAIKOS_OUTPUT}" --on \
+                --mode "${TAIKOS_OUTPUT_MODE}" 2>/dev/null || true
+            sleep 1
+        done
     ) &
 fi
 

@@ -1,5 +1,6 @@
 #include "rsx_batch_io.h"
 #include "rsx_commands.h"
+#include "rsx_vp_decompiler.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -241,8 +242,50 @@ static int test_clone_and_io(void)
     return 1;
 }
 
+/* One VP instruction: MOV o[0], v[3]. Assembled straight from the field layout
+ * documented in rsx_vp_decompiler.c so the test does not depend on a capture.
+ * The packed layout is only correct if the mask scanner and the generated
+ * HLSL agree about which inputs the program reads. */
+static int test_vp_input_mask(void)
+{
+    u8 ucode[16];
+    u32 d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+    d1 |= 3u << 8;              /* input_src = v[3] */
+    d1 |= 0x01u << 22;          /* vector op MOV */
+    d2 |= 2u << 23;             /* src0 reg_type = input */
+    d0 |= 1u << 30;             /* vector unit owns the output register */
+    d3 |= (0u & 0x1Fu) << 2;    /* dst_out = o[0] */
+    d3 |= 1u << 16;             /* write .x */
+    d3 |= 1u;                   /* end */
+    for (int i = 0; i < 4; ++i) {
+        u32 word = i == 0 ? d0 : i == 1 ? d1 : i == 2 ? d2 : d3;
+        ucode[i*4+0]=(u8)word; ucode[i*4+1]=(u8)(word>>8);
+        ucode[i*4+2]=(u8)(word>>16); ucode[i*4+3]=(u8)(word>>24);
+    }
+    u32 mask = rsx_vp_input_mask(ucode, sizeof(ucode));
+    if (!check(mask == (1u<<3), "vp input mask selects only v[3]")) return 0;
+
+    static char hlsl[64*1024];
+    if (!check(rsx_vp_decompile(ucode,sizeof(ucode),hlsl,sizeof(hlsl),mask) >= 0,
+               "packed VP decompile")) return 0;
+    if (!check(strstr(hlsl,"float4 a0:ATTR0;") != NULL &&
+               strstr(hlsl,"float4 a1:ATTR1;") == NULL,
+               "packed VP declares exactly one attribute")) return 0;
+    if (!check(strstr(hlsl,"v[3]=input.a0;") != NULL &&
+               strstr(hlsl,"v[0]=float4(0,0,0,1);") != NULL,
+               "packed VP binds v[3] and defaults the rest")) return 0;
+
+    if (!check(rsx_vp_decompile(ucode,sizeof(ucode),hlsl,sizeof(hlsl),0xFFFFu) >= 0,
+               "sixteen-slot VP decompile")) return 0;
+    if (!check(strstr(hlsl,"float4 a15:ATTR15;") != NULL &&
+               strstr(hlsl,"v[3]=input.a3;") != NULL,
+               "sixteen-slot VP keeps the identity layout")) return 0;
+    return 1;
+}
+
 int main(void)
 {
-    if(!test_primitives()||!test_texture_helpers()||!test_clone_and_io())return 1;
+    if(!test_primitives()||!test_texture_helpers()||!test_clone_and_io()||
+       !test_vp_input_mask())return 1;
     puts("portable RSX batch tests passed");return 0;
 }

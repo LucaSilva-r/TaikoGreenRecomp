@@ -36,7 +36,8 @@ int main(int argc, char** argv)
 
         u32 ni = rsx_vp_program_size_instrs(buf, (u32)n);
         u32 bytes = ni ? ni*16 : (u32)n;
-        int r = rsx_vp_decompile(buf, bytes, hlsl, sizeof hlsl);
+        int r = rsx_vp_decompile(buf, bytes, hlsl, sizeof hlsl,
+                                 rsx_vp_input_mask(buf, bytes));
         if (r < 0) { decode_err++; continue; }
         decoded++;
 

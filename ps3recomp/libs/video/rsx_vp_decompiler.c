@@ -131,9 +131,32 @@ static void emit_store(Out* b, const char* dst_fmt, u32 idx, const char* m)
     emit(b, line);
 }
 
-int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size)
+u32 rsx_vp_input_mask(const u8* ucode, u32 max_bytes)
+{
+    u32 mask = 0, off = 0;
+    if (!ucode) return 1u;
+    while (off + 16 <= max_bytes) {
+        u32 d1 = rd_le(ucode+off+4), d2 = rd_le(ucode+off+8), d3 = rd_le(ucode+off+12);
+        u32 input_src = (d1 >> 8) & 0xF;
+        /* Same three 17-bit source fields the decompiler assembles; reg_type
+         * 2 (bits [0:1]) is an input register read. */
+        u32 src0 = ((d2 >> 23) & 0x1FF) | ((d1 & 0xFF) << 9);
+        u32 src1 = (d2 >> 6) & 0x1FFFF;
+        u32 src2 = ((d3 >> 21) & 0x7FF) | ((d2 & 0x3F) << 11);
+        if ((src0 & 3) == 2 || (src1 & 3) == 2 || (src2 & 3) == 2)
+            mask |= 1u << input_src;
+        off += 16;
+        if (d3 & 1u) break; /* end */
+    }
+    return mask ? mask : 1u;
+}
+
+int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size,
+                     u32 input_mask)
 {
     if (!ucode || !out || out_size < 256) return -1;
+    input_mask &= 0xFFFFu;
+    if (!input_mask) input_mask = 1u;
 
     /* Body is built first, preamble/epilogue wrap it. */
     static char body[192 * 1024];
@@ -306,15 +329,37 @@ int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size)
 
     /* ---- assemble full shader ---- */
     Out o = { out, out_size, 0, 0 };
+    /* Only the inputs the program reads are fetched and converted on the CPU,
+     * and they arrive packed in ascending slot order, so the k'th declared
+     * attribute is both ATTRk and vertex-buffer element k. Everything else is
+     * the RSX default the fetcher would otherwise have written per vertex. */
+    char declarations[1024], loads[1536];
+    {
+        u32 packed = 0, used = 0, taken = 0;
+        for (u32 slot = 0; slot < 16; ++slot) {
+            if (input_mask & (1u << slot)) {
+                used += (u32)snprintf(declarations + used,
+                                      used < sizeof(declarations)
+                                          ? sizeof(declarations) - used : 0,
+                                      "    float4 a%u:ATTR%u;\n", packed, packed);
+                taken += (u32)snprintf(loads + taken,
+                                       taken < sizeof(loads)
+                                           ? sizeof(loads) - taken : 0,
+                                       "    v[%u]=input.a%u;\n", slot, packed);
+                ++packed;
+            } else {
+                taken += (u32)snprintf(loads + taken,
+                                       taken < sizeof(loads)
+                                           ? sizeof(loads) - taken : 0,
+                                       "    v[%u]=float4(0,0,0,1);\n", slot);
+            }
+        }
+        if (used >= sizeof(declarations) || taken >= sizeof(loads)) return -1;
+    }
+    emit(&o, "struct VSInput {\n");
+    emit(&o, declarations);
+    emit(&o, "};\n");
     emit(&o,
-        /* All 16 RSX vertex attributes arrive as float4 (the harness fetches
-         * and converts them on the CPU). */
-        "struct VSInput {\n"
-        "    float4 a0:ATTR0;  float4 a1:ATTR1;  float4 a2:ATTR2;  float4 a3:ATTR3;\n"
-        "    float4 a4:ATTR4;  float4 a5:ATTR5;  float4 a6:ATTR6;  float4 a7:ATTR7;\n"
-        "    float4 a8:ATTR8;  float4 a9:ATTR9;  float4 a10:ATTR10; float4 a11:ATTR11;\n"
-        "    float4 a12:ATTR12; float4 a13:ATTR13; float4 a14:ATTR14; float4 a15:ATTR15;\n"
-        "};\n"
         "struct VSOutput {\n"
         "    float4 pos:SV_Position; float4 col0:COLOR0; float4 col1:COLOR1;\n"
         "    float4 fog:FOG;\n"
@@ -330,11 +375,9 @@ int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size)
         "    float4 vp_posoffset;\n"
         "};\n"
         "VSOutput main(VSInput input) {\n"
-        "    float4 v[16];\n"
-        "    v[0]=input.a0;  v[1]=input.a1;  v[2]=input.a2;  v[3]=input.a3;\n"
-        "    v[4]=input.a4;  v[5]=input.a5;  v[6]=input.a6;  v[7]=input.a7;\n"
-        "    v[8]=input.a8;  v[9]=input.a9;  v[10]=input.a10; v[11]=input.a11;\n"
-        "    v[12]=input.a12; v[13]=input.a13; v[14]=input.a14; v[15]=input.a15;\n"
+        "    float4 v[16];\n");
+    emit(&o, loads);
+    emit(&o,
         "    float4 r[32]; float4 o[16];\n"
         "    [unroll] for (int _i=0;_i<32;_i++) r[_i]=(float4)0;\n"
         "    [unroll] for (int _j=0;_j<16;_j++) o[_j]=float4(0,0,0,1);\n"

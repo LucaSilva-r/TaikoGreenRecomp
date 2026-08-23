@@ -632,7 +632,8 @@ if(BUILD_TESTING AND NOT WIN32)
     add_executable(rsx_render_batch_tests
         "tests/rsx_render_batch_tests.c"
         "${PS3RECOMP_DIR}/libs/video/rsx_render_batch.c"
-        "${PS3RECOMP_DIR}/libs/video/rsx_batch_io.c")
+        "${PS3RECOMP_DIR}/libs/video/rsx_batch_io.c"
+        "${PS3RECOMP_DIR}/libs/video/rsx_vp_decompiler.c")
     target_include_directories(rsx_render_batch_tests PRIVATE
         "${PS3RECOMP_DIR}/include"
         "${PS3RECOMP_DIR}/libs/video")

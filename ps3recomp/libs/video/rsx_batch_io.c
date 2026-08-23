@@ -1,4 +1,5 @@
 #include "rsx_batch_io.h"
+#include "rsx_vp_decompiler.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -118,7 +119,7 @@ static void read_pipeline(reader* in,rsx_pipeline_key* p)
     u32 f=get_u32(in); p->blend_enable=f&1;p->depth_test_enable=(f>>1)&1;
     p->depth_write_enable=(f>>2)&1;p->stencil_test_enable=(f>>3)&1;p->cull_enable=(f>>4)&1;
     p->alpha_test_enable=(f>>5)&1;p->fragment_32bit_exports=(f>>6)&1;
-    if(p->topology>RSX_TOPOLOGY_TRIANGLE_LIST||p->vertex_layout>RSX_VERTEX_LAYOUT_FLOAT4_X16||p->color_target_count>4)in->failed=1;
+    if(p->topology>RSX_TOPOLOGY_TRIANGLE_LIST||p->vertex_layout>RSX_VERTEX_LAYOUT_PACKED||p->color_target_count>4)in->failed=1;
 }
 
 static void write_texture(writer* out,const rsx_texture_source* t)
@@ -192,7 +193,12 @@ static void read_op(reader* in,rsx_render_op* op)
       read_blob(in,&d->vertex_data);read_blob(in,&d->index_data);
       read_blob(in,&d->vertex_constants);read_blob(in,&d->vertex_shader);
       read_blob(in,&d->fragment_shader);
-      u64 stride=d->pipeline.vertex_layout==RSX_VERTEX_LAYOUT_FLOAT4_X16?256u:36u;
+      u64 stride=36u;
+      if(d->pipeline.vertex_layout==RSX_VERTEX_LAYOUT_FLOAT4_X16) stride=256u;
+      else if(d->pipeline.vertex_layout==RSX_VERTEX_LAYOUT_PACKED){
+        u32 m=d->vertex_shader.size?rsx_vp_input_mask(d->vertex_shader.data,(u32)d->vertex_shader.size):0xFFFFu;
+        stride=0; for(u32 b=0;b<16;++b) if(m&(1u<<b)) stride+=16u;
+      }
       if(d->vertex_count>RSXB_MAX_OPERATIONS||
          (u64)d->vertex_count*stride>d->vertex_data.size||
          d->vertex_constants.size>(u64)RSX_BATCH_VP_CONSTANTS*16u||

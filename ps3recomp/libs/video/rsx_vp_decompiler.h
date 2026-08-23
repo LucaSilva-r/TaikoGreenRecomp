@@ -31,13 +31,26 @@ u32 rsx_vp_program_size_instrs(const u8* ucode, u32 max_bytes);
  *   out      : caller buffer for generated HLSL (NUL-terminated).
  *   out_size : size of out in bytes.
  * Returns instruction count (>=0), or -1 on error (null args / overflow).
- * Emits `VSOutput main(VSInput input)`: 16 float4 inputs (ATTR0..15), a
+ * input_mask: bit n set = vertex input v[n] arrives in the vertex buffer, as
+ *   the mask'th float4 of the packed vertex; a cleared bit reads the RSX
+ *   default (0,0,0,1) as a literal. Pass 0xFFFF for the full sixteen-slot
+ *   layout. Use rsx_vp_input_mask() so the producer and the pipeline agree.
+ * Emits `VSOutput main(VSInput input)`: one float4 input per mask bit
+ * (ATTR0..ATTRn in packed order), a
  * `cbuffer VPConst : register(b0)` with 512 vec4 constants + vp_posscale/
  * vp_posoffset (the RSX viewport transform mapped to D3D clip space; the
  * caller computes them per draw), SV_Position + COLOR0/1 + FOG + TEXCOORD0..7
  * varyings routed per the NV40 output register map (o0/o1/o2/o5/o7..o14).
  * Not modeled: condition-code tests, flow control (BRA/CAL/...), TXL. */
-int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size);
+int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size,
+                     u32 input_mask);
+
+/* Bitmask of the vertex inputs v[0..15] the program reads. The vertex buffer
+ * needs to carry only these, which is what RSX_VERTEX_LAYOUT_PACKED does; a
+ * program that reads none still gets bit 0 so the vertex stride stays valid.
+ * Scans the same instruction range and honours the same end bit as
+ * rsx_vp_decompile, so both always agree on the layout. */
+u32 rsx_vp_input_mask(const u8* ucode, u32 max_bytes);
 
 /* Mnemonics for the vector / scalar opcode fields ("?" if unknown). */
 const char* rsx_vp_vec_name(u32 op);

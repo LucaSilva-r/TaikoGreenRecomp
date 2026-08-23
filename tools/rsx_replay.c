@@ -72,6 +72,7 @@ int main(int argc, char** argv)
     char dump_draw_prefix[1024] = {0};
     int have_dump_draw = 0;
     int inspect = 0, inspect_only = 0;
+    u32 loops = 1;
     for (int i = 1; i < argc; ++i) {
         const char* value;
         if ((value = value_after(argv[i], "--backend="))) backend = value;
@@ -121,6 +122,14 @@ int main(int argc, char** argv)
             }
             have_dump_draw = 1;
         }
+        else if ((value = value_after(argv[i], "--loop="))) {
+            /* Replay the capture N times. A single pass over a 30-frame
+             * capture is far too short to sample GPU counters against; this
+             * turns it into a steady, deterministic load. Frames are written
+             * on the first pass only. */
+            loops = (u32)strtoul(value, NULL, 0);
+            if (!loops) loops = 1;
+        }
         else if (strcmp(argv[i], "--inspect") == 0) inspect = 1;
         else if (strcmp(argv[i], "--inspect-only") == 0)
             inspect = inspect_only = 1;
@@ -132,7 +141,7 @@ int main(int argc, char** argv)
     if (!backend || strcmp(backend, "sdl_gpu") != 0 || !input || !output_dir) {
         fprintf(stderr,
                 "usage: rsx_replay --backend=sdl_gpu --input=FILE "
-                "--output-dir=DIR [--inspect|--inspect-only] "
+                "--output-dir=DIR [--inspect|--inspect-only] [--loop=N] "
                 "[--stop-after-op=N] [--dump-textures=DIR] "
                 "[--blend-override=OP,SFACTOR,DFACTOR] "
                 "[--draw-range-override=FIRST,LAST,REF_FILE,REF_FIRST] "
@@ -392,6 +401,7 @@ int main(int argc, char** argv)
         return 1;
     }
     int result = 0;
+    for (u32 pass = 0; pass < loops && result == 0; ++pass)
     for (u32 i = 0; i < count; ++i) {
         if (have_blend_override && i == 0 &&
             blend_override_op < batches[i].operation_count) {
@@ -417,13 +427,15 @@ int main(int argc, char** argv)
             rsx_sdl_gpu_backend_main_iterate(0);
         } while (rsx_sdl_gpu_backend_has_pending_batches());
         batches[i].operation_count = saved_operation_count;
-        char path[1024];
-        int written = snprintf(path, sizeof(path), "%s/frame_%06u.bmp",
-                               output_dir, i);
-        if (written < 0 || (size_t)written >= sizeof(path) ||
-            rsx_sdl_gpu_backend_save_display_bmp(path) != 0) {
-            result = 1;
-            break;
+        if (pass == 0) {
+            char path[1024];
+            int written = snprintf(path, sizeof(path), "%s/frame_%06u.bmp",
+                                   output_dir, i);
+            if (written < 0 || (size_t)written >= sizeof(path) ||
+                rsx_sdl_gpu_backend_save_display_bmp(path) != 0) {
+                result = 1;
+                break;
+            }
         }
     }
     unsigned errors = rsx_sdl_gpu_backend_error_count();

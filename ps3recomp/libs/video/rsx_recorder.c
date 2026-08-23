@@ -1,4 +1,5 @@
 #include "rsx_recorder.h"
+#include "rsx_vp_decompiler.h"
 
 #include "cellGcmSys.h"
 #include "rsx_fp_decompiler.h"
@@ -38,6 +39,7 @@ typedef struct recorder_vertex_key {
     u32 index_array_dma;
     u32 restart_index_enable;
     u32 restart_index;
+    u32 input_mask;
     rsx_vertex_attrib attributes[RSX_MAX_VERTEX_ATTRIBS];
 } recorder_vertex_key;
 
@@ -84,6 +86,7 @@ typedef struct recorder_state {
     int seen_content;
     char capture_path[1024];
     u32 capture_target;
+    u32 capture_skip;
     u32 capture_count;
     int capture_stage;
     atomic_int capture_request;
@@ -274,6 +277,17 @@ static int append_seed_surfaces(rsx_render_batch* destination)
 
 static void capture_submitted_batch(const rsx_render_batch* batch)
 {
+    /* RSX_BATCH_CAPTURE_SKIP delays arming by that many submitted batches, so
+     * a later scene can be captured on a machine with no keyboard to press
+     * F10 on -- an appliance, or a session driven from a script. */
+    if (s_recorder.capture_skip) {
+        --s_recorder.capture_skip;
+        if (!s_recorder.capture_skip)
+            atomic_store_explicit(&s_recorder.capture_request, 1,
+                                  memory_order_release);
+        else
+            return;
+    }
     begin_capture_request();
     if (!s_recorder.capture_stage || !batch_has_display_draw(batch)) return;
     if (s_recorder.capture_stage == 1) {
@@ -681,7 +695,7 @@ static u32 resolve_vertex(const rsx_state* state, u32 encoded, u32 byte_offset)
  * live slots once per draw, then per vertex copy the default block and fill
  * only those. */
 typedef struct vertex_plan_slot {
-    u32 slot;
+    u32 packed;
     u32 offset;
     u32 stride;
     u32 type;
@@ -691,6 +705,7 @@ typedef struct vertex_plan_slot {
 typedef struct vertex_plan {
     vertex_plan_slot slots[16];
     u32 count;
+    u32 packed_slots;
 } vertex_plan;
 
 static const float k_vertex_defaults[16][4] = {
@@ -700,15 +715,22 @@ static const float k_vertex_defaults[16][4] = {
     {0,0,0,1},{0,0,0,1},{0,0,0,1},{0,0,0,1},
 };
 
-static void build_vertex_plan(const rsx_state* state, vertex_plan* plan)
+/* `mask` selects which of the sixteen RSX slots the emitted vertex carries;
+ * bit n lands at packed element popcount(mask & ((1<<n)-1)). Pass 0xFFFF for
+ * the identity (sixteen-slot) layout. */
+static void build_vertex_plan(const rsx_state* state, u32 mask,
+                              vertex_plan* plan)
 {
     plan->count = 0;
+    plan->packed_slots = 0;
     for (u32 attribute = 0; attribute < 16; ++attribute) {
+        if (!(mask & (1u << attribute))) continue;
+        u32 packed = plan->packed_slots++;
         const rsx_vertex_attrib* input = &state->vertex_attribs[attribute];
         if (!input->enabled || !input->stride) continue;
         vertex_plan_slot* out = &plan->slots[plan->count++];
         u32 lanes = input->size ? input->size : 4u;
-        out->slot = attribute;
+        out->packed = packed;
         out->offset = input->offset;
         out->stride = input->stride;
         out->type = input->type;
@@ -717,12 +739,13 @@ static void build_vertex_plan(const rsx_state* state, vertex_plan* plan)
 }
 
 static void read_vertex_planned(const rsx_state* state, const vertex_plan* plan,
-                                u32 vertex, float output[16][4])
+                                u32 vertex, float (*output)[4])
 {
-    memcpy(output, k_vertex_defaults, sizeof(k_vertex_defaults));
+    memcpy(output, k_vertex_defaults,
+           (size_t)plan->packed_slots * sizeof(k_vertex_defaults[0]));
     for (u32 i = 0; i < plan->count; ++i) {
         const vertex_plan_slot* input = &plan->slots[i];
-        float* out = output[input->slot];
+        float* out = output[input->packed];
         const u8* source = vm_base + resolve_vertex(state, input->offset,
                                                     vertex * input->stride);
         const u32 lanes = input->lanes;
@@ -812,8 +835,19 @@ static int snapshot_draw(rsx_render_op* op, u32 primitive, u32 first, u32 count,
     memcpy(vertex_key.attributes, state->vertex_attribs,
            sizeof(vertex_key.attributes));
     rsx_portable_topology topology = RSX_TOPOLOGY_TRIANGLE_LIST;
-    rsx_vertex_layout layout = state->vp_ucode_bytes >= 16
-        ? RSX_VERTEX_LAYOUT_FLOAT4_X16 : RSX_VERTEX_LAYOUT_FALLBACK_36;
+    /* With a vertex program, carry only the inputs it reads; the consumer
+     * derives the same set from the same ucode. Without one, the fixed
+     * fallback vertex is used and the mask is the full sixteen slots. */
+    static int fat_vertices = -1;
+    if (fat_vertices < 0)
+        fat_vertices = getenv("TAIKO_RSX_FAT_VERTICES") ? 1 : 0;
+    rsx_vertex_layout layout = state->vp_ucode_bytes < 16
+        ? RSX_VERTEX_LAYOUT_FALLBACK_36
+        : fat_vertices ? RSX_VERTEX_LAYOUT_FLOAT4_X16
+                       : RSX_VERTEX_LAYOUT_PACKED;
+    u32 input_mask = layout == RSX_VERTEX_LAYOUT_PACKED
+        ? rsx_vp_input_mask(state->vp_ucode, state->vp_ucode_bytes) : 0xFFFFu;
+    vertex_key.input_mask = input_mask;
     for (u32 i = 0; indexed && i < s_recorder.vertex_cache_count; ++i) {
         const recorder_vertex_cache_entry* entry = &s_recorder.vertex_cache[i];
         if (memcmp(&entry->key, &vertex_key, sizeof(vertex_key)) != 0) continue;
@@ -850,8 +884,11 @@ static int snapshot_draw(rsx_render_op* op, u32 primitive, u32 first, u32 count,
             expanded[i] = (expanded[i] + state->vertex_data_base_index)
                         & 0x000fffffu;
 
-    u32 stride = layout == RSX_VERTEX_LAYOUT_FLOAT4_X16
-        ? 16u * 4u * sizeof(float) : sizeof(fallback_vertex);
+    vertex_plan plan;
+    build_vertex_plan(state, input_mask, &plan);
+    u32 stride = layout == RSX_VERTEX_LAYOUT_FALLBACK_36
+        ? (u32)sizeof(fallback_vertex)
+        : plan.packed_slots * 4u * (u32)sizeof(float);
     u64 vertex_bytes = (u64)expanded_count * stride;
     if (rsx_owned_blob_allocate(&op->data.draw.vertex_data,
                                 vertex_bytes) != 0) {
@@ -859,10 +896,8 @@ static int snapshot_draw(rsx_render_op* op, u32 primitive, u32 first, u32 count,
         return -1;
     }
     u8* vertices = op->data.draw.vertex_data.data;
-    vertex_plan plan;
-    build_vertex_plan(state, &plan);
     for (u32 i = 0; i < expanded_count; ++i) {
-        if (layout == RSX_VERTEX_LAYOUT_FLOAT4_X16) {
+        if (layout != RSX_VERTEX_LAYOUT_FALLBACK_36) {
             read_vertex_planned(state, &plan, expanded[i],
                 (float (*)[4])(vertices + (u64)i * stride));
         } else {
@@ -1177,7 +1212,14 @@ int rsx_recorder_install(rsx_backend* legacy,
         const char* path = getenv("RSX_BATCH_CAPTURE");
         if (path && path[0]) {
             const char* frames = getenv("RSX_BATCH_CAPTURE_FRAMES");
+            const char* skip = getenv("RSX_BATCH_CAPTURE_SKIP");
             rsx_recorder_arm_capture(path, frames ? (u32)strtoul(frames, NULL, 0) : 1u);
+            if (skip && skip[0]) {
+                s_recorder.capture_skip = (u32)strtoul(skip, NULL, 0);
+                if (s_recorder.capture_skip)
+                    atomic_store_explicit(&s_recorder.capture_request, 0,
+                                          memory_order_release);
+            }
         }
     }
     rsx_set_backend(&s_recorder.backend);

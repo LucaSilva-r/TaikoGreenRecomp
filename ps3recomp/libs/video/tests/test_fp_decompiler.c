@@ -178,7 +178,7 @@ int main(void)
         check_true("dynamic_extract_values",
             constants[0] == 0.5f && constants[1] == 0.25f &&
             constants[2] == 1.0f && constants[3] == 0.75f);
-        rsx_fp_decompile_dynamic(b, sizeof(b), hlsl, sizeof(hlsl), 1);
+        rsx_fp_decompile_dynamic(b, sizeof(b), hlsl, sizeof(hlsl), 1, 4u);
         check("dynamic_uniform_declaration", hlsl,
               "cbuffer FPConstants : register(b2)");
         check("dynamic_uniform_reference", hlsl, "rsx_fp_constants[0]");
