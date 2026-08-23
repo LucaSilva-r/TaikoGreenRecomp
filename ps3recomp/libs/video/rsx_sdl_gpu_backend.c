@@ -158,8 +158,36 @@ typedef struct sdl_rsx_state {
     Uint64 perf_constants_ns;
     Uint64 perf_vertex_bytes;
     int kms_present;
-    SDL_GPUTransferBuffer* kms_readback;
-    Uint32 kms_readback_bytes;
+    Uint64 perf_kms_render_ns;
+    Uint64 perf_kms_download_ns;
+    Uint64 perf_kms_copy_ns;
+    Uint64 perf_kms_flip_ns;
+    /* Presentation through KMS costs a GPU download and a CPU copy. Neither
+     * belongs on the critical path: the download is waited for one frame late,
+     * and the copy runs on a worker thread while the next frame renders. */
+    struct kms_slot {
+        SDL_GPUTransferBuffer* transfer;
+        SDL_GPUFence* fence;
+        Uint32 pitch;
+        Uint32 bytes;
+        int busy;
+    } kms_slots[3];
+    unsigned kms_write;
+    /* Display targets for the KMS path. get_surface() aliases both guest
+     * display buffers onto one texture, so with a download in flight the next
+     * frame would render straight into the texture being read. Rotate, and
+     * never hand back a target whose download has not been consumed. */
+    SDL_GPUTexture* kms_display[4];
+    int kms_display_reader[4];
+    unsigned kms_display_index;
+    unsigned kms_display_count;
+    int kms_pending[3];
+    unsigned kms_pending_count;
+    SDL_Thread* kms_thread;
+    SDL_Mutex* kms_mutex;
+    SDL_Condition* kms_work;
+    SDL_Condition* kms_free;
+    int kms_stop;
     Uint64 perf_vertices_ns;
     Uint64 perf_render_ns;
     Uint64 perf_present_ns;
@@ -1696,31 +1724,135 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
 }
 
 #ifdef RSX_SDL_KMS_PRESENT
-/* Read the finished frame back and hand it to KMS. This is the slow, obvious
- * version: a full download per frame. It exists to prove the path end to end
- * before the zero-copy dmabuf export, and it is what tells us whether owning
- * the display actually removes the half-drawn frames. */
+/* Getting a rendered frame onto a scanout buffer costs a GPU download and a
+ * CPU copy -- measured at 17.7 ms and 13.7 ms on the Pi, which is most of a
+ * 33 ms frame. Only about 6 ms of the download is GPU work; the rest is the
+ * wait. So the download is started here and collected one frame later, and the
+ * copy runs on a worker thread while the next frame renders. The main thread
+ * is then left with the render itself. */
+static int kms_copy_worker(void* userdata)
+{
+    (void)userdata;
+    for (;;) {
+        SDL_LockMutex(s_sdl.kms_mutex);
+        while (!s_sdl.kms_pending_count && !s_sdl.kms_stop)
+            SDL_WaitCondition(s_sdl.kms_work, s_sdl.kms_mutex);
+        if (s_sdl.kms_stop && !s_sdl.kms_pending_count) {
+            SDL_UnlockMutex(s_sdl.kms_mutex);
+            return 0;
+        }
+        const int index = s_sdl.kms_pending[0];
+        for (unsigned i = 1; i < s_sdl.kms_pending_count; ++i)
+            s_sdl.kms_pending[i - 1] = s_sdl.kms_pending[i];
+        --s_sdl.kms_pending_count;
+        SDL_BroadcastCondition(s_sdl.kms_free);
+        SDL_UnlockMutex(s_sdl.kms_mutex);
+
+        struct kms_slot* slot = &s_sdl.kms_slots[index];
+        if (slot->fence) {
+            SDL_GPUFence* fences[1] = {slot->fence};
+            SDL_WaitForGPUFences(s_sdl.device, true, fences, 1);
+            SDL_ReleaseGPUFence(s_sdl.device, slot->fence);
+            slot->fence = NULL;
+        }
+        void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, slot->transfer, false);
+        if (mapped) {
+            rsx_kms_present_frame(mapped, slot->pitch);
+            SDL_UnmapGPUTransferBuffer(s_sdl.device, slot->transfer);
+        }
+
+        SDL_LockMutex(s_sdl.kms_mutex);
+        slot->busy = 0;
+        SDL_BroadcastCondition(s_sdl.kms_free);
+        SDL_UnlockMutex(s_sdl.kms_mutex);
+    }
+}
+
+static int kms_start_worker(void)
+{
+    if (s_sdl.kms_thread) return 0;
+    s_sdl.kms_mutex = SDL_CreateMutex();
+    s_sdl.kms_work = SDL_CreateCondition();
+    s_sdl.kms_free = SDL_CreateCondition();
+    if (!s_sdl.kms_mutex || !s_sdl.kms_work || !s_sdl.kms_free) return -1;
+    s_sdl.kms_thread = SDL_CreateThread(kms_copy_worker, "taiko-kms", NULL);
+    return s_sdl.kms_thread ? 0 : -1;
+}
+
+static void kms_stop_worker(void)
+{
+    if (s_sdl.kms_thread) {
+        SDL_LockMutex(s_sdl.kms_mutex);
+        s_sdl.kms_stop = 1;
+        SDL_BroadcastCondition(s_sdl.kms_work);
+        SDL_UnlockMutex(s_sdl.kms_mutex);
+        SDL_WaitThread(s_sdl.kms_thread, NULL);
+        s_sdl.kms_thread = NULL;
+    }
+    for (unsigned i = 0; i < SDL_arraysize(s_sdl.kms_slots); ++i) {
+        if (s_sdl.kms_slots[i].fence)
+            SDL_ReleaseGPUFence(s_sdl.device, s_sdl.kms_slots[i].fence);
+        if (s_sdl.kms_slots[i].transfer)
+            SDL_ReleaseGPUTransferBuffer(s_sdl.device, s_sdl.kms_slots[i].transfer);
+        SDL_zero(s_sdl.kms_slots[i]);
+    }
+    if (s_sdl.kms_work) { SDL_DestroyCondition(s_sdl.kms_work); s_sdl.kms_work = NULL; }
+    if (s_sdl.kms_free) { SDL_DestroyCondition(s_sdl.kms_free); s_sdl.kms_free = NULL; }
+    if (s_sdl.kms_mutex) { SDL_DestroyMutex(s_sdl.kms_mutex); s_sdl.kms_mutex = NULL; }
+}
+
 static int present_display_kms(SDL_GPUCommandBuffer* commands)
 {
+    const Uint64 kms_start_ns = SDL_GetTicksNS();
+    /* The download must not be recorded until the frame is actually drawn.
+     * V3D runs copy jobs and render jobs on separate scheduler queues, so a
+     * download submitted while the render is still in flight reads a
+     * half-drawn target -- the same hazard TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT
+     * exists for. Only the CPU copy is worth pipelining; this wait is not. */
     if (commands) submit_commands_and_wait(commands);
+    Uint64 kms_mark_ns = SDL_GetTicksNS();
+    s_sdl.perf_kms_render_ns += kms_mark_ns - kms_start_ns;
+
     Uint32 width = 0, height = 0;
     SDL_GPUTexture* source = presentation_texture(&width, &height);
     if (!source || !width || !height) return -1;
     const Uint32 pitch = width * 4u;
     const Uint32 bytes = pitch * height;
-    if (s_sdl.kms_readback && s_sdl.kms_readback_bytes < bytes) {
-        SDL_ReleaseGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback);
-        s_sdl.kms_readback = NULL;
+    if (kms_start_worker() != 0) { ++s_sdl.errors; return -1; }
+
+    /* Wait only when every slot is still in flight; that is the backpressure
+     * that keeps the worker at most a couple of frames behind. */
+    static unsigned depth;
+    if (!depth) {
+        const char* text = getenv("TAIKO_KMS_PIPELINE_DEPTH");
+        depth = text ? (unsigned)strtoul(text, NULL, 0) : 2u;
+        if (depth < 1u) depth = 1u;
+        if (depth > SDL_arraysize(s_sdl.kms_slots)) depth = SDL_arraysize(s_sdl.kms_slots);
+        fprintf(stderr, "[KMS] pipeline depth %u\n", depth);
     }
-    if (!s_sdl.kms_readback) {
+    SDL_LockMutex(s_sdl.kms_mutex);
+    unsigned index = s_sdl.kms_write % depth;
+    while (s_sdl.kms_slots[index].busy || s_sdl.kms_pending_count >= depth)
+        SDL_WaitCondition(s_sdl.kms_free, s_sdl.kms_mutex);
+    s_sdl.kms_write = (s_sdl.kms_write + 1u) % depth;
+    SDL_UnlockMutex(s_sdl.kms_mutex);
+    struct kms_slot* slot = &s_sdl.kms_slots[index];
+
+    if (slot->transfer && slot->bytes < bytes) {
+        SDL_ReleaseGPUTransferBuffer(s_sdl.device, slot->transfer);
+        slot->transfer = NULL;
+    }
+    if (!slot->transfer) {
         SDL_GPUTransferBufferCreateInfo info;
         SDL_zero(info);
         info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
         info.size = bytes;
-        s_sdl.kms_readback = SDL_CreateGPUTransferBuffer(s_sdl.device, &info);
-        s_sdl.kms_readback_bytes = bytes;
-        if (!s_sdl.kms_readback) { ++s_sdl.errors; return -1; }
+        slot->transfer = SDL_CreateGPUTransferBuffer(s_sdl.device, &info);
+        slot->bytes = bytes;
+        if (!slot->transfer) { ++s_sdl.errors; return -1; }
     }
+    slot->pitch = pitch;
+
     SDL_GPUCommandBuffer* copy_commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
     if (!copy_commands) { ++s_sdl.errors; return -1; }
     SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(copy_commands);
@@ -1733,21 +1865,37 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
     region.d = 1;
     SDL_GPUTextureTransferInfo destination;
     SDL_zero(destination);
-    destination.transfer_buffer = s_sdl.kms_readback;
+    destination.transfer_buffer = slot->transfer;
     destination.pixels_per_row = width;
     destination.rows_per_layer = height;
     SDL_DownloadFromGPUTexture(copy, &region, &destination);
     SDL_EndGPUCopyPass(copy);
-    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(copy_commands);
-    if (!fence) { ++s_sdl.errors; return -1; }
-    SDL_GPUFence* fences[1] = {fence};
-    SDL_WaitForGPUFences(s_sdl.device, true, fences, 1);
-    SDL_ReleaseGPUFence(s_sdl.device, fence);
-    void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback, false);
-    if (!mapped) { ++s_sdl.errors; return -1; }
-    const int result = rsx_kms_present_frame(mapped, pitch);
-    SDL_UnmapGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback);
-    return result;
+    slot->fence = SDL_SubmitGPUCommandBufferAndAcquireFence(copy_commands);
+    if (!slot->fence) { ++s_sdl.errors; return -1; }
+    s_sdl.perf_kms_download_ns += SDL_GetTicksNS() - kms_mark_ns;
+
+    SDL_LockMutex(s_sdl.kms_mutex);
+    slot->busy = 1;
+    s_sdl.kms_pending[s_sdl.kms_pending_count++] = (int)index;
+    SDL_SignalCondition(s_sdl.kms_work);
+    SDL_UnlockMutex(s_sdl.kms_mutex);
+
+    /* Hand the next frame a target nobody is still reading. */
+    if (s_sdl.kms_display_count) {
+        const unsigned current = s_sdl.kms_display_index;
+        s_sdl.kms_display_reader[current] = (int)index;
+        const unsigned next = (current + 1u) % s_sdl.kms_display_count;
+        const int reader = s_sdl.kms_display_reader[next];
+        if (reader >= 0) {
+            SDL_LockMutex(s_sdl.kms_mutex);
+            while (s_sdl.kms_slots[reader].busy)
+                SDL_WaitCondition(s_sdl.kms_free, s_sdl.kms_mutex);
+            SDL_UnlockMutex(s_sdl.kms_mutex);
+        }
+        s_sdl.kms_display_index = next;
+        s_sdl.display = s_sdl.kms_display[next];
+    }
+    return 0;
 }
 #endif
 
@@ -1853,7 +2001,8 @@ static void update_window_title(void)
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
                 "cpu_ms(prep=%.2f const=%.2f vert=%.2f render=%.2f present=%.2f"
                 "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f vert_kib=%.0f "
-                "gpu(blits=%.1f copies=%.1f submits=%.1f)\n",
+                "gpu(blits=%.1f copies=%.1f submits=%.1f) "
+                "kms(render=%.2f download=%.2f copy=%.2f)\n",
                 fps, s_sdl.last_batch_draws, s_sdl.errors,
                 s_sdl.perf_batches ? (double)s_sdl.perf_prepare_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
@@ -1880,7 +2029,13 @@ static void update_window_title(void)
                 s_sdl.perf_batches ? (double)s_sdl.perf_copy_passes /
                     (double)s_sdl.perf_batches : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_submits /
-                    (double)s_sdl.perf_batches : 0.0);
+                    (double)s_sdl.perf_batches : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_kms_render_ns /
+                    (double)s_sdl.perf_batches / 1000000.0 : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_kms_download_ns /
+                    (double)s_sdl.perf_batches / 1000000.0 : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_kms_copy_ns /
+                    (double)s_sdl.perf_batches / 1000000.0 : 0.0);
     s_sdl.fps_window_start_ns = now;
     s_sdl.fps_window_frames = 0;
     s_sdl.perf_batches = 0;
@@ -1896,6 +2051,10 @@ static void update_window_title(void)
     s_sdl.perf_blits = 0;
     s_sdl.perf_copy_passes = 0;
     s_sdl.perf_submits = 0;
+    s_sdl.perf_kms_render_ns = 0;
+    s_sdl.perf_kms_download_ns = 0;
+    s_sdl.perf_kms_copy_ns = 0;
+    s_sdl.perf_kms_flip_ns = 0;
     s_sdl.perf_vertex_bytes = 0;
 }
 
@@ -2231,7 +2390,15 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
         ++render_passes;
         pending_clear = NULL;
     }
-    if (getenv("TAIKO_GPU_SERIAL_PRESENT")) {
+    if (s_sdl.kms_present) {
+        /* No swapchain here, so the rotating display targets buy nothing --
+         * and they actively break the KMS path: a slot can be re-rendered
+         * while its download is still in flight, which downloads a frame
+         * being overwritten. Render into one target and submit. */
+        s_sdl.presentation_override = NULL;
+        submit_commands_and_wait(commands);
+        commands = NULL;
+    } else if (getenv("TAIKO_GPU_SERIAL_PRESENT")) {
         const int pipelined = getenv("TAIKO_GPU_PIPELINED_PRESENT") != NULL;
         static int announced_mode;
         if (!announced_mode++) {
@@ -2709,6 +2876,13 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
             fprintf(stderr, "[SDL_GPU] KMS presentation unavailable\n");
             goto fail;
         }
+        s_sdl.kms_display_count = 2u;
+        for (unsigned i = 0; i < s_sdl.kms_display_count; ++i) {
+            s_sdl.kms_display[i] = create_presentation_slot();
+            s_sdl.kms_display_reader[i] = -1;
+            if (!s_sdl.kms_display[i]) goto fail;
+        }
+        s_sdl.display = s_sdl.kms_display[0];
 #endif
         goto swapchain_ready;
     }
@@ -2957,9 +3131,7 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
 {
 #ifdef RSX_SDL_KMS_PRESENT
     if (s_sdl.kms_present) {
-        if (s_sdl.kms_readback)
-            SDL_ReleaseGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback);
-        s_sdl.kms_readback = NULL;
+        kms_stop_worker();
         rsx_kms_present_shutdown();
     }
 #endif
