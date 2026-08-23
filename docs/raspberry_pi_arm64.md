@@ -646,6 +646,59 @@ backend issues 2.6 GPU operations and the driver reports 9.5 render jobs, so
 roughly seven jobs per frame are Mesa/WSI overhead that the backend cannot
 reach. Optimise what the backend controls and measure in GPU milliseconds.
 
+## Presenting without a compositor (2026-08-23)
+
+Sprites on Player Entry popped in and out: part of a frame reached the screen
+with the rest missing along an axis-aligned staircase, filled in a moment
+later. It is worth reading the elimination in full, because almost everything
+plausible was wrong.
+
+It survived the packed vertex layout, the clear fold, the presentation ring,
+the presentation fence, one frame in flight, mailbox presentation, and a cage
+rebuilt to advertise `linux-drm-syncobj-v1` so Mesa hands it explicit fences.
+It reproduces from a fixed capture under `rsx_replay`, so it is not the guest,
+the recorder or the batch contents, and that same capture replays
+byte-identical on desktop Vulkan, so it is not what we draw.
+
+**The blit into the swapchain is always partly visible to the compositor.** It
+only shows when consecutive frames differ, which is why it looked intermittent
+and why it appeared to be a regression: the presentation fence added in August
+never fixed that race, it added CPU slack that hid it, and making frames faster
+removed the slack.
+
+`rsx_kms_present.c` takes the display instead: one modeset, an overlay plane,
+and the vc4 HVS scaling 1280x720 up to the mode during scanout for free. No
+compositor, no swapchain, no WSI, and `TAIKO_KMS_PRESENT=1` selects it. Without
+libdrm the file compiles to stubs and nothing changes.
+
+Frames reach the scanout buffer through a GPU download and a CPU copy. The copy
+runs on a worker thread; the download must not be. **Three attempts at
+pipelining rendered visibly broken frames while every counter reported
+`errors=0`:**
+
+- the presentation ring rotates display targets on its own schedule, so one
+  could be re-rendered while its download still read it. It feeds a swapchain,
+  and is off in KMS mode;
+- with the ring off, `get_surface()` aliases both guest display buffers onto a
+  single texture, which then raced itself. KMS mode keeps its own pair;
+- dropping the render wait before recording the download was the real defect.
+  V3D runs copy jobs and render jobs on separate scheduler queues, so a
+  download submitted while the render is in flight reads a half-drawn frame --
+  the same hazard `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT` exists for.
+
+Measured on the Player Entry capture: serial 29.5 FPS, pipelined 49.6, and the
+remainder is GPU-bound at roughly 11 ms of scene render plus 6 ms of download.
+Exporting the presentation texture as a dmabuf would remove the download and
+close the gap to 60, but SDL_GPU exposes no `VkImage` and that means a
+permanent SDL fork.
+
+**None of this is visible to instrumentation.** FPS, GPU counters, renderer
+error counts and replayed frame dumps all look perfect while the screen is
+visibly wrong, because the defect lives after the readback. Whoever is looking
+at the panel is the acceptance test. `rsx_replay --frame-delay-ms`,
+`--frame-range` and `--interactive` (left/right steps, y/n marks, esc prints
+the verdicts) exist so those verdicts can come back from the person watching.
+
 ### Batch queue depth
 
 The recorder hands finished batches to the SDL thread through a fixed queue.
