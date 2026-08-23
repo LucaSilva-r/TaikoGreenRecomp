@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs as Cage's one Wayland client on the TaikOS tty1 session.
+# Runs directly on KMS in the shipping service; it can still run as Cage's one
+# Wayland client for compositor A/B tests.
 set -Eeuo pipefail
 
 : "${TAIKOS_OUTPUT:=HDMI-A-1}"

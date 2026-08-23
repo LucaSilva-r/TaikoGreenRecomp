@@ -28,34 +28,26 @@ Environment=XDG_CACHE_HOME=/var/lib/taikos/cache
 Environment=XDG_DATA_HOME=/var/lib/taikos/data
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=LD_LIBRARY_PATH=/var/lib/taikos/recomp/lib
-Environment=SDL_VIDEODRIVER=wayland
+Environment=SDL_VIDEODRIVER=offscreen
 Environment=SDL_AUDIODRIVER=alsa
-# Cage always composites and fullscreens its client at the output size, so this
-# mode sets the pixel count of both the game's presentation blit and the
-# compositor's pass. Driving the game's own 1280x720 measured 25% of the V3D
-# core and 58-60 FPS where 1080p measured 50% and 45 FPS. 1080p is the default
-# anyway because monitors that refuse a 720p HDMI mode are common; switch to
-# 1280x720@60Hz on a display that accepts it and take the frame rate.
-Environment=TAIKOS_OUTPUT_MODE=1920x1080@60Hz
+# Direct KMS keeps the game's render target at 1280x720 and lets VC4's HVS
+# scale it to the monitor mode during scanout. This monitor rejects a 720p
+# signal, so keep HDMI at 1080p without paying for a 1080p compositor pass.
+Environment=TAIKOS_OUTPUT_MODE=1920x1080@60
 Environment=TAIKO_GPU_DRIVER=vulkan
 Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*
+Environment=TAIKO_KMS_PRESENT=1
+Environment=TAIKO_KMS_ATOMIC=1
 Environment=PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs
 Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
 Environment=FLOW_NOSPILL=1
 Environment=TAIKO_DNS_LOOPBACK=1
 Environment=TAIKO_AUDIO_SPU=1
-# V3DV needs completed display targets kept separate from the texture sampled
-# by presentation. Three targets preserve that synchronization without a
-# full-GPU fence every frame; match the SDL swapchain depth to the target ring.
-Environment=TAIKO_GPU_SERIAL_PRESENT=1
-Environment=TAIKO_GPU_PIPELINED_PRESENT=1
-# Three in-flight frames. One was tried and is a net regression: it helped the
-# 169-draw scene but took the ordinary 149-draw scenes from a flat 60.0 down to
-# a 54.2 median. Do not lower this without measuring the light scenes too.
-Environment=TAIKO_FRAMES_IN_FLIGHT=3
-# V3DV also needs a queue submission boundary between dynamic buffer uploads
-# and draws; without it, stale vertex/constant data appears as atlas rectangles.
+# V3DV needs both a submission boundary and a completed upload fence before
+# draws consume dynamic vertex/constant buffers. Queue separation alone still
+# produced rare incomplete frames whenever a small CPU load changed timing.
 Environment=TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1
+Environment=TAIKO_GPU_UPLOAD_FENCE_WAIT=1
 # Keep F10 useful on the appliance without auto-capturing during startup.
 # The fixed path bounds disk use: a later capture replaces the previous one.
 Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb
@@ -64,7 +56,7 @@ Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=30
 # race trace hashes every skin job and vertex buffer and scans indexed
 # triangles, which costs several FPS. Add them to /etc/taikos/taikos.env only
 # while diagnosing.
-ExecStart=/usr/bin/cage -d -s -- /usr/local/bin/taiko-recomp-session
+ExecStart=/usr/local/bin/taiko-recomp-session
 Restart=on-failure
 RestartSec=5s
 KillSignal=SIGINT

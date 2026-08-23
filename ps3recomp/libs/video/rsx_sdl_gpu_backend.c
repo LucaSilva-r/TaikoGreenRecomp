@@ -18,6 +18,13 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__linux__)
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 
 #define SDL_RSX_WIDTH 1280u
 #define SDL_RSX_HEIGHT 720u
@@ -134,6 +141,11 @@ typedef struct sdl_rsx_state {
     int presentation_valid;
     int presentation_pipeline_disabled;
     gamepad_slot gamepads[2];
+#if defined(__linux__)
+    int evdev_keyboards[16];
+    unsigned evdev_keyboard_count;
+    Uint64 evdev_rescan_ns;
+#endif
     shader_entry shaders[SDL_RSX_MAX_SHADERS];
     unsigned shader_count;
     pipeline_entry pipelines[SDL_RSX_MAX_PIPELINES];
@@ -160,14 +172,21 @@ typedef struct sdl_rsx_state {
     int kms_present;
     Uint64 perf_kms_render_ns;
     Uint64 perf_kms_download_ns;
+    Uint64 perf_kms_wait_ns;
+    Uint64 perf_kms_scanout_wait_ns;
     Uint64 perf_kms_copy_ns;
     Uint64 perf_kms_flip_ns;
+    Uint64 perf_kms_frames;
+    int kms_gpu_idle;
     /* Presentation through KMS costs a GPU download and a CPU copy. Neither
      * belongs on the critical path: the download is waited for one frame late,
      * and the copy runs on a worker thread while the next frame renders. */
     struct kms_slot {
         SDL_GPUTransferBuffer* transfer;
         SDL_GPUFence* fence;
+        SDL_GPUTexture* source;
+        Uint32 width;
+        Uint32 height;
         Uint32 pitch;
         Uint32 bytes;
         int busy;
@@ -392,7 +411,7 @@ static SDL_GPUTexture* get_surface(const rsx_surface_ref* ref)
 
 static int submit_commands(SDL_GPUCommandBuffer* commands)
 {
-    ++s_sdl.perf_submits;
+    __atomic_fetch_add(&s_sdl.perf_submits, 1u, __ATOMIC_RELAXED);
     if (!commands) return -1;
     if (!SDL_SubmitGPUCommandBuffer(commands)) {
         fprintf(stderr, "[SDL_GPU] command submission failed: %s\n", SDL_GetError());
@@ -405,6 +424,7 @@ static int submit_commands(SDL_GPUCommandBuffer* commands)
 static int submit_commands_and_wait(SDL_GPUCommandBuffer* commands)
 {
     if (!commands) return -1;
+    __atomic_fetch_add(&s_sdl.perf_submits, 1u, __ATOMIC_RELAXED);
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
     if (!fence) {
         fprintf(stderr, "[SDL_GPU] fenced command submission failed: %s\n",
@@ -422,6 +442,24 @@ static int submit_commands_and_wait(SDL_GPUCommandBuffer* commands)
     }
     SDL_ReleaseGPUFence(s_sdl.device, fence);
     return result;
+}
+
+static int submit_kms_render_and_wait(SDL_GPUCommandBuffer* commands)
+{
+    if (submit_commands_and_wait(commands) != 0) return -1;
+    if (!s_sdl.kms_gpu_idle) return 0;
+
+    static int announced;
+    if (!announced++)
+        fprintf(stderr,
+                "[SDL_GPU] KMS render/download boundary uses full GPU idle\n");
+    if (!SDL_WaitForGPUIdle(s_sdl.device)) {
+        fprintf(stderr, "[SDL_GPU] KMS GPU idle wait failed: %s\n",
+                SDL_GetError());
+        ++s_sdl.errors;
+        return -1;
+    }
+    return 0;
 }
 
 static int wait_and_release_fence(SDL_GPUFence** fence_ptr)
@@ -483,6 +521,7 @@ static int submit_pipelined_display(SDL_GPUCommandBuffer* commands)
         return -1;
     }
 
+    __atomic_fetch_add(&s_sdl.perf_submits, 1u, __ATOMIC_RELAXED);
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
     if (!fence) {
         fprintf(stderr, "[SDL_GPU] pipelined display submission failed: %s\n",
@@ -1725,11 +1764,45 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
 
 #ifdef RSX_SDL_KMS_PRESENT
 /* Getting a rendered frame onto a scanout buffer costs a GPU download and a
- * CPU copy -- measured at 17.7 ms and 13.7 ms on the Pi, which is most of a
- * 33 ms frame. Only about 6 ms of the download is GPU work; the rest is the
- * wait. So the download is started here and collected one frame later, and the
- * copy runs on a worker thread while the next frame renders. The main thread
- * is then left with the render itself. */
+ * CPU copy. The download is collected by this worker, and the CPU copy runs
+ * here while the next frame renders. Keep the fence wait, copy and KMS update
+ * timings separate: earlier aggregate measurements could not identify which
+ * stage owned the cost. */
+static int kms_submit_download(struct kms_slot* slot,
+                               SDL_GPUCommandBuffer* commands)
+{
+    const Uint64 issue_start_ns = SDL_GetTicksNS();
+    SDL_GPUCommandBuffer* copy_commands = commands;
+    if (!copy_commands)
+        copy_commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+    if (!copy_commands) return -1;
+
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(copy_commands);
+    if (!copy) {
+        SDL_CancelGPUCommandBuffer(copy_commands);
+        return -1;
+    }
+    SDL_GPUTextureRegion region;
+    SDL_zero(region);
+    region.texture = slot->source;
+    region.w = slot->width;
+    region.h = slot->height;
+    region.d = 1;
+    SDL_GPUTextureTransferInfo destination;
+    SDL_zero(destination);
+    destination.transfer_buffer = slot->transfer;
+    destination.pixels_per_row = slot->width;
+    destination.rows_per_layer = slot->height;
+    SDL_DownloadFromGPUTexture(copy, &region, &destination);
+    SDL_EndGPUCopyPass(copy);
+    __atomic_fetch_add(&s_sdl.perf_submits, 1u, __ATOMIC_RELAXED);
+    slot->fence = SDL_SubmitGPUCommandBufferAndAcquireFence(copy_commands);
+    if (!slot->fence) return -1;
+    __atomic_fetch_add(&s_sdl.perf_kms_download_ns,
+                       SDL_GetTicksNS() - issue_start_ns, __ATOMIC_RELAXED);
+    return 0;
+}
+
 static int kms_copy_worker(void* userdata)
 {
     (void)userdata;
@@ -1749,17 +1822,43 @@ static int kms_copy_worker(void* userdata)
         SDL_UnlockMutex(s_sdl.kms_mutex);
 
         struct kms_slot* slot = &s_sdl.kms_slots[index];
+        const Uint64 wait_start_ns = SDL_GetTicksNS();
+        int download_ready = 1;
         if (slot->fence) {
             SDL_GPUFence* fences[1] = {slot->fence};
-            SDL_WaitForGPUFences(s_sdl.device, true, fences, 1);
+            if (!SDL_WaitForGPUFences(s_sdl.device, true, fences, 1)) {
+                fprintf(stderr, "[SDL_GPU] KMS download fence wait failed: %s\n",
+                        SDL_GetError());
+                ++s_sdl.errors;
+                download_ready = 0;
+            }
             SDL_ReleaseGPUFence(s_sdl.device, slot->fence);
             slot->fence = NULL;
         }
-        void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, slot->transfer, false);
+        const Uint64 wait_end_ns = SDL_GetTicksNS();
+        Uint64 scanout_wait_ns = 0, copy_ns = 0, flip_ns = 0;
+        void* mapped = download_ready
+            ? SDL_MapGPUTransferBuffer(s_sdl.device, slot->transfer, false)
+            : NULL;
         if (mapped) {
-            rsx_kms_present_frame(mapped, slot->pitch);
+            rsx_kms_present_frame(mapped, slot->pitch, &scanout_wait_ns,
+                                  &copy_ns, &flip_ns);
             SDL_UnmapGPUTransferBuffer(s_sdl.device, slot->transfer);
+        } else if (download_ready) {
+            fprintf(stderr, "[SDL_GPU] KMS transfer-buffer map failed: %s\n",
+                    SDL_GetError());
+            ++s_sdl.errors;
         }
+        __atomic_fetch_add(&s_sdl.perf_kms_wait_ns,
+                           wait_end_ns - wait_start_ns, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_scanout_wait_ns, scanout_wait_ns,
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_copy_ns, copy_ns,
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_flip_ns, flip_ns,
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_frames, 1u,
+                           __ATOMIC_RELAXED);
 
         SDL_LockMutex(s_sdl.kms_mutex);
         slot->busy = 0;
@@ -1803,15 +1902,16 @@ static void kms_stop_worker(void)
 
 static int present_display_kms(SDL_GPUCommandBuffer* commands)
 {
-    const Uint64 kms_start_ns = SDL_GetTicksNS();
-    /* The download must not be recorded until the frame is actually drawn.
-     * V3D runs copy jobs and render jobs on separate scheduler queues, so a
-     * download submitted while the render is still in flight reads a
-     * half-drawn target -- the same hazard TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT
-     * exists for. Only the CPU copy is worth pipelining; this wait is not. */
-    if (commands) submit_commands_and_wait(commands);
-    Uint64 kms_mark_ns = SDL_GetTicksNS();
-    s_sdl.perf_kms_render_ns += kms_mark_ns - kms_start_ns;
+    /* A download must cross a completed render fence on V3DV. Independent
+     * submissions raced outright, and even putting the copy after the render
+     * passes in one SDL command buffer produced partial frames under the
+     * heavier Player Entry load. Keep this CPU-visible completion boundary. */
+    if (commands) {
+        const Uint64 render_start_ns = SDL_GetTicksNS();
+        if (submit_kms_render_and_wait(commands) != 0) return -1;
+        s_sdl.perf_kms_render_ns += SDL_GetTicksNS() - render_start_ns;
+        commands = NULL;
+    }
 
     Uint32 width = 0, height = 0;
     SDL_GPUTexture* source = presentation_texture(&width, &height);
@@ -1851,28 +1951,15 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
         slot->bytes = bytes;
         if (!slot->transfer) { ++s_sdl.errors; return -1; }
     }
+    slot->source = source;
+    slot->width = width;
+    slot->height = height;
     slot->pitch = pitch;
 
-    SDL_GPUCommandBuffer* copy_commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
-    if (!copy_commands) { ++s_sdl.errors; return -1; }
-    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(copy_commands);
-    if (!copy) { SDL_CancelGPUCommandBuffer(copy_commands); ++s_sdl.errors; return -1; }
-    SDL_GPUTextureRegion region;
-    SDL_zero(region);
-    region.texture = source;
-    region.w = width;
-    region.h = height;
-    region.d = 1;
-    SDL_GPUTextureTransferInfo destination;
-    SDL_zero(destination);
-    destination.transfer_buffer = slot->transfer;
-    destination.pixels_per_row = width;
-    destination.rows_per_layer = height;
-    SDL_DownloadFromGPUTexture(copy, &region, &destination);
-    SDL_EndGPUCopyPass(copy);
-    slot->fence = SDL_SubmitGPUCommandBufferAndAcquireFence(copy_commands);
-    if (!slot->fence) { ++s_sdl.errors; return -1; }
-    s_sdl.perf_kms_download_ns += SDL_GetTicksNS() - kms_mark_ns;
+    if (kms_submit_download(slot, commands) != 0) {
+        ++s_sdl.errors;
+        return -1;
+    }
 
     SDL_LockMutex(s_sdl.kms_mutex);
     slot->busy = 1;
@@ -1996,13 +2083,30 @@ static void update_window_title(void)
              "%s | FPS: %.2f | draws: %u | GPU errors: %u",
              s_sdl.base_title, fps, s_sdl.last_batch_draws, s_sdl.errors);
     if (s_sdl.window) SDL_SetWindowTitle(s_sdl.window, title);
+    const Uint64 perf_submits = __atomic_exchange_n(
+        &s_sdl.perf_submits, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_render_ns = __atomic_exchange_n(
+        &s_sdl.perf_kms_render_ns, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_issue_ns = __atomic_exchange_n(
+        &s_sdl.perf_kms_download_ns, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_frames = __atomic_exchange_n(
+        &s_sdl.perf_kms_frames, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_wait_ns = __atomic_exchange_n(
+        &s_sdl.perf_kms_wait_ns, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_scanout_wait_ns = __atomic_exchange_n(
+        &s_sdl.perf_kms_scanout_wait_ns, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_copy_ns = __atomic_exchange_n(
+        &s_sdl.perf_kms_copy_ns, 0, __ATOMIC_RELAXED);
+    const Uint64 kms_flip_ns = __atomic_exchange_n(
+        &s_sdl.perf_kms_flip_ns, 0, __ATOMIC_RELAXED);
     if (s_sdl.fps_log)
         fprintf(stderr,
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
                 "cpu_ms(prep=%.2f const=%.2f vert=%.2f render=%.2f present=%.2f"
                 "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f vert_kib=%.0f "
                 "gpu(blits=%.1f copies=%.1f submits=%.1f) "
-                "kms(render=%.2f download=%.2f copy=%.2f)\n",
+                "kms(render_wait=%.2f issue=%.2f fence_wait=%.2f "
+                "scanout_wait=%.2f copy=%.2f flip=%.2f frames=%llu)\n",
                 fps, s_sdl.last_batch_draws, s_sdl.errors,
                 s_sdl.perf_batches ? (double)s_sdl.perf_prepare_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
@@ -2028,14 +2132,21 @@ static void update_window_title(void)
                     (double)s_sdl.perf_batches : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_copy_passes /
                     (double)s_sdl.perf_batches : 0.0,
-                s_sdl.perf_batches ? (double)s_sdl.perf_submits /
+                s_sdl.perf_batches ? (double)perf_submits /
                     (double)s_sdl.perf_batches : 0.0,
-                s_sdl.perf_batches ? (double)s_sdl.perf_kms_render_ns /
+                s_sdl.perf_batches ? (double)kms_render_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
-                s_sdl.perf_batches ? (double)s_sdl.perf_kms_download_ns /
+                s_sdl.perf_batches ? (double)kms_issue_ns /
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
-                s_sdl.perf_batches ? (double)s_sdl.perf_kms_copy_ns /
-                    (double)s_sdl.perf_batches / 1000000.0 : 0.0);
+                kms_frames ? (double)kms_wait_ns /
+                    (double)kms_frames / 1000000.0 : 0.0,
+                kms_frames ? (double)kms_scanout_wait_ns /
+                    (double)kms_frames / 1000000.0 : 0.0,
+                kms_frames ? (double)kms_copy_ns /
+                    (double)kms_frames / 1000000.0 : 0.0,
+                kms_frames ? (double)kms_flip_ns /
+                    (double)kms_frames / 1000000.0 : 0.0,
+                (unsigned long long)kms_frames);
     s_sdl.fps_window_start_ns = now;
     s_sdl.fps_window_frames = 0;
     s_sdl.perf_batches = 0;
@@ -2050,11 +2161,6 @@ static void update_window_title(void)
     s_sdl.perf_render_passes = 0;
     s_sdl.perf_blits = 0;
     s_sdl.perf_copy_passes = 0;
-    s_sdl.perf_submits = 0;
-    s_sdl.perf_kms_render_ns = 0;
-    s_sdl.perf_kms_download_ns = 0;
-    s_sdl.perf_kms_copy_ns = 0;
-    s_sdl.perf_kms_flip_ns = 0;
     s_sdl.perf_vertex_bytes = 0;
 }
 
@@ -2307,11 +2413,36 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
      * uploads and consumes these buffers. Splitting at the queue boundary
      * preserves asynchronous execution while making the transfer-to-graphics
      * dependency explicit. Other drivers retain the single-submit path. */
-    if (getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT") &&
+    const int upload_idle = getenv("TAIKO_GPU_UPLOAD_IDLE") != NULL;
+    const int upload_fence_wait =
+        getenv("TAIKO_GPU_UPLOAD_FENCE_WAIT") != NULL;
+    if ((getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT") || upload_idle ||
+         upload_fence_wait) &&
         (vertex_constants || vertices)) {
-        if (submit_commands(commands) != 0) {
+        if ((upload_fence_wait && !upload_idle
+                 ? submit_commands_and_wait(commands)
+                 : submit_commands(commands)) != 0) {
             commands = NULL;
             goto done;
+        }
+        if (upload_fence_wait && !upload_idle) {
+            static int announced_upload_fence;
+            if (!announced_upload_fence++)
+                fprintf(stderr,
+                        "[SDL_GPU] dynamic upload fence completes before rendering\n");
+        }
+        if (upload_idle) {
+            static int announced_upload_idle;
+            if (!announced_upload_idle++)
+                fprintf(stderr,
+                        "[SDL_GPU] dynamic uploads complete before rendering\n");
+            if (!SDL_WaitForGPUIdle(s_sdl.device)) {
+                fprintf(stderr, "[SDL_GPU] upload GPU idle wait failed: %s\n",
+                        SDL_GetError());
+                ++s_sdl.errors;
+                commands = NULL;
+                goto done;
+            }
         }
         commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
         if (!commands) {
@@ -2391,12 +2522,12 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
         pending_clear = NULL;
     }
     if (s_sdl.kms_present) {
-        /* No swapchain here, so the rotating display targets buy nothing --
-         * and they actively break the KMS path: a slot can be re-rendered
-         * while its download is still in flight, which downloads a frame
-         * being overwritten. Render into one target and submit. */
+        /* The KMS path owns a separate display-target ring tied to its readback
+         * slots. The generic swapchain presentation ring must stay out of it. */
         s_sdl.presentation_override = NULL;
-        submit_commands_and_wait(commands);
+        const Uint64 render_wait_start_ns = SDL_GetTicksNS();
+        submit_kms_render_and_wait(commands);
+        s_sdl.perf_kms_render_ns += SDL_GetTicksNS() - render_wait_start_ns;
         commands = NULL;
     } else if (getenv("TAIKO_GPU_SERIAL_PRESENT")) {
         const int pipelined = getenv("TAIKO_GPU_PIPELINED_PRESENT") != NULL;
@@ -2533,6 +2664,153 @@ static unsigned keyboard_action(SDL_Scancode code)
     }
 }
 
+#ifndef RSX_SDL_REPLAY_STANDALONE
+static void arm_capture_hotkey(void)
+{
+    /* Hotkey-specific variables do not auto-arm the recorder during startup.
+     * Fall back to the auto-capture names for compatibility with existing
+     * desktop launch scripts. */
+    const char* path = getenv("RSX_BATCH_CAPTURE_HOTKEY");
+    const char* frames = getenv("RSX_BATCH_CAPTURE_HOTKEY_FRAMES");
+    if (!path || !path[0]) path = getenv("RSX_BATCH_CAPTURE");
+    if (!frames || !frames[0]) frames = getenv("RSX_BATCH_CAPTURE_FRAMES");
+    rsx_recorder_arm_capture(path && path[0] ? path : "rsx_capture.rsxb",
+                             frames ? (u32)strtoul(frames, NULL, 0) : 1u);
+    fprintf(stderr, "[SDL_GPU] F10 armed portable RSX capture\n");
+}
+#endif
+
+#if defined(__linux__)
+#define EVDEV_BITS_PER_WORD (sizeof(unsigned long) * 8u)
+#define EVDEV_KEY_WORDS ((KEY_MAX + EVDEV_BITS_PER_WORD) / EVDEV_BITS_PER_WORD)
+
+static int evdev_bit(const unsigned long* bits, unsigned code)
+{
+    return (bits[code / EVDEV_BITS_PER_WORD] &
+            (1ul << (code % EVDEV_BITS_PER_WORD))) != 0;
+}
+
+static SDL_Scancode evdev_scancode(unsigned code)
+{
+    switch (code) {
+    case KEY_D: return SDL_SCANCODE_D;
+    case KEY_F: return SDL_SCANCODE_F;
+    case KEY_J: return SDL_SCANCODE_J;
+    case KEY_K: return SDL_SCANCODE_K;
+    case KEY_ENTER: case KEY_KPENTER: return SDL_SCANCODE_RETURN;
+    case KEY_F1: return SDL_SCANCODE_F1;
+    case KEY_F2: return SDL_SCANCODE_F2;
+    case KEY_F10: return SDL_SCANCODE_F10;
+    case KEY_C: return SDL_SCANCODE_C;
+    case KEY_UP: return SDL_SCANCODE_UP;
+    case KEY_DOWN: return SDL_SCANCODE_DOWN;
+#ifdef RSX_SDL_REPLAY_STANDALONE
+    case KEY_LEFT: return SDL_SCANCODE_LEFT;
+    case KEY_RIGHT: return SDL_SCANCODE_RIGHT;
+    case KEY_Y: return SDL_SCANCODE_Y;
+    case KEY_N: return SDL_SCANCODE_N;
+    case KEY_ESC: return SDL_SCANCODE_ESCAPE;
+#endif
+    default: return SDL_SCANCODE_UNKNOWN;
+    }
+}
+
+static void evdev_close_keyboards(void)
+{
+    for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
+        if (s_sdl.evdev_keyboards[i] >= 0) close(s_sdl.evdev_keyboards[i]);
+    s_sdl.evdev_keyboard_count = 0;
+}
+
+static void evdev_open_keyboards(void)
+{
+    if (!s_sdl.kms_present || s_sdl.evdev_keyboard_count) return;
+    for (unsigned index = 0; index < 64 &&
+             s_sdl.evdev_keyboard_count < SDL_arraysize(s_sdl.evdev_keyboards);
+         ++index) {
+        char path[64];
+        snprintf(path, sizeof(path), "/dev/input/event%u", index);
+        int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) continue;
+        unsigned long keys[EVDEV_KEY_WORDS];
+        memset(keys, 0, sizeof(keys));
+        if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) < 0 ||
+            !evdev_bit(keys, KEY_ENTER) ||
+            !(evdev_bit(keys, KEY_C) || evdev_bit(keys, KEY_D))) {
+            close(fd);
+            continue;
+        }
+        char name[128] = "keyboard";
+        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        s_sdl.evdev_keyboards[s_sdl.evdev_keyboard_count++] = fd;
+        fprintf(stderr, "[SDL_INPUT] evdev keyboard: %s (%s)\n", name, path);
+    }
+    if (!s_sdl.evdev_keyboard_count) {
+        static int reported;
+        if (!reported++)
+            fprintf(stderr,
+                    "[SDL_INPUT] no readable evdev keyboard; "
+                    "check the service input group\n");
+    }
+}
+
+static void evdev_handle_key(unsigned code, int down)
+{
+    const SDL_Scancode scancode = evdev_scancode(code);
+    if (scancode == SDL_SCANCODE_UNKNOWN) return;
+#ifdef RSX_SDL_REPLAY_STANDALONE
+    if (down && g_rsx_replay_key_hook) {
+        g_rsx_replay_key_hook((int)scancode);
+        return;
+    }
+#else
+    if (down && scancode == SDL_SCANCODE_F10) {
+        arm_capture_hotkey();
+        return;
+    }
+#endif
+    const unsigned action = keyboard_action(scancode);
+    if (!action) return;
+    if (down)
+        taiko_host_input_press(0, action, SDL_GetTicksNS());
+    else
+        taiko_host_input_release(0, action);
+}
+
+static void evdev_poll_keyboards(void)
+{
+    if (!s_sdl.kms_present) return;
+    const Uint64 now = SDL_GetTicksNS();
+    if (!s_sdl.evdev_keyboard_count && now >= s_sdl.evdev_rescan_ns) {
+        evdev_open_keyboards();
+        s_sdl.evdev_rescan_ns = now + UINT64_C(1000000000);
+    }
+    for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i) {
+        struct input_event events[32];
+        ssize_t bytes;
+        while ((bytes = read(s_sdl.evdev_keyboards[i], events,
+                             sizeof(events))) > 0) {
+            const size_t count = (size_t)bytes / sizeof(events[0]);
+            for (size_t event = 0; event < count; ++event)
+                if (events[event].type == EV_KEY && events[event].value != 2)
+                    evdev_handle_key(events[event].code,
+                                     events[event].value != 0);
+        }
+        if (bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            close(s_sdl.evdev_keyboards[i]);
+            s_sdl.evdev_keyboards[i] =
+                s_sdl.evdev_keyboards[--s_sdl.evdev_keyboard_count];
+            --i;
+            s_sdl.evdev_rescan_ns = 0;
+        }
+    }
+}
+#else
+static void evdev_close_keyboards(void) {}
+static void evdev_open_keyboards(void) {}
+static void evdev_poll_keyboards(void) {}
+#endif
+
 static int gamepad_player(SDL_JoystickID id)
 {
     for (unsigned i = 0; i < 2; ++i)
@@ -2592,16 +2870,7 @@ static void handle_event(const SDL_Event* event)
         }
 #ifndef RSX_SDL_REPLAY_STANDALONE
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F10) {
-            /* Hotkey-specific variables do not auto-arm the recorder during
-             * startup. Fall back to the auto-capture names for compatibility
-             * with existing desktop launch scripts. */
-            const char* path = getenv("RSX_BATCH_CAPTURE_HOTKEY");
-            const char* frames = getenv("RSX_BATCH_CAPTURE_HOTKEY_FRAMES");
-            if (!path || !path[0]) path = getenv("RSX_BATCH_CAPTURE");
-            if (!frames || !frames[0]) frames = getenv("RSX_BATCH_CAPTURE_FRAMES");
-            rsx_recorder_arm_capture(path && path[0] ? path : "rsx_capture.rsxb",
-                                     frames ? (u32)strtoul(frames, NULL, 0) : 1u);
-            fprintf(stderr, "[SDL_GPU] F10 armed portable RSX capture\n");
+            arm_capture_hotkey();
             return;
         }
 #endif
@@ -2872,6 +3141,7 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
                 SDL_GetGPUDeviceDriver(s_sdl.device));
     if (s_sdl.kms_present) {
 #ifdef RSX_SDL_KMS_PRESENT
+        s_sdl.kms_gpu_idle = getenv("TAIKO_KMS_GPU_IDLE") != NULL;
         if (rsx_kms_present_init(SDL_RSX_WIDTH, SDL_RSX_HEIGHT) != 0) {
             fprintf(stderr, "[SDL_GPU] KMS presentation unavailable\n");
             goto fail;
@@ -2992,6 +3262,7 @@ swapchain_ready:
 #endif
     s_sdl.initialized = 1;
     taiko_host_input_set_active(1);
+    evdev_open_keyboards();
     fprintf(stderr, "[SDL_GPU] initialized %s, fixed output %ux%u\n",
             SDL_GetGPUDeviceDriver(s_sdl.device), SDL_RSX_WIDTH, SDL_RSX_HEIGHT);
     return 0;
@@ -3015,11 +3286,13 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
      * the batch execution, so a stall names its own half. */
     const Uint64 iterate_start_ns = SDL_GetTicksNS();
 
+    evdev_poll_keyboards();
     SDL_Event event;
     if (SDL_WaitEventTimeout(&event, timeout_ms)) {
         handle_event(&event);
         while (SDL_PollEvent(&event)) handle_event(&event);
     }
+    evdev_poll_keyboards();
     const Uint64 events_done_ns = SDL_GetTicksNS();
     const unsigned executed = drain_batches();
     const Uint64 end_ns = SDL_GetTicksNS();
@@ -3148,6 +3421,7 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
 #endif
     drain_batches();
     taiko_host_input_set_active(0);
+    evdev_close_keyboards();
     for (unsigned i = 0; i < 2; ++i)
         if (s_sdl.gamepads[i].handle) SDL_CloseGamepad(s_sdl.gamepads[i].handle);
     if (s_sdl.device) {
@@ -3178,6 +3452,9 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
                 SDL_ReleaseGPUTexture(s_sdl.device,
                                       s_sdl.presentation_slots[i]);
         }
+        for (unsigned i = 0; i < s_sdl.kms_display_count; ++i)
+            if (s_sdl.kms_display[i])
+                SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.kms_display[i]);
         if (s_sdl.white_texture)
             SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.white_texture);
         if (s_sdl.default_sampler)

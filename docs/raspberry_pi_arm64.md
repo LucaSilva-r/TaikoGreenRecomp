@@ -7,10 +7,10 @@ and the in-process FFmpeg ATRAC3plus decoder. RPCS3 is not involved.
 The tested machine is a 4 GB Raspberry Pi 5 running a 64-bit Debian-family OS.
 The game renders internally at **1280x720**. The kiosk requests a
 **1920x1080 60 Hz HDMI mode** because monitors that refuse a 720p HDMI mode are
-common, and the tested display is one of them. That costs real frame rate --
-both the game's presentation blit and Cage's composite then cover 2.25x the
-pixels -- so set `TAIKOS_OUTPUT_MODE=1280x720@60Hz` on a display that accepts
-it.
+common, and the tested display is one of them. The shipping path drives KMS
+directly and lets VC4's HVS scale the 1280x720 scanout buffer to 1080p; the GPU
+does not render or composite a 1080p surface. Cage remains useful only as an
+A/B path.
 
 ## Requirements
 
@@ -120,13 +120,16 @@ TAIKO_RPI_HEADLESS=1 ./scripts/build_rpi_arm64.sh
 
 ## Install the Pi runtime
 
-Install Cage, Vulkan, ALSA, and the dynamically loaded Wayland libraries:
+Install DRM, Vulkan, and ALSA. Cage/Wayland packages are optional and needed
+only for compositor A/B tests:
 
 ```sh
 sudo apt-get update
-sudo apt-get install cage wlr-randr libvulkan1 mesa-vulkan-drivers \
-    libasound2 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
-    libxkbcommon0
+sudo apt-get install libdrm2 libvulkan1 mesa-vulkan-drivers libasound2
+
+# Optional compositor control:
+sudo apt-get install cage wlr-randr libwayland-client0 \
+    libwayland-cursor0 libwayland-egl1 libxkbcommon0
 ```
 
 The following appliance layout is used by the supplied service:
@@ -171,8 +174,8 @@ sudo chown -R taikos:taikos /var/lib/taikos/recomp
 
 ## Manual graphical test
 
-Before changing autostart, run the same Cage session as the kiosk service from
-a local TTY. Copy `deploy/taikos/taiko-recomp-session` to the Pi and run:
+Before changing autostart, run the same direct-KMS session as the kiosk service
+from a local TTY. Copy `deploy/taikos/taiko-recomp-session` to the Pi and run:
 
 ```sh
 sudo install -m 0755 deploy/taikos/taiko-recomp-session \
@@ -181,32 +184,31 @@ sudo -u taikos env \
     HOME=/var/lib/taikos \
     XDG_RUNTIME_DIR=/run/user/$(id -u taikos) \
     LD_LIBRARY_PATH=/var/lib/taikos/recomp/lib \
-    SDL_VIDEODRIVER=wayland SDL_AUDIODRIVER=alsa \
+    SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=alsa \
     TAIKO_GPU_DRIVER=vulkan VK_LOADER_DRIVERS_DISABLE='*lvp*' \
+    TAIKO_KMS_PRESENT=1 TAIKO_KMS_ATOMIC=1 \
     PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs \
     PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38 FLOW_NOSPILL=1 \
     TAIKO_DNS_LOOPBACK=1 TAIKO_ONLINE_CONFIG=/dev/null TAIKO_AUDIO_SPU=1 \
-    TAIKO_GPU_SERIAL_PRESENT=1 TAIKO_GPU_PIPELINED_PRESENT=1 \
-    TAIKO_FRAMES_IN_FLIGHT=3 TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1 \
-    cage -d -s -- /usr/local/bin/taiko-recomp-session
+    TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1 \
+    TAIKO_GPU_UPLOAD_FENCE_WAIT=1 \
+    /usr/local/bin/taiko-recomp-session
 ```
 
 That command deliberately forces offline mode for the first graphical test.
 Omit `TAIKO_ONLINE_CONFIG=/dev/null` after installing an online configuration
 as described below.
 
-The session defaults to output `HDMI-A-1` at `1920x1080@60Hz`. Setting
-`1280x720@60Hz` is worth about 13 FPS where the display accepts it; see "The
-output mode is the single biggest lever". Override either
-value through the environment if the connector has another name:
+The session defaults to `1920x1080@60`. Direct KMS selects the first connected
+connector and ignores `TAIKOS_OUTPUT`; the name is retained for Cage A/B tests.
+Override the mode when needed:
 
 ```sh
-TAIKOS_OUTPUT=HDMI-A-2 TAIKOS_OUTPUT_MODE=1920x1080@60Hz ...
+TAIKOS_OUTPUT_MODE=1920x1080@60 ...
 ```
 
-The session reapplies the HDMI mode after SDL creates its 1280x720 Wayland
-surface. This is intentional: some Cage/wlroots combinations otherwise switch
-the connector back to the first client's surface size during startup.
+On the Cage path, the session reapplies the HDMI mode after SDL creates its
+1280x720 Wayland surface. Direct KMS performs the modeset itself.
 
 ## Install the kiosk service
 
@@ -230,8 +232,9 @@ journalctl -u taikos.service -b --no-pager | tail -200
 ```
 
 The supplied unit runs as the unprivileged `taikos` account, owns tty1 through
-PAM, starts Cage as the only compositor, selects Vulkan and ALSA, and is
-offline when no `taiko_online.cfg` exists beside the executable. To enable an
+PAM, drives KMS directly, selects Vulkan and ALSA, and is offline when no
+`taiko_online.cfg` exists beside the executable. Membership in `input`,
+`render`, and `video` is required for evdev and DRM access. To enable an
 existing online configuration, install it without exposing its contents:
 
 ```sh
@@ -300,36 +303,68 @@ including Android.
 
 ## Pi-specific graphics synchronization
 
-V3DV occasionally presented a display texture before its render work was
-complete, producing alternating black or partially drawn frames. A full GPU
-fence removed the flashes but reduced complex scenes to roughly 41-52 FPS.
-The shipping Pi unit therefore rotates three complete 1280x720 display render
-targets and presents a target only after its fence completes:
+There are two independent V3DV synchronization boundaries. The shipping Pi
+unit uses direct KMS for completed frames and explicitly completes dynamic
+uploads before a draw can consume them:
 
 ```text
-TAIKO_GPU_SERIAL_PRESENT=1
-TAIKO_GPU_PIPELINED_PRESENT=1
-TAIKO_FRAMES_IN_FLIGHT=3
+TAIKO_KMS_PRESENT=1
+TAIKO_KMS_ATOMIC=1
 TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1
+TAIKO_GPU_UPLOAD_FENCE_WAIT=1
 ```
 
-Do not remove only one of these variables when diagnosing the Pi. The checked
-combination was validated both live and through a 60 Hz HDMI capture card. It
-adds roughly two frames of presentation latency in exchange for complete,
-stable frames. The backend falls back to fully serialized presentation if
-target creation or a pipeline fence fails.
+Without the separate submission, vertex and vertex-constant uploads made
+earlier in a command buffer can be consumed as stale data by later draws. The
+visible symptom is not a texture-cache overflow: otherwise valid pieces of a
+texture atlas appear as random rectangular quads. A captured 30-frame title
+entrance first appeared repaired with `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, but
+longer testing proved queue order alone was insufficient. A compute-only load
+on CPU0 reliably changed the timing enough to expose rare incomplete frames,
+even when the game and KMS worker were pinned to other cores.
 
-V3DV also needs the separate upload submission shown above. Without that queue
-boundary, vertex and vertex-constant uploads made earlier in a command buffer
-can be consumed as stale data by later draws. The visible symptom is not a
-texture-cache overflow: otherwise valid pieces of a texture atlas appear as
-random rectangular quads. A captured 30-frame title entrance reproduced the
-defect on the Pi while rendering cleanly on desktop Vulkan. Replaying the same
-capture on the Pi with `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1` repaired all 30
-frames, including with transfer-buffer cycling and pipelined presentation
-enabled. Queue ordering keeps this asynchronous; it does not add a CPU fence.
+`TAIKO_GPU_UPLOAD_FENCE_WAIT=1` waits only the dynamic-upload command buffer
+before acquiring the render command buffer. It survived steady playback and
+the same ten-second CPU0 trigger with no bad frames. A full device idle at this
+point also worked, but serialized unrelated GPU work; a full idle after
+rendering merely reduced the frequency because it was already too late. The
+targeted fence costs about 1--2 FPS on the heaviest Player Entry replay and is
+the minimum validated boundary.
 
-### The presentation fence is required, not optional
+The old Cage path still needs `TAIKO_GPU_SERIAL_PRESENT=1`,
+`TAIKO_GPU_PIPELINED_PRESENT=1`, and `TAIKO_FRAMES_IN_FLIGHT=3` for compositor
+A/B tests. They are deliberately absent from the direct-KMS service.
+
+### Direct-KMS keyboard input
+
+SDL's offscreen video driver has no window and therefore delivers no keyboard
+events. The game could render perfectly under direct KMS but `C`, Enter, and
+the drum keys did nothing. In KMS mode the SDL backend now opens keyboard-like
+Linux `/dev/input/event*` devices nonblocking and feeds their press/release
+events into the same title input latch used by SDL and the Windows 1 kHz
+sampler. SDL continues to own gamepads.
+
+The service account must belong to the `input` group. Startup logs each opened
+device as `[SDL_INPUT] evdev keyboard`; if no device is readable it retries
+once per second. The shipping mappings are:
+
+| Key | Action |
+|---|---|
+| `D F J K` | left rim, left centre, right centre, right rim |
+| `C` | coin |
+| Enter | confirm/start |
+| F1 / F2 | test / service |
+| Up / Down | menu navigation |
+| F10 | arm the configured RSX capture |
+
+Live validation opened `/dev/input/event0`, inserted a coin, entered Player
+Entry, and retained the existing input latch semantics. Escape deliberately
+does not terminate the appliance.
+
+### Cage swapchain presentation fence
+
+This applies to the compositor A/B path. Direct KMS has its own render,
+download, and atomic-commit fences described below.
 
 V3DV presents a swapchain image whose GPU work has not finished. The frame then
 shows a diagonal band of completed **128x64** blocks -- V3D's tile size, walked
@@ -420,11 +455,13 @@ surface fullscreen (`TAIKO_FULLSCREEN=1`, with `TAIKO_HIDE_CURSOR=1`) reduced
 that but did not eliminate it, so direct scanout is still not happening and the
 cost is still being paid.
 
-Dropping the compositor entirely does not work on this hardware: SDL builds a
-KMSDRM video driver happily, but the SDL_GPU Vulkan backend then needs
-direct-to-display, and the Pi's render device (v3d) is render-only while the
-display lives on a separate vc4 node. Vulkan enumerates no displays and
-initialization fails with "Vulkan can't find any displays".
+SDL's own KMSDRM video path does not work on this hardware: the SDL_GPU Vulkan
+backend asks Vulkan for direct displays, but the Pi's render device (v3d) is
+render-only while the display lives on the separate vc4 node. Vulkan enumerates
+no displays and initialization fails with "Vulkan can't find any displays".
+The shipping `rsx_kms_present.c` path solves this outside Vulkan: SDL_GPU
+renders offscreen on v3d, then the backend downloads into vc4 dumb buffers and
+commits the overlay plane through DRM.
 
 ### The bottleneck is the consumer, not the guest
 
@@ -454,7 +491,7 @@ Settings that were measured and rejected, so they are not retried:
 | `TAIKO_FRAMES_IN_FLIGHT=1` | helped 169 draws (48.1 -> 53.2) but took ordinary 149-draw scenes from a flat 60.0 to a 54.2 median. Net regression |
 | unfenced present + 1 frame in flight | faster, and the tile artifact returns. Verified visually, not by score |
 | `TAIKO_FULLSCREEN=1` | Cage GPU 16.6% -> 12.7%, still compositing, no FPS change |
-| SDL KMSDRM (no compositor) | impossible here; see above |
+| SDL KMSDRM (no compositor) | impossible here; custom vc4 KMS presentation is the replacement |
 | unfenced present (2026-08-22 re-measure) | no change at all; the swapchain paces the thread, not the fence |
 | deduplicating identical vertex/constant payloads in the consumer | measured 141 distinct constant files across 149 draws. No gain, reverted |
 | recorder-side sharing of unchanged constant blobs | the 8 KiB compare almost always misses: recorder constant time 0.25 -> 2.76 ms/frame. Reverted |
@@ -463,7 +500,10 @@ A caution on the seam detector: the on-grid/off-grid ratio is a *ranking* aid,
 not a threshold. Verified glitch frames have scored as low as 3.55 while clean
 artwork with long straight edges scored 4.7. Always look at the top few frames.
 
-### The output mode is the single biggest lever (2026-08-22)
+### Historical Cage result: output mode was the biggest lever (2026-08-22)
+
+This section explains why the compositor path was abandoned. It does not
+describe the current direct-KMS service.
 
 Cage always composites; it never direct-scans-out the game's buffer. The
 kiosk's HDMI mode therefore sets the pixel count **twice** per frame, because
@@ -623,9 +663,11 @@ the game draws, which is out of scope for the backend.
 
 `rsx_replay` builds for ARM64 with `TAIKO_RPI_BUILD_REPLAY=1` and
 `--loop=N` replays a capture N times, which turns a 30-frame capture into a
-steady deterministic load worth sampling. Cage needs a seat, so the replay has
-to run *as* the kiosk session -- a drop-in that overrides `ExecStart` to point
-at a small script is enough:
+steady deterministic load worth sampling. For historical Cage measurements the
+replay needs the kiosk seat, so a drop-in that overrides `ExecStart` to point
+at a small script is enough. Direct-KMS measurements instead stop the game
+service, use `SDL_VIDEODRIVER=offscreen`, and set the four synchronization
+variables listed above:
 
 ```ini
 # /etc/systemd/system/taikos.service.d/replay.conf
@@ -672,19 +714,21 @@ compositor, no swapchain, no WSI, and `TAIKO_KMS_PRESENT=1` selects it. Without
 libdrm the file compiles to stubs and nothing changes.
 
 Frames reach the scanout buffer through a GPU download and a CPU copy. The copy
-runs on a worker thread; the download must not be. **Three attempts at
-pipelining rendered visibly broken frames while every counter reported
-`errors=0`:**
+runs on a worker thread. A download in a separate command-buffer submission
+must wait for rendering. Putting a copy pass later in the same command buffer
+should have supplied that ordering, but the heavy test below proved it is not a
+sufficient completion boundary on V3DV. **Every unsafe attempt rendered visibly
+broken frames while the counters reported `errors=0`:**
 
 - the presentation ring rotates display targets on its own schedule, so one
   could be re-rendered while its download still read it. It feeds a swapchain,
   and is off in KMS mode;
 - with the ring off, `get_surface()` aliases both guest display buffers onto a
   single texture, which then raced itself. KMS mode keeps its own pair;
-- dropping the render wait before recording the download was the real defect.
-  V3D runs copy jobs and render jobs on separate scheduler queues, so a
-  download submitted while the render is in flight reads a half-drawn frame --
-  the same hazard `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT` exists for.
+- dropping the render wait and submitting the download independently was the
+  real defect. V3D runs copy jobs and render jobs on separate scheduler queues,
+  so an unordered download can read a half-drawn frame -- the same hazard
+  `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT` exists for.
 
 Measured on the Player Entry capture: serial 29.5 FPS, pipelined 49.6, and the
 remainder is GPU-bound at roughly 11 ms of scene render plus 6 ms of download.
@@ -692,10 +736,59 @@ Exporting the presentation texture as a dmabuf would remove the download and
 close the gap to 60, but SDL_GPU exposes no `VkImage` and that means a
 permanent SDL fork.
 
-**None of this is visible to instrumentation.** FPS, GPU counters, renderer
-error counts and replayed frame dumps all look perfect while the screen is
-visibly wrong, because the defect lives after the readback. Whoever is looking
-at the panel is the acceptance test. `rsx_replay --frame-delay-ms`,
+Combined submission was tested and rejected on 2026-08-23. It appended
+the download copy pass immediately after the render passes in the same SDL_GPU
+command buffer, removing one CPU fence wait and one GPU submission. A lighter
+20-frame capture reached 59.96 FPS and looked correct, but that was a false
+positive. A new 30-frame capture of the mesh-heavy Player Entry scene contains
+112--114 operations and four 5904-vertex character draws per frame. Combined
+submission ran it at 54--55 FPS but visibly presented unfinished frames. The
+serialized control initially appeared clean at 51--52 FPS, but later stress
+testing exposed a second race described below. Both paths reported zero
+renderer errors and their first-pass saved BMPs did not expose the fault. The
+experimental combined switch was removed rather than leaving an unsafe mode.
+
+Moving the completed-render fence wait and separate download submission onto
+the worker was also measured and discarded: the download fence grew to about
+9 ms, the legacy plane update to about 11 ms, and throughput fell to 40 FPS.
+Atomic KMS replaced the blocking plane update with a nonblocking commit and
+CRTC out-fences. It measured 51.97 FPS against 51.21 for the legacy ioctl on
+the same capture, and falls back safely if the atomic properties are absent.
+`TAIKO_KMS_ATOMIC_WAIT=1` waits every out-fence for diagnosis; it is not a
+shipping requirement.
+
+The remaining rare incomplete frames were not KMS buffer reuse. They survived
+legacy and atomic updates, DMA-BUF CPU write synchronization, per-vblank atomic
+waits, whole-process and worker core pinning, and a full GPU idle after the
+render fence. A compute-only loop on CPU0 triggered them even while the replay
+ran on CPUs 1--3; the system was neither thermally throttled nor CPU-saturated.
+The CPU governor changed their frequency because it perturbed timing, not
+because more CPU capacity repaired the renderer.
+
+The missing boundary was earlier: the dynamic vertex/constant upload submit
+had no completed fence before rendering consumed those buffers. A full GPU idle
+*before* rendering eliminated the artifact, including under the CPU0 trigger.
+Replacing it with the narrower `TAIKO_GPU_UPLOAD_FENCE_WAIT=1` produced the
+same clean result with nonblocking atomic KMS and about 49.6--50.4 FPS on the
+mesh-heavy replay. A full idle after rendering and an atomic vblank wait could
+then both be removed without bringing the artifact back.
+
+The remaining major performance opportunity is a dmabuf path that eliminates
+the display download; SDL_GPU still exposes no `VkImage`, so doing that cleanly
+requires an SDL extension or maintained fork.
+
+With `RSX_FPS_LOG=1`, the KMS breakdown now reports `render_wait`, download
+`issue`, worker-side download `fence_wait`, CPU `copy`, and KMS plane `flip`
+separately. Earlier `kms(copy=0.00)` output was not a fast copy: that counter
+was never updated, while the download counter only measured command submission
+and omitted the worker's real fence wait.
+
+**The failure is not reported by instrumentation.** FPS, GPU counters and
+renderer error counts all look perfect while the screen is visibly wrong.
+First-pass frame dumps are also a weak oracle because their extra readback
+changes startup timing and they do not sample a later load-triggered failure.
+Whoever is looking at the panel is the acceptance test. `rsx_replay --no-save`
+avoids that startup perturbation for long visual runs; `--frame-delay-ms`,
 `--frame-range` and `--interactive` (left/right steps, y/n marks, esc prints
 the verdicts) exist so those verdicts can come back from the person watching.
 
@@ -714,27 +807,46 @@ change. `TAIKO_RSX_QUEUE_DEPTH=1..4` overrides it.
 
 On the tested 4 GB Pi 5:
 
-- the game rendered at 1280x720 into a 1920x1080 60 Hz HDMI output; with a
-  1280x720 output mode, where the display accepts one, every figure below
-  improves by roughly 13 FPS (see "The output mode is the single biggest
-  lever");
-- most boot and title scenes held 45-49 FPS at 1080p and 58-60 at 720p;
-- the densest repeating 185-201 draw scene measured 38-39 FPS at 1080p and
-  47-48 at 720p;
-- main-thread work per frame is about 4.3 ms: 0.15 prepare, 1.0 constants,
-  1.9 vertices, 1.4 render recording. The rest of the frame is spent blocked in
-  submission;
+- the game renders at 1280x720 while KMS outputs 1920x1080@60 and HVS scales
+  during scanout; there is no compositor or 1080p GPU blit;
+- live boot and attract were subjectively smooth and close to 60 FPS, with no
+  incomplete frames from startup through Player Entry;
+- the fixed 30-frame mesh-heavy Player Entry replay held about 49.6--50.4 FPS
+  with the validated upload fence. The unsafe asynchronous path reached about
+  52 FPS but exposed incomplete frames under tiny timing disturbances;
+- on that capture, the steady breakdown was roughly 16.3 ms render wait,
+  1.5 ms download-fence wait, 3.5--3.7 ms CPU scanout copy, and 0.03 ms atomic
+  plane commit. The worker overlaps the latter stages with the next render;
+- nonblocking atomic KMS measured 51.97 FPS before the final upload fence,
+  versus 51.21 for the legacy plane ioctl. Waiting every atomic out-fence did
+  not improve correctness and is diagnostic-only;
+- Song Select still drops below 60 FPS. It has always been one of the title's
+  heavier scenes and needs its own fixed capture/profile before attributing the
+  cost to the renderer;
 - SDL audio delivered about 187.5 mixer blocks/s with zero queue failures,
   races, or stale blocks in the trace;
-- resident memory was about 425-429 MiB with no swap growth;
-- process CPU use was about 129-155% of four cores;
-- temperature was about 55 C with `throttled=0x0`.
+- stress testing reported `throttled=0x0`; core pinning and CPU governors
+  changed race timing but did not identify a CPU-capacity or thermal limit.
 
 The Pi is therefore not constrained by its 4 GB RAM and was neither thermally
-nor power throttled. The runtime reserves a contiguous 4 GiB **virtual** guest
-address range with `MAP_NORESERVE`; pages consume physical memory only when
-touched. `VmSize` is not a useful RAM measurement here—use RSS or
-`memory.current`.
+nor power throttled during these runs. The runtime reserves a contiguous 4 GiB
+**virtual** guest address range with `MAP_NORESERVE`; pages consume physical
+memory only when touched. `VmSize` is not a useful RAM measurement here—use
+RSS or `memory.current`.
+
+### Remaining live issues
+
+- Gameplay has a noticeable audio-to-beatmap delay even though rendering and
+  input are now smooth. Treat this as a clock/queue-latency investigation, not
+  a graphics-frame-rate symptom. The next run should combine
+  `TAIKO_AUDIO_LATENCY_TRACE=1`, `TAIKO_AUDIO_SINK_TRACE=1`, and
+  `TAIKO_AUDIO_RING_TRACE=1`, then compare the guest block timestamp, host
+  queued audio, and visible chart timing at song start and after a minute.
+- Song Select needs a dedicated multi-frame capture and the same
+  `RSX_RESOURCE_TRACE=1`/`RSX_FPS_LOG=1` breakdown used for Player Entry.
+- Eliminating the 1280x720 GPU download through dmabuf remains the largest
+  renderer-side opportunity, but SDL_GPU does not currently expose the native
+  image handle required by that path.
 
 Useful live diagnostics are:
 

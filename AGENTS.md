@@ -159,6 +159,8 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
 - `build-linux/rsx_replay --backend=sdl_gpu <file.rsxb>` — replay a capture.
   `--loop=N` repeats it, which is how a capture becomes a steady load to sample
   GPU counters against (`TAIKO_RPI_BUILD_REPLAY=1` cross-builds it for the Pi).
+  `--no-save` suppresses first-pass BMPs for long visual runs; use it on the Pi
+  so repeated tests do not fill the 2 GiB `/tmp` tmpfs or perturb startup.
   Deterministic, and the fastest way to tell a recorder bug from a renderer
   bug: if the capture replays correctly in a fresh process, the defect is in
   what was recorded, not in how it was drawn.
@@ -177,6 +179,10 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   fullscreen (the replacement for `RTT_VIEWRT`).
 - `TAIKO_PRESENT_MODE`, `TAIKO_FRAMES_IN_FLIGHT`, `TAIKO_GPU_DRIVER` —
   presentation and driver selection.
+- Pi direct KMS: `TAIKO_KMS_PRESENT=1`, `TAIKO_KMS_ATOMIC=1`,
+  `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, and
+  `TAIKO_GPU_UPLOAD_FENCE_WAIT=1` are the validated set. The `*_GPU_IDLE` and
+  `TAIKO_KMS_ATOMIC_WAIT` switches are diagnostic serialization controls.
 - `PS3RECOMP_NULL_RSX=1` / `PS3RECOMP_NULL_AUDIO=1` — headless backends, used
   by `scripts/test-linux-headless.sh`.
 - Guest-side: `[WAIT]`, `[fs]`, `[taiko_usio]`, `[taiko_netstate]` lines in
@@ -309,9 +315,12 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   texture budget: V3DV did not reliably expose dynamic buffer uploads to draws
   later in the same SDL_GPU command buffer. The Pi service now sets
   `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, which submits uploads before acquiring
-  the render command buffer. GPU queue order keeps the split asynchronous. The
-  exact capture rendered all 30 frames cleanly on the Pi both serialized and
-  with buffer cycling plus three-target pipelined presentation.
+  the render command buffer. Longer load-triggered testing showed that queue
+  order alone still allowed rare incomplete frames. The Pi service therefore
+  also sets `TAIKO_GPU_UPLOAD_FENCE_WAIT=1`, completing only that upload command
+  buffer before rendering. It survived steady playback and the same CPU0 load
+  pulse that reliably broke the asynchronous path; full device idle and atomic
+  vblank waits are not required.
 - **Gameplay rainbow masking is repaired** (2026-08-16; capture validated).
   The rainbow transition is a two-draw stencil sequence: an invisible black
   952x384 texture alpha-tests a clean arch into stencil with `ALWAYS`, ref 1,
@@ -322,8 +331,8 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   increment/decrement/invert/wrap operations into its depth-stencil pipeline
   and sets the per-draw reference. Replaying the captured frame restores the
   clean rainbow arch while preserving the life meter and scene beneath it.
-- **Gameplay chart/audio synchronization repaired** (2026-08-16; live
-  validation pending). Correcting the call-driven `sys_time_get_system_time`
+- **Gameplay chart/audio synchronization improved; live delay remains**
+  (updated 2026-08-23). Correcting the call-driven `sys_time_get_system_time`
   stub to use the shared monotonic 79.8 MHz PPU timebase was necessary but did
   not change the gameplay rubber-banding. The actual bnusCore synchronization
   path at `lr=0x00290888` calls `cellAudioGetPortBlockTag`, then
@@ -333,7 +342,11 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   using a monotonically increasing consumed-block tag and its corresponding
   guest-system timestamp, including `CELL_AUDIO_ERROR_TAG_NOT_FOUND` for future
   tags. `cellGcmGetVBlankCount` was also changed from a query-driven increment
-  to a pure read; only the 60 Hz frame driver advances it.
+  to a pure read; only the 60 Hz frame driver advances it. Live Pi gameplay is
+  now smooth enough to reveal a noticeable audio-to-beatmap delay. Do not mark
+  this closed: profile `TAIKO_AUDIO_LATENCY_TRACE`, `TAIKO_AUDIO_SINK_TRACE`,
+  and `TAIKO_AUDIO_RING_TRACE` together and separate guest clock error from
+  queued host-audio latency.
 - ~~Thread 5 spins on SPU event queue 5.~~ **Fixed 2026-08-12** — that was the
   audio mixer's `'END '` wait never being satisfied. Audio now works; see
   "Audio mixer" below.
@@ -396,7 +409,7 @@ Also fixed: `stwcx.`/`stdcx.` had no cross-thread reservation break (ABA on
 lock-free free-lists). Real bug, but **not** the cause here — corruption
 persisted with it fixed. `PPU_RESV_OFF=1` restores the old value-CAS.
 
-## Drum input (fixed and live-validated 2026-08-15)
+## Drum input (fixed and live-validated; Pi KMS updated 2026-08-23)
 
 The old keyboard path called `GetAsyncKeyState` only when Green read USIO
 register `0x1080`. A complete press/release between two reads disappeared, so
@@ -408,6 +421,13 @@ edges until the next guest board read consumes them. A validation boot held
 at about 60 Hz in this path, so a captured hit normally reaches its next USIO
 report within one 16.7 ms frame. Live play testing described the inputs as
 feeling great.
+
+Native direct KMS uses `SDL_VIDEODRIVER=offscreen`, which has no window and
+therefore produces no SDL keyboard events. The SDL GPU backend now opens
+keyboard-like `/dev/input/event*` devices nonblocking when KMS is active and
+feeds them into the same atomic latch; SDL still owns gamepads. The `taikos`
+service must retain its `input` supplementary group. Live validation opened
+`/dev/input/event0` and restored coin, menu, drum, and F10 capture keys.
 
 Each latched drum hit becomes an analog peak followed by a short linear decay,
 which resembles the arcade piezo sensor and keeps it visible across multiple

@@ -97,6 +97,7 @@ int main(int argc, char** argv)
     u32 frame_delay_ms = 0;
     u32 frame_first = 0, frame_last = ~(u32)0;
     int interactive = 0;
+    int save_frames = 1;
     for (int i = 1; i < argc; ++i) {
         const char* value;
         if ((value = value_after(argv[i], "--backend="))) backend = value;
@@ -166,6 +167,7 @@ int main(int argc, char** argv)
             frame_last = (end && *end == ',') ? (u32)strtoul(end + 1, NULL, 0)
                                               : frame_first;
         }
+        else if (strcmp(argv[i], "--no-save") == 0) save_frames = 0;
         else if (strcmp(argv[i], "--interactive") == 0) interactive = 1;
         else if (strcmp(argv[i], "--inspect") == 0) inspect = 1;
         else if (strcmp(argv[i], "--inspect-only") == 0)
@@ -179,7 +181,8 @@ int main(int argc, char** argv)
         fprintf(stderr,
                 "usage: rsx_replay --backend=sdl_gpu --input=FILE "
                 "--output-dir=DIR [--inspect|--inspect-only] [--loop=N] "
-                "[--frame-delay-ms=N] [--frame-range=A[,B]] [--interactive] "
+                "[--no-save] [--frame-delay-ms=N] "
+                "[--frame-range=A[,B]] [--interactive] "
                 "[--stop-after-op=N] [--dump-textures=DIR] "
                 "[--blend-override=OP,SFACTOR,DFACTOR] "
                 "[--draw-range-override=FIRST,LAST,REF_FILE,REF_FIRST] "
@@ -519,7 +522,7 @@ int main(int argc, char** argv)
         } while (rsx_sdl_gpu_backend_has_pending_batches());
         if (frame_delay_ms) SDL_Delay(frame_delay_ms);
         batches[i].operation_count = saved_operation_count;
-        if (pass == 0) {
+        if (pass == 0 && save_frames) {
             char path[1024];
             int written = snprintf(path, sizeof(path), "%s/frame_%06u.bmp",
                                    output_dir, i);
