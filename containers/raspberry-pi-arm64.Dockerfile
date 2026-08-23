@@ -14,6 +14,7 @@ RUN dpkg --add-architecture arm64 && \
         gcc-aarch64-linux-gnu \
         git \
         libasound2-dev:arm64 \
+        libdrm-dev:arm64 \
         libegl-dev:arm64 \
         libudev-dev:arm64 \
         libvulkan-dev:arm64 \

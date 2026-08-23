@@ -689,6 +689,7 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
         "src/taiko_host_input.cpp"
         "${PS3RECOMP_DIR}/runtime/host/host_sdl.c"
         "${PS3RECOMP_DIR}/libs/video/rsx_sdl_gpu_backend.c"
+        "${PS3RECOMP_DIR}/libs/video/rsx_kms_present.c"
         "${PS3RECOMP_DIR}/libs/video/rsx_render_batch.c"
         "${PS3RECOMP_DIR}/libs/video/rsx_batch_io.c"
         "${PS3RECOMP_DIR}/libs/video/rsx_vp_decompiler.c"
@@ -703,6 +704,18 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
     target_link_libraries(rsx_replay PRIVATE
         SDL3::SDL3-static
         SDL3_shadercross::SDL3_shadercross-static)
+    # Same KMS presentation path as the game; see ps3recomp/CMakeLists.txt.
+    if(UNIX AND NOT APPLE)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(TAIKO_LIBDRM QUIET libdrm)
+        endif()
+    endif()
+    if(TAIKO_LIBDRM_FOUND)
+        target_compile_definitions(rsx_replay PRIVATE RSX_SDL_KMS_PRESENT=1)
+        target_include_directories(rsx_replay PRIVATE ${TAIKO_LIBDRM_INCLUDE_DIRS})
+        target_link_libraries(rsx_replay PRIVATE ${TAIKO_LIBDRM_LIBRARIES})
+    endif()
     if(WIN32)
         target_link_options(rsx_replay PRIVATE
             -static -static-libgcc -static-libstdc++)

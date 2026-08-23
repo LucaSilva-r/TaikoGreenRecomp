@@ -1,4 +1,5 @@
 #include "rsx_batch_io.h"
+#include <SDL3/SDL.h>
 #include "rsx_sdl_gpu_backend.h"
 #include <ps3emu/host_sdl.h>
 
@@ -53,6 +54,26 @@ static void undo_draw_override(rsx_render_batch* batches, u32 first, u32 last,
     rsxb_free_batches(references, reference_count);
 }
 
+static volatile int s_replay_quit;
+static int s_replay_keys[32];
+static unsigned s_replay_key_write, s_replay_key_read;
+
+static void replay_key(int scancode)
+{
+    if (scancode == SDL_SCANCODE_ESCAPE || scancode == SDL_SCANCODE_Q) {
+        s_replay_quit = 1;
+        return;
+    }
+    s_replay_keys[s_replay_key_write % 32] = scancode;
+    ++s_replay_key_write;
+}
+
+static int replay_take_key(void)
+{
+    if (s_replay_key_read == s_replay_key_write) return 0;
+    return s_replay_keys[s_replay_key_read++ % 32];
+}
+
 int main(int argc, char** argv)
 {
     const char* backend = NULL;
@@ -73,6 +94,9 @@ int main(int argc, char** argv)
     int have_dump_draw = 0;
     int inspect = 0, inspect_only = 0;
     u32 loops = 1;
+    u32 frame_delay_ms = 0;
+    u32 frame_first = 0, frame_last = ~(u32)0;
+    int interactive = 0;
     for (int i = 1; i < argc; ++i) {
         const char* value;
         if ((value = value_after(argv[i], "--backend="))) backend = value;
@@ -130,6 +154,19 @@ int main(int argc, char** argv)
             loops = (u32)strtoul(value, NULL, 0);
             if (!loops) loops = 1;
         }
+        else if ((value = value_after(argv[i], "--frame-delay-ms="))) {
+            /* Slow the loop down so a human can see which frame is wrong. */
+            frame_delay_ms = (u32)strtoul(value, NULL, 0);
+        }
+        else if ((value = value_after(argv[i], "--frame-range="))) {
+            /* Replay only frames [A,B] of the capture, so a suspect frame can
+             * be held on screen by looping a range of one. */
+            char* end = NULL;
+            frame_first = (u32)strtoul(value, &end, 0);
+            frame_last = (end && *end == ',') ? (u32)strtoul(end + 1, NULL, 0)
+                                              : frame_first;
+        }
+        else if (strcmp(argv[i], "--interactive") == 0) interactive = 1;
         else if (strcmp(argv[i], "--inspect") == 0) inspect = 1;
         else if (strcmp(argv[i], "--inspect-only") == 0)
             inspect = inspect_only = 1;
@@ -142,6 +179,7 @@ int main(int argc, char** argv)
         fprintf(stderr,
                 "usage: rsx_replay --backend=sdl_gpu --input=FILE "
                 "--output-dir=DIR [--inspect|--inspect-only] [--loop=N] "
+                "[--frame-delay-ms=N] [--frame-range=A[,B]] [--interactive] "
                 "[--stop-after-op=N] [--dump-textures=DIR] "
                 "[--blend-override=OP,SFACTOR,DFACTOR] "
                 "[--draw-range-override=FIRST,LAST,REF_FILE,REF_FIRST] "
@@ -401,8 +439,61 @@ int main(int argc, char** argv)
         return 1;
     }
     int result = 0;
+    if (interactive) {
+        /* Hold one frame on screen, redrawing it continuously, and let whoever
+         * is looking at the panel classify it: left/right step, Y marks the
+         * frame broken, N marks it clean, Escape finishes and writes the
+         * verdicts out. The artifact only shows on the physical display, so
+         * this is the only way to get its frame numbers back. */
+        u8* marks = (u8*)calloc(count, 1);
+        if (!marks) { result = 1; goto interactive_done; }
+        g_rsx_replay_key_hook = replay_key;
+        fprintf(stderr, "[REPLAY] interactive: left/right step, y=broken, "
+                        "n=clean, esc=finish (%u frames)\n", count);
+        u32 cur = 0;
+        int announced = -1;
+        while (!s_replay_quit) {
+            if ((int)cur != announced) {
+                fprintf(stderr, "[REPLAY] showing frame %u/%u%s\n", cur,
+                        count - 1u,
+                        marks[cur] == 1 ? " [marked broken]"
+                                        : marks[cur] == 2 ? " [marked clean]" : "");
+                fflush(stderr);
+                announced = (int)cur;
+            }
+            if (rsx_sdl_gpu_backend_submit_batch(&batches[cur]) != 0) {
+                result = 1;
+                break;
+            }
+            do {
+                rsx_sdl_gpu_backend_main_iterate(16);
+            } while (rsx_sdl_gpu_backend_has_pending_batches());
+            int key;
+            while ((key = replay_take_key()) != 0) {
+                if (key == SDL_SCANCODE_RIGHT) cur = (cur + 1u) % count;
+                else if (key == SDL_SCANCODE_LEFT) cur = (cur + count - 1u) % count;
+                else if (key == SDL_SCANCODE_Y) { marks[cur] = 1; announced = -1; }
+                else if (key == SDL_SCANCODE_N) { marks[cur] = 2; announced = -1; }
+            }
+        }
+        fprintf(stderr, "[REPLAY] verdicts:\n");
+        for (u32 i = 0; i < count; ++i)
+            fprintf(stderr, "[REPLAY] frame %u %s\n", i,
+                    marks[i] == 1 ? "BROKEN" : marks[i] == 2 ? "clean" : "-");
+        fflush(stderr);
+        free(marks);
+    interactive_done:
+        g_rsx_replay_key_hook = NULL;
+        goto shutdown;
+    }
+
     for (u32 pass = 0; pass < loops && result == 0; ++pass)
     for (u32 i = 0; i < count; ++i) {
+        if (i < frame_first || i > frame_last) continue;
+        if (frame_delay_ms) {
+            fprintf(stderr, "[REPLAY] pass=%u frame=%u\n", pass, i);
+            fflush(stderr);
+        }
         if (have_blend_override && i == 0 &&
             blend_override_op < batches[i].operation_count) {
             rsx_render_op* op = &batches[i].operations[blend_override_op];
@@ -426,6 +517,7 @@ int main(int argc, char** argv)
         do {
             rsx_sdl_gpu_backend_main_iterate(0);
         } while (rsx_sdl_gpu_backend_has_pending_batches());
+        if (frame_delay_ms) SDL_Delay(frame_delay_ms);
         batches[i].operation_count = saved_operation_count;
         if (pass == 0) {
             char path[1024];
@@ -438,6 +530,8 @@ int main(int argc, char** argv)
             }
         }
     }
+shutdown:
+    ;
     unsigned errors = rsx_sdl_gpu_backend_error_count();
     rsx_sdl_gpu_backend_main_shutdown();
     ps3_host_sdl_shutdown();

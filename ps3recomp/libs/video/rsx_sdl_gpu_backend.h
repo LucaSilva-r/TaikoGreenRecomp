@@ -21,6 +21,12 @@ unsigned rsx_sdl_gpu_backend_error_count(void);
 int rsx_sdl_gpu_backend_submit_batch(const struct rsx_render_batch* batch);
 int rsx_sdl_gpu_backend_save_display_bmp(const char* path);
 
+#ifdef RSX_SDL_REPLAY_STANDALONE
+/* Replay-only key routing: the backend owns the SDL event pump, so rsx_replay's
+ * frame-marking mode needs the keys handed to it. */
+extern void (*g_rsx_replay_key_hook)(int scancode);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

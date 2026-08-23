@@ -101,6 +101,22 @@ target_compile_definitions(ps3recomp_runtime PUBLIC
     "PS3RECOMP_INPUT_BACKEND_${_PS3RECOMP_INPUT_BACKEND}=1"
     "PS3RECOMP_AUDIO_BACKEND_${_PS3RECOMP_AUDIO_BACKEND}=1")
 
+# Presentation straight to KMS needs libdrm. It is only meaningful on a Linux
+# appliance that owns the display, so a missing libdrm simply leaves
+# rsx_kms_present.c compiling to stubs and the windowed path in charge.
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(TAIKO_LIBDRM QUIET libdrm)
+    endif()
+endif()
+if(TAIKO_LIBDRM_FOUND)
+    target_compile_definitions(ps3recomp_runtime PRIVATE RSX_SDL_KMS_PRESENT=1)
+    target_include_directories(ps3recomp_runtime PRIVATE ${TAIKO_LIBDRM_INCLUDE_DIRS})
+    target_link_libraries(ps3recomp_runtime PUBLIC ${TAIKO_LIBDRM_LIBRARIES})
+    message(STATUS "KMS presentation enabled (libdrm ${TAIKO_LIBDRM_VERSION})")
+endif()
+
 # HLE modules include their own headers
 target_include_directories(ps3recomp_runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/libs/system"

@@ -6,6 +6,9 @@
 #include "rsx_render_batch.h"
 #include "rsx_vp_decompiler.h"
 #include "rsx_fp_decompiler.h"
+#ifdef RSX_SDL_KMS_PRESENT
+#include "rsx_kms_present.h"
+#endif
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -154,6 +157,9 @@ typedef struct sdl_rsx_state {
     Uint64 perf_prepare_ns;
     Uint64 perf_constants_ns;
     Uint64 perf_vertex_bytes;
+    int kms_present;
+    SDL_GPUTransferBuffer* kms_readback;
+    Uint32 kms_readback_bytes;
     Uint64 perf_vertices_ns;
     Uint64 perf_render_ns;
     Uint64 perf_present_ns;
@@ -1272,6 +1278,10 @@ static void execute_diagnostic_fallback(SDL_GPUCommandBuffer* commands,
  * whole render pass: on a tiler that is a full tile-buffer store plus the load
  * this pass would otherwise have done. Half of the passes in a Taiko frame are
  * clear-then-draw pairs on the same target. */
+#ifdef RSX_SDL_REPLAY_STANDALONE
+void (*g_rsx_replay_key_hook)(int scancode);
+#endif
+
 static SDL_GPURenderPass* begin_draw_pass(SDL_GPUCommandBuffer* commands,
                                           const rsx_render_op* op,
                                           const rsx_render_op* clear)
@@ -1685,8 +1695,67 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
     SDL_EndGPURenderPass(pass);
 }
 
+#ifdef RSX_SDL_KMS_PRESENT
+/* Read the finished frame back and hand it to KMS. This is the slow, obvious
+ * version: a full download per frame. It exists to prove the path end to end
+ * before the zero-copy dmabuf export, and it is what tells us whether owning
+ * the display actually removes the half-drawn frames. */
+static int present_display_kms(SDL_GPUCommandBuffer* commands)
+{
+    if (commands) submit_commands_and_wait(commands);
+    Uint32 width = 0, height = 0;
+    SDL_GPUTexture* source = presentation_texture(&width, &height);
+    if (!source || !width || !height) return -1;
+    const Uint32 pitch = width * 4u;
+    const Uint32 bytes = pitch * height;
+    if (s_sdl.kms_readback && s_sdl.kms_readback_bytes < bytes) {
+        SDL_ReleaseGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback);
+        s_sdl.kms_readback = NULL;
+    }
+    if (!s_sdl.kms_readback) {
+        SDL_GPUTransferBufferCreateInfo info;
+        SDL_zero(info);
+        info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+        info.size = bytes;
+        s_sdl.kms_readback = SDL_CreateGPUTransferBuffer(s_sdl.device, &info);
+        s_sdl.kms_readback_bytes = bytes;
+        if (!s_sdl.kms_readback) { ++s_sdl.errors; return -1; }
+    }
+    SDL_GPUCommandBuffer* copy_commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+    if (!copy_commands) { ++s_sdl.errors; return -1; }
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(copy_commands);
+    if (!copy) { SDL_CancelGPUCommandBuffer(copy_commands); ++s_sdl.errors; return -1; }
+    SDL_GPUTextureRegion region;
+    SDL_zero(region);
+    region.texture = source;
+    region.w = width;
+    region.h = height;
+    region.d = 1;
+    SDL_GPUTextureTransferInfo destination;
+    SDL_zero(destination);
+    destination.transfer_buffer = s_sdl.kms_readback;
+    destination.pixels_per_row = width;
+    destination.rows_per_layer = height;
+    SDL_DownloadFromGPUTexture(copy, &region, &destination);
+    SDL_EndGPUCopyPass(copy);
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(copy_commands);
+    if (!fence) { ++s_sdl.errors; return -1; }
+    SDL_GPUFence* fences[1] = {fence};
+    SDL_WaitForGPUFences(s_sdl.device, true, fences, 1);
+    SDL_ReleaseGPUFence(s_sdl.device, fence);
+    void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback, false);
+    if (!mapped) { ++s_sdl.errors; return -1; }
+    const int result = rsx_kms_present_frame(mapped, pitch);
+    SDL_UnmapGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback);
+    return result;
+}
+#endif
+
 static int present_display(SDL_GPUCommandBuffer* commands)
 {
+#ifdef RSX_SDL_KMS_PRESENT
+    if (s_sdl.kms_present) return present_display_kms(commands);
+#endif
     if (!s_sdl.display || !s_sdl.window) return -1;
     Uint32 source_width, source_height;
     SDL_GPUTexture* source_texture = presentation_texture(
@@ -1778,7 +1847,7 @@ static void update_window_title(void)
     snprintf(title, sizeof(title),
              "%s | FPS: %.2f | draws: %u | GPU errors: %u",
              s_sdl.base_title, fps, s_sdl.last_batch_draws, s_sdl.errors);
-    SDL_SetWindowTitle(s_sdl.window, title);
+    if (s_sdl.window) SDL_SetWindowTitle(s_sdl.window, title);
     if (s_sdl.fps_log)
         fprintf(stderr,
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
@@ -2341,6 +2410,12 @@ static void handle_event(const SDL_Event* event)
     }
     if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
         if (event->key.repeat) return;
+#ifdef RSX_SDL_REPLAY_STANDALONE
+        if (event->key.down && g_rsx_replay_key_hook) {
+            g_rsx_replay_key_hook((int)event->key.scancode);
+            return;
+        }
+#endif
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F11) {
             /* ponytail: SDL borderless-desktop fullscreen, no mode switching. */
             SDL_SetWindowFullscreen(s_sdl.window,
@@ -2601,12 +2676,20 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
      * second surface) has to be blended over it. As a plain resizable toplevel
      * the compositor composited every frame instead, which measured 16.6% of
      * the Pi's GPU -- more than the game itself was using. */
+#ifdef RSX_SDL_KMS_PRESENT
+    /* Driving KMS ourselves means there is no compositor to give us a window,
+     * and no swapchain: frames go from the display target to a scanout buffer.
+     * See rsx_kms_present.h for why the Pi needs this. */
+    s_sdl.kms_present = getenv("TAIKO_KMS_PRESENT") != NULL;
+#endif
     SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
     if (getenv("TAIKO_FULLSCREEN")) window_flags |= SDL_WINDOW_FULLSCREEN;
-    s_sdl.window = SDL_CreateWindow(s_sdl.base_title,
-                                    SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
-                                    window_flags);
-    if (!s_sdl.window) goto fail;
+    if (!s_sdl.kms_present) {
+        s_sdl.window = SDL_CreateWindow(s_sdl.base_title,
+                                        SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                                        window_flags);
+        if (!s_sdl.window) goto fail;
+    }
     if (getenv("TAIKO_HIDE_CURSOR")) SDL_HideCursor();
     const char* requested_driver = getenv("TAIKO_GPU_DRIVER");
     if (requested_driver && !requested_driver[0]) requested_driver = NULL;
@@ -2620,6 +2703,15 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     else
         fprintf(stderr, "[SDL_GPU] driver: %s (automatic)\n",
                 SDL_GetGPUDeviceDriver(s_sdl.device));
+    if (s_sdl.kms_present) {
+#ifdef RSX_SDL_KMS_PRESENT
+        if (rsx_kms_present_init(SDL_RSX_WIDTH, SDL_RSX_HEIGHT) != 0) {
+            fprintf(stderr, "[SDL_GPU] KMS presentation unavailable\n");
+            goto fail;
+        }
+#endif
+        goto swapchain_ready;
+    }
     if (!SDL_ClaimWindowForGPUDevice(s_sdl.device, s_sdl.window)) goto fail;
 
     const int immediate_supported = SDL_WindowSupportsGPUPresentMode(
@@ -2663,6 +2755,8 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
             "supported(immediate=%d mailbox=%d)\n",
             present_name, frames_in_flight,
             immediate_supported, mailbox_supported);
+swapchain_ready:
+    ;
 
     static const rsx_portable_format required[] = {
         RSX_FORMAT_RGBA8, RSX_FORMAT_RGBA16F, RSX_FORMAT_RGBA32F, RSX_FORMAT_R32F
@@ -2861,6 +2955,14 @@ fail:
 
 void rsx_sdl_gpu_backend_main_shutdown(void)
 {
+#ifdef RSX_SDL_KMS_PRESENT
+    if (s_sdl.kms_present) {
+        if (s_sdl.kms_readback)
+            SDL_ReleaseGPUTransferBuffer(s_sdl.device, s_sdl.kms_readback);
+        s_sdl.kms_readback = NULL;
+        rsx_kms_present_shutdown();
+    }
+#endif
     s_sdl.stopping = 1;
     if (s_sdl.queue_mutex) {
         SDL_LockMutex(s_sdl.queue_mutex);
