@@ -877,22 +877,6 @@ reaches the CRTC. This does not relax synchronization: rendering still crosses
 its completed fence before the plane flip, and a target is not reused until
 the atomic release fence signals.
 
-An unattended live attract run found one more boundary that the short replay
-could not expose. After roughly twenty minutes the process remained alive but
-the picture went black. All guest and audio threads were normally asleep; the
-main thread was blocked in `drmSyncobjWait` below
-`submit_kms_render_and_wait()`. V3D's command-list registers were idle with no
-MMU violation while DRM still reported an atomic plane update pending. That is
-an implicit synchronization cycle between V3DV and the nonblocking VC4 update,
-not an audio failure or an expensive frame.
-
-The zero-copy path now waits the previous atomic out-fence just before
-submitting the next Vulkan render. The placement matters: CPU command recording
-and the guest's inter-frame work remain overlapped with KMS, and in the normal
-case the vblank has already signalled by the time the check runs. This is more
-targeted than `TAIKO_KMS_ATOMIC_WAIT=1`, which waits immediately after every
-plane commit and remains a diagnostic switch rather than the shipping mode.
-
 At the appliance's required 1920x1080@60 output mode, the 30-frame heavy Player
 Entry reproduction held about **53.8--54.6 FPS**, versus **49.6--50.4 FPS** for
 the validated download/copy path. Preparation remained about 0.5--0.6 ms,

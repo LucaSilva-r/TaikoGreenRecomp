@@ -692,17 +692,6 @@ int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns)
     return result;
 }
 
-int rsx_kms_present_wait_pending(uint64_t *wait_ns)
-{
-    if (wait_ns) *wait_ns = 0;
-    if (!s_kms.active || !s_kms.external_active) return -1;
-    const uint64_t start = kms_monotonic_ns();
-    const int result = kms_wait_fence(&s_kms.pending_fence_fd);
-    const uint64_t end = kms_monotonic_ns();
-    if (wait_ns && end >= start) *wait_ns = end - start;
-    return result;
-}
-
 int rsx_kms_present_dmabuf(unsigned index,
                            const void *overlay_pixels, unsigned overlay_pitch,
                            unsigned overlay_x, unsigned overlay_y,
