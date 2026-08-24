@@ -466,10 +466,7 @@ int rsx_kms_present_init(unsigned source_width, unsigned source_height)
     if (!s_kms.had_master)
         fprintf(stderr, "[KMS] drmSetMaster failed: %s\n", strerror(errno));
 
-    const int zero_copy = getenv("TAIKO_KMS_ZERO_COPY") != NULL;
-    const int zero_copy_atomic =
-        getenv("TAIKO_KMS_ZERO_COPY_ATOMIC") != NULL;
-    if (getenv("TAIKO_KMS_ATOMIC") && (!zero_copy || zero_copy_atomic)) {
+    if (getenv("TAIKO_KMS_ATOMIC")) {
         if (drmSetClientCap(s_kms.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0 &&
             drmSetClientCap(s_kms.fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0) {
             s_kms.atomic = 1;
@@ -478,10 +475,6 @@ int rsx_kms_present_init(unsigned source_width, unsigned source_height)
             fprintf(stderr, "[KMS] atomic client capability unavailable: %s; "
                             "using legacy plane updates\n", strerror(errno));
         }
-    } else if (getenv("TAIKO_KMS_ATOMIC") && zero_copy) {
-        fprintf(stderr,
-                "[KMS] zero-copy uses legacy plane updates; "
-                "TAIKO_KMS_ZERO_COPY_ATOMIC=1 re-enables atomic diagnosis\n");
     }
 
     drmModeConnector *connector = NULL;
@@ -694,6 +687,17 @@ int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns)
         return -1;
     const uint64_t start = kms_monotonic_ns();
     const int result = kms_wait_fence(&s_kms.buffers[index].release_fd);
+    const uint64_t end = kms_monotonic_ns();
+    if (wait_ns && end >= start) *wait_ns = end - start;
+    return result;
+}
+
+int rsx_kms_present_wait_pending(uint64_t *wait_ns)
+{
+    if (wait_ns) *wait_ns = 0;
+    if (!s_kms.active || !s_kms.external_active) return -1;
+    const uint64_t start = kms_monotonic_ns();
+    const int result = kms_wait_fence(&s_kms.pending_fence_fd);
     const uint64_t end = kms_monotonic_ns();
     if (wait_ns && end >= start) *wait_ns = end - start;
     return result;

@@ -44,6 +44,10 @@ unsigned rsx_kms_present_get_modifiers(uint64_t *modifiers,
 int rsx_kms_present_import_dmabuf(unsigned index, int dma_fd,
                                   unsigned pitch, uint64_t offset,
                                   uint64_t modifier);
+/* Complete the most recent nonblocking atomic update before Vulkan submits
+ * more work against the imported scanout ring. Deferring this wait until the
+ * next render submit preserves the CPU-side overlap between frames. */
+int rsx_kms_present_wait_pending(uint64_t *wait_ns);
 int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns);
 int rsx_kms_present_dmabuf(unsigned index,
                            const void *overlay_pixels, unsigned overlay_pitch,
