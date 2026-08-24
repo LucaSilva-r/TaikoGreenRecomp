@@ -283,9 +283,34 @@ static int test_vp_input_mask(void)
     return 1;
 }
 
+static int test_vp_constant_usage(void)
+{
+    u8 ucode[16] = {0};
+    u8 used[512];
+    u32 d0 = 1u << 30;
+    u32 d1 = (0x01u << 22) | (37u << 12); /* MOV using constant slot 37. */
+    u32 d2 = 3u << 23;                    /* SRC0 is vp_c[]. */
+    u32 d3 = (1u << 16) | 1u;             /* write x, end. */
+    u32 words[4] = {d0, d1, d2, d3};
+    for (int i = 0; i < 4; ++i) {
+        u32 word = words[i];
+        ucode[i*4+0]=(u8)word; ucode[i*4+1]=(u8)(word>>8);
+        ucode[i*4+2]=(u8)(word>>16); ucode[i*4+3]=(u8)(word>>24);
+    }
+    if (!check(rsx_vp_constant_usage(ucode,sizeof(ucode),used) == 0,
+               "static VP constant scan")) return 0;
+    for (int i = 0; i < 512; ++i)
+        if (!check(used[i] == (i == 37),
+                   "static VP marks exactly its constant")) return 0;
+    ucode[12] |= 2u; /* D3.index_const */
+    if (!check(rsx_vp_constant_usage(ucode,sizeof(ucode),used) == 1,
+               "indexed VP constant requests full bank")) return 0;
+    return 1;
+}
+
 int main(void)
 {
     if(!test_primitives()||!test_texture_helpers()||!test_clone_and_io()||
-       !test_vp_input_mask())return 1;
+       !test_vp_input_mask()||!test_vp_constant_usage())return 1;
     puts("portable RSX batch tests passed");return 0;
 }

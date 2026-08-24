@@ -34,11 +34,19 @@
 #define SDL_RSX_MAX_PIPELINES 1024u
 #define SDL_RSX_MAX_TEXTURES 1024u
 #define SDL_RSX_MAX_SAMPLERS 64u
-#define SDL_RSX_SHADER_DIALECT_VERSION 2u
+#define SDL_RSX_SHADER_DIALECT_VERSION 3u
 #define SDL_RSX_PACE_SAMPLES 256u
 #define FPS_OVERLAY_WIDTH 128
 #define FPS_OVERLAY_HEIGHT 40
 #define FPS_GLYPH_SCALE 4
+#define SDL_RSX_CHARACTER_OUTLINE_FP UINT64_C(0x5DCB6858EEF22438)
+#define SDL_RSX_CHARACTER_COMPOSITE_VP UINT64_C(0x4D27AA0BFB40F830)
+#define SDL_RSX_CHARACTER_COMPOSITE_FP UINT64_C(0x19BF731FEF02629F)
+#define SDL_RSX_DIRECT_COPY_FP UINT64_C(0x1533A97E809FFB4A)
+static const u8 s_direct_copy_fp[] = {
+    0x9e, 0x01, 0x17, 0x00, 0xc8, 0x01, 0x1c, 0x9d,
+    0xc8, 0x00, 0x00, 0x01, 0xc8, 0x00, 0x3f, 0xe1,
+};
 /* Four, not three: with three, the slot chosen for presentation is the same
  * slot the next batch renders into, so a frame that runs long lets the next
  * clear and draws land in the texture the present blit is still reading. */
@@ -52,6 +60,10 @@ typedef struct shader_entry {
     SDL_ShaderCross_GraphicsShaderResourceInfo resources;
     u8 sampler_units[4]; /* dense SDL slot -> sparse RSX texture unit */
     u8 sampler_unit_count;
+    /* Dense storage-buffer slot -> guest vp_c[] slot. Address-indexed vertex
+     * programs retain the identity mapping for the complete bank. */
+    u16 vertex_constant_units[RSX_BATCH_VP_CONSTANTS];
+    u16 vertex_constant_count;
 } shader_entry;
 
 typedef struct pipeline_entry {
@@ -172,6 +184,7 @@ typedef struct sdl_rsx_state {
     Uint64 perf_prepare_ns;
     Uint64 perf_constants_ns;
     Uint64 perf_vertex_bytes;
+    Uint64 perf_constant_bytes;
     int kms_present;
     Uint64 perf_kms_render_ns;
     Uint64 perf_kms_download_ns;
@@ -695,13 +708,178 @@ static unsigned vertex_slot_count(u32 mask)
     return count;
 }
 
+/* Taiko builds each player character in a centered 600x600 surface, then runs
+ * a nine-sample outline filter over a full-target quad. Most of that quad is
+ * guaranteed transparent background. Keep this opt-in and narrowly keyed to
+ * the observed filter/target shape: costumes can be larger than the default
+ * character, so the service chooses a conservative margin and live validation
+ * remains the final oracle. */
+static int character_scissor_margin(void)
+{
+    static int initialized;
+    static int margin = -1;
+    if (!initialized) {
+        const char* value = getenv("TAIKO_GPU_CHARACTER_FILTER_SCISSOR");
+        if (value && value[0]) {
+            char* end = NULL;
+            long parsed = strtol(value, &end, 0);
+            if (end && !*end && parsed >= 0 && parsed <= 256)
+                margin = (int)parsed;
+        }
+        initialized = 1;
+    }
+    return margin;
+}
+
+static int is_character_outline_filter(const rsx_render_op* op)
+{
+    return op && op->type == RSX_RENDER_OP_DRAW &&
+        op->color_count == 1 && !op->color[0].is_display &&
+        op->color[0].width == 600 && op->color[0].height == 600 &&
+        op->data.draw.vertex_count == 6 &&
+        op->data.draw.pipeline.fragment_shader_hash ==
+            SDL_RSX_CHARACTER_OUTLINE_FP &&
+        op->data.draw.texture_count &&
+        op->data.draw.textures[0].width == 600 &&
+        op->data.draw.textures[0].height == 600;
+}
+
+static int bypass_character_outline(const rsx_render_op* op)
+{
+    static int initialized;
+    static int enabled;
+    static int announced;
+    if (!initialized) {
+        const char* value = getenv("TAIKO_GPU_CHARACTER_OUTLINE");
+        enabled = value && strcmp(value, "0") == 0;
+        initialized = 1;
+    }
+    if (!enabled || !is_character_outline_filter(op)) return 0;
+    if (!announced) {
+        announced = 1;
+        fprintf(stderr,
+                "[SDL_GPU] character outer-outline filter bypassed\n");
+    }
+    return 1;
+}
+
+static void intersect_scissor(SDL_Rect* scissor, int x, int y, int w, int h)
+{
+    const int scissor_end_x = scissor->x + scissor->w;
+    const int scissor_end_y = scissor->y + scissor->h;
+    const int end_x = x + w;
+    const int end_y = y + h;
+    const int clipped_x = scissor->x > x ? scissor->x : x;
+    const int clipped_y = scissor->y > y ? scissor->y : y;
+    const int clipped_end_x = scissor_end_x < end_x
+        ? scissor_end_x : end_x;
+    const int clipped_end_y = scissor_end_y < end_y
+        ? scissor_end_y : end_y;
+    scissor->x = clipped_x;
+    scissor->y = clipped_y;
+    scissor->w = clipped_end_x > clipped_x
+        ? clipped_end_x - clipped_x : 0;
+    scissor->h = clipped_end_y > clipped_y
+        ? clipped_end_y - clipped_y : 0;
+}
+
+/* The filtered 600x600 surface is then drawn to the display by one known
+ * affine vertex program. Transform the same central source rectangle into
+ * display coordinates so its expensive five-sample composite does not shade
+ * the transparent border a second time. */
+static int character_composite_scissor(const rsx_render_op* op, int margin,
+                                       SDL_Rect* result)
+{
+    const rsx_draw_op_data* draw = op ? &op->data.draw : NULL;
+    if (!op || op->type != RSX_RENDER_OP_DRAW || op->color_count != 1 ||
+        !op->color[0].is_display || op->color[0].width != SDL_RSX_WIDTH ||
+        op->color[0].height != SDL_RSX_HEIGHT || !draw ||
+        !op->viewport[2] || !op->viewport[3] ||
+        draw->vertex_count != 6 ||
+        draw->pipeline.vertex_layout != RSX_VERTEX_LAYOUT_PACKED ||
+        draw->pipeline.vertex_shader_hash != SDL_RSX_CHARACTER_COMPOSITE_VP ||
+        draw->pipeline.fragment_shader_hash != SDL_RSX_CHARACTER_COMPOSITE_FP ||
+        !draw->texture_count || draw->textures[0].width != 600 ||
+        draw->textures[0].height != 600 || draw->vertex_data.size != 96 ||
+        draw->vertex_constants.size <
+            (u64)RSX_BATCH_VP_CONSTANTS * 4u * sizeof(float))
+        return 0;
+
+    const float* vertices = (const float*)draw->vertex_data.data;
+    for (u32 i = 0; i < 6; ++i) {
+        const float x = vertices[i * 4u];
+        const float y = vertices[i * 4u + 1u];
+        if ((x != -0.5f && x != 0.5f) ||
+            (y != -0.5f && y != 0.5f) ||
+            vertices[i * 4u + 2u] != 0.0f ||
+            vertices[i * 4u + 3u] != 1.0f)
+            return 0;
+    }
+
+    const float* constants = (const float*)draw->vertex_constants.data;
+    const float* c256 = constants + 256u * 4u;
+    const float* c257 = constants + 257u * 4u;
+    const float* c259 = constants + 259u * 4u;
+    const float* c467 = constants + 467u * 4u;
+    const float* c512 = constants + 512u * 4u;
+    const float* c513 = constants + 513u * 4u;
+    const float uv_min = (float)margin / 600.0f;
+    const float uv_max = 1.0f - uv_min;
+    const float vx[2] = {uv_min - 0.5f, uv_max - 0.5f};
+    const float vy[2] = {0.5f - uv_min, 0.5f - uv_max};
+    float min_x = 0.0f, min_y = 0.0f, max_x = 0.0f, max_y = 0.0f;
+    for (u32 iy = 0; iy < 2; ++iy) for (u32 ix = 0; ix < 2; ++ix) {
+        float p[4];
+        for (u32 component = 0; component < 4; ++component)
+            p[component] = vx[ix] * c256[component] +
+                vy[iy] * c257[component] + c259[component] + c467[0];
+        if (p[3] > -0.000001f && p[3] < 0.000001f) return 0;
+        const float ndc_x = (p[0] * c512[0] + p[3] * c513[0]) / p[3];
+        const float ndc_y = (p[1] * c512[1] + p[3] * c513[1]) / p[3];
+        const float screen_x = (float)op->viewport[0] +
+            (ndc_x + 1.0f) * 0.5f * (float)op->viewport[2];
+        const float screen_y = (float)op->viewport[1] +
+            (1.0f - ndc_y) * 0.5f * (float)op->viewport[3];
+        if (screen_x != screen_x || screen_y != screen_y ||
+            screen_x < -32768.0f || screen_x > 32768.0f ||
+            screen_y < -32768.0f || screen_y > 32768.0f)
+            return 0;
+        if (!ix && !iy) min_x = max_x = screen_x, min_y = max_y = screen_y;
+        else {
+            if (screen_x < min_x) min_x = screen_x;
+            if (screen_x > max_x) max_x = screen_x;
+            if (screen_y < min_y) min_y = screen_y;
+            if (screen_y > max_y) max_y = screen_y;
+        }
+    }
+    int x = (int)min_x;
+    int y = (int)min_y;
+    int end_x = (int)max_x;
+    int end_y = (int)max_y;
+    if ((float)x > min_x) --x;
+    if ((float)y > min_y) --y;
+    if ((float)end_x < max_x) ++end_x;
+    if ((float)end_y < max_y) ++end_y;
+    /* One conservative raster pixel covers float rounding and edge sampling. */
+    --x; --y; ++end_x; ++end_y;
+    result->x = x;
+    result->y = y;
+    result->w = end_x - x;
+    result->h = end_y - y;
+    return result->w > 0 && result->h > 0;
+}
+
 static shader_entry* get_shader(const rsx_render_op* op,
                                 SDL_ShaderCross_ShaderStage stage)
 {
     const rsx_draw_op_data* draw = &op->data.draw;
     const rsx_owned_blob* blob = stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX
         ? &draw->vertex_shader : &draw->fragment_shader;
-    u64 hash = stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT && blob->size
+    const int outline_bypass =
+        stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT &&
+        bypass_character_outline(op);
+    u64 hash = outline_bypass ? SDL_RSX_DIRECT_COPY_FP :
+        stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT && blob->size
         ? rsx_fp_program_structure_hash(blob->data, (u32)blob->size)
         : blob->hash;
     unsigned flags = stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT
@@ -723,6 +901,8 @@ static shader_entry* get_shader(const rsx_render_op* op,
     int result;
     u8 sampler_units[4] = {0, 0, 0, 0};
     unsigned sampler_unit_count = 0;
+    u16 vertex_constant_units[RSX_BATCH_VP_CONSTANTS];
+    unsigned vertex_constant_count = 0;
     if (stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX && blob->size) {
         result = rsx_vp_decompile(blob->data, (u32)blob->size,
                                   source, 512u * 1024u,
@@ -744,20 +924,57 @@ static shader_entry* get_shader(const rsx_render_op* op,
                     "};",
                     "StructuredBuffer<float4> rsx_vp_constants : register(t0, space0);\n"
                     "cbuffer VPBase : register(b0, space1) { uint rsx_vp_base; uint3 rsx_vp_pad; };");
-        replace_all(source, 512u * 1024u, "vp_c[",
-                    "rsx_vp_constants[rsx_vp_base+");
-        replace_all(source, 512u * 1024u, "vp_posscale",
-                    "rsx_vp_constants[rsx_vp_base+512]");
-        replace_all(source, 512u * 1024u, "vp_posoffset",
-                    "rsx_vp_constants[rsx_vp_base+513]");
+        u8 used_constants[512];
+        const int indexed_constants = rsx_vp_constant_usage(
+            blob->data, (u32)blob->size, used_constants);
+        if (indexed_constants != 0) {
+            /* Invalid scans are conservatively equivalent to indexed reads. */
+            for (unsigned i = 0; i < RSX_BATCH_VP_CONSTANTS; ++i)
+                vertex_constant_units[vertex_constant_count++] = (u16)i;
+            replace_all(source, 512u * 1024u, "vp_c[",
+                        "rsx_vp_constants[rsx_vp_base+");
+            replace_all(source, 512u * 1024u, "vp_posscale",
+                        "rsx_vp_constants[rsx_vp_base+512]");
+            replace_all(source, 512u * 1024u, "vp_posoffset",
+                        "rsx_vp_constants[rsx_vp_base+513]");
+        } else {
+            /* Static shaders usually touch fewer than ten of the 512 guest
+             * constants. Rewrite those references to dense slots and append
+             * the two viewport epilogue vectors. */
+            for (unsigned guest = 0; guest < 512; ++guest) {
+                if (!used_constants[guest]) continue;
+                char from[24], to[64];
+                snprintf(from, sizeof(from), "vp_c[%u]", guest);
+                snprintf(to, sizeof(to),
+                         "rsx_vp_constants[rsx_vp_base+%u]",
+                         vertex_constant_count);
+                replace_all(source, 512u * 1024u, from, to);
+                vertex_constant_units[vertex_constant_count++] = (u16)guest;
+            }
+            const unsigned scale_slot = vertex_constant_count;
+            vertex_constant_units[vertex_constant_count++] = 512;
+            const unsigned offset_slot = vertex_constant_count;
+            vertex_constant_units[vertex_constant_count++] = 513;
+            char scale[64], offset[64];
+            snprintf(scale, sizeof(scale),
+                     "rsx_vp_constants[rsx_vp_base+%u]", scale_slot);
+            snprintf(offset, sizeof(offset),
+                     "rsx_vp_constants[rsx_vp_base+%u]", offset_slot);
+            replace_all(source, 512u * 1024u, "vp_posscale", scale);
+            replace_all(source, 512u * 1024u, "vp_posoffset", offset);
+        }
         /* SDL_GPU reserves set/space 1 for vertex-stage uniforms. This also
          * handles an unexpected older decompiler declaration defensively. */
         replace_all(source, 512u * 1024u,
                     "cbuffer VPConst : register(b0)",
                     "cbuffer VPConst : register(b0, space1)");
     } else if (stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT && blob->size) {
+        const u8* fragment_data = outline_bypass
+            ? s_direct_copy_fp : blob->data;
+        const u32 fragment_size = outline_bypass
+            ? (u32)sizeof(s_direct_copy_fp) : (u32)blob->size;
         result = rsx_fp_decompile_dynamic(
-            blob->data, (u32)blob->size, source, 512u * 1024u,
+            fragment_data, fragment_size, source, 512u * 1024u,
             draw->pipeline.fragment_32bit_exports,
             draw->pipeline.color_target_count ? draw->pipeline.color_target_count
                                               : 1u);
@@ -853,6 +1070,9 @@ static shader_entry* get_shader(const rsx_render_op* op,
     entry->shader = compile_hlsl(source, stage, &entry->resources, hash);
     entry->sampler_unit_count = (u8)sampler_unit_count;
     memcpy(entry->sampler_units, sampler_units, sizeof(entry->sampler_units));
+    entry->vertex_constant_count = (u16)vertex_constant_count;
+    memcpy(entry->vertex_constant_units, vertex_constant_units,
+           vertex_constant_count * sizeof(vertex_constant_units[0]));
     free(source);
     if (!entry->shader) return NULL;
     ++s_sdl.shader_count;
@@ -918,7 +1138,9 @@ static SDL_GPUBlendOp blend_op(u32 value)
 static SDL_GPUGraphicsPipeline* get_pipeline(const rsx_render_op* op)
 {
     rsx_pipeline_key canonical = op->data.draw.pipeline;
-    if (op->data.draw.fragment_shader.size)
+    if (bypass_character_outline(op))
+        canonical.fragment_shader_hash = SDL_RSX_DIRECT_COPY_FP;
+    else if (op->data.draw.fragment_shader.size)
         canonical.fragment_shader_hash = rsx_fp_program_structure_hash(
             op->data.draw.fragment_shader.data,
             (u32)op->data.draw.fragment_shader.size);
@@ -1507,6 +1729,36 @@ static void execute_draw(SDL_GPUCommandBuffer* commands,
         (int)(op->scissor[2] ? op->scissor[2] : op->color[0].width),
         (int)(op->scissor[3] ? op->scissor[3] : op->color[0].height)
     };
+    const int character_margin = character_scissor_margin();
+    if (character_margin >= 0 && is_character_outline_filter(op)) {
+        intersect_scissor(&scissor, character_margin, character_margin,
+                          600 - 2 * character_margin,
+                          600 - 2 * character_margin);
+        static int outline_announced;
+        if (!outline_announced) {
+            outline_announced = 1;
+            fprintf(stderr,
+                    "[SDL_GPU] character outline filter scissor "
+                    "%d,%d %dx%d\n", scissor.x, scissor.y,
+                    scissor.w, scissor.h);
+        }
+    } else if (character_margin >= 0) {
+        SDL_Rect composite_scissor;
+        if (character_composite_scissor(op, character_margin,
+                                        &composite_scissor)) {
+            intersect_scissor(&scissor, composite_scissor.x,
+                              composite_scissor.y, composite_scissor.w,
+                              composite_scissor.h);
+            static int composite_announced;
+            if (!composite_announced) {
+                composite_announced = 1;
+                fprintf(stderr,
+                        "[SDL_GPU] character display composite scissor "
+                        "%d,%d %dx%d\n", scissor.x, scissor.y,
+                        scissor.w, scissor.h);
+            }
+        }
+    }
     SDL_SetGPUScissor(pass, &scissor);
     SDL_FColor blend = {
         ((op->data.draw.pipeline.blend_color >> 16) & 255u) / 255.0f,
@@ -2300,7 +2552,8 @@ static void update_window_title(void)
         fprintf(stderr,
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
                 "cpu_ms(prep=%.2f const=%.2f vert=%.2f render=%.2f present=%.2f"
-                "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f vert_kib=%.0f "
+                "[acq=%.2f blit=%.2f fence=%.2f]) passes=%.1f "
+                "const_kib=%.0f vert_kib=%.0f "
                 "gpu(blits=%.1f copies=%.1f submits=%.1f) "
                 "kms(render_wait=%.2f issue=%.2f fence_wait=%.2f "
                 "scanout_wait=%.2f copy=%.2f flip=%.2f frames=%llu)\n",
@@ -2323,6 +2576,8 @@ static void update_window_title(void)
                     (double)s_sdl.perf_batches / 1000000.0 : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_render_passes /
                     (double)s_sdl.perf_batches : 0.0,
+                s_sdl.perf_batches ? (double)s_sdl.perf_constant_bytes /
+                    (double)s_sdl.perf_batches / 1024.0 : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_vertex_bytes /
                     (double)s_sdl.perf_batches / 1024.0 : 0.0,
                 s_sdl.perf_batches ? (double)s_sdl.perf_blits /
@@ -2359,6 +2614,7 @@ static void update_window_title(void)
     s_sdl.perf_blits = 0;
     s_sdl.perf_copy_passes = 0;
     s_sdl.perf_vertex_bytes = 0;
+    s_sdl.perf_constant_bytes = 0;
 }
 
 static void upload_surface_init(const rsx_surface_init* init)
@@ -2423,17 +2679,14 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
     unsigned render_passes = 0;
     SDL_GPUBuffer* vertex_constants = NULL;
     SDL_GPUBuffer* vertices = NULL;
+    u32* vertex_constant_offsets = NULL;
     u32* vertex_offsets = NULL;
-    u64 constant_stride = (u64)RSX_BATCH_VP_CONSTANTS * 4u * sizeof(float);
-    int needs_constants = 0;
     u64 vertex_bytes = 0;
     unsigned draw_count = 0;
     for (unsigned i = 0; i < batch->operation_count; ++i)
         if (batch->operations[i].type == RSX_RENDER_OP_DRAW) {
             const rsx_render_op* op = &batch->operations[i];
             ++draw_count;
-            if (op->data.draw.vertex_shader.size)
-                needs_constants = 1;
             u64 aligned = (vertex_bytes + 15u) & ~(u64)15u;
             if (aligned > UINT32_MAX ||
                 op->data.draw.vertex_data.size > UINT32_MAX - aligned) {
@@ -2516,6 +2769,40 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
                 s_sdl.sampler_count - old_samplers);
     perf_start = perf_mark;
 
+    /* Pipelines above have populated each vertex shader's static guest-slot
+     * map. Give every draw only the float4 values that its shader can read;
+     * address-indexed programs expose the identity map and retain all 514. */
+    u64 constant_bytes = 0;
+    if (batch->operation_count) {
+        vertex_constant_offsets = (u32*)malloc(
+            (size_t)batch->operation_count * sizeof(*vertex_constant_offsets));
+        if (vertex_constant_offsets) {
+            memset(vertex_constant_offsets, 0xff,
+                   (size_t)batch->operation_count *
+                       sizeof(*vertex_constant_offsets));
+            for (unsigned i = 0; i < batch->operation_count; ++i) {
+                const rsx_render_op* op = &batch->operations[i];
+                if (op->type != RSX_RENDER_OP_DRAW ||
+                    !op->data.draw.vertex_shader.size)
+                    continue;
+                shader_entry* shader = get_shader(
+                    op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
+                if (!shader || !shader->vertex_constant_count) continue;
+                const u64 bytes =
+                    (u64)shader->vertex_constant_count * 4u * sizeof(float);
+                if (constant_bytes > UINT32_MAX ||
+                    bytes > UINT32_MAX - constant_bytes) {
+                    constant_bytes = UINT32_MAX + (u64)1;
+                    break;
+                }
+                vertex_constant_offsets[i] = (u32)constant_bytes;
+                constant_bytes += bytes;
+            }
+        }
+    }
+    s_sdl.perf_constant_bytes +=
+        constant_bytes <= UINT32_MAX ? constant_bytes : 0;
+
     /* Record dynamic buffer uploads, display rendering, and presentation into
      * one command buffer. The previous per-buffer submissions cost several
      * milliseconds each on V3DV and made the heavy attract frames miss 60 Hz. */
@@ -2528,42 +2815,43 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
     }
     const int fps_overlay_uploaded = upload_fps_overlay(commands);
 
-    u64 constant_bytes = needs_constants
-        ? (u64)batch->operation_count * constant_stride : 0;
-    if (constant_bytes && constant_bytes <= UINT32_MAX) {
+    if (vertex_constant_offsets && constant_bytes &&
+        constant_bytes <= UINT32_MAX) {
         u8* packed = (u8*)map_dynamic_upload(
             &s_sdl.vertex_constants_upload, constant_bytes,
             SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ);
         if (packed) {
-            /* No full-buffer clear: a draw reads only its own slot, and the
-             * recorder always records the complete constant file, so only a
-             * short payload needs its tail zeroed. Clearing all of it wrote
-             * another 1.2 MiB to write-combined memory every Pi frame. */
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
-                if (op->type != RSX_RENDER_OP_DRAW) continue;
-                u64 bytes = op->data.draw.vertex_constants.size;
-                if (bytes > constant_stride) bytes = constant_stride;
-                if (bytes)
-                    memcpy(packed + (u64)i * constant_stride,
-                           op->data.draw.vertex_constants.data, (size_t)bytes);
-                if (bytes < constant_stride)
-                    memset(packed + (u64)i * constant_stride + bytes, 0,
-                           (size_t)(constant_stride - bytes));
-                /* RSXB v2's VP epilogue constants are defined in clip space.
-                 * Canonicalize x/y at the consumer boundary as well so early
-                 * v2 captures produced before the recorder-side fix remain
-                 * replayable. The z lanes keep the recorded GL-to-D3D depth
-                 * remap. */
-                if (bytes >= constant_stride) {
-                    float (*constants)[4] = (float (*)[4])(
-                        packed + (u64)i * constant_stride);
-                    constants[512][0] = 1.0f;
-                    constants[512][1] = 1.0f;
-                    constants[512][3] = 1.0f;
-                    constants[513][0] = 0.0f;
-                    constants[513][1] = 0.0f;
-                    constants[513][3] = 0.0f;
+                if (op->type != RSX_RENDER_OP_DRAW ||
+                    vertex_constant_offsets[i] == UINT32_MAX)
+                    continue;
+                shader_entry* shader = get_shader(
+                    op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
+                if (!shader) continue;
+                float* destination = (float*)(
+                    packed + vertex_constant_offsets[i]);
+                for (unsigned dense = 0;
+                     dense < shader->vertex_constant_count; ++dense) {
+                    const unsigned guest =
+                        shader->vertex_constant_units[dense];
+                    float value[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                    const u64 source_offset = (u64)guest * sizeof(value);
+                    if (source_offset + sizeof(value) <=
+                        op->data.draw.vertex_constants.size)
+                        memcpy(value,
+                               op->data.draw.vertex_constants.data +
+                                   source_offset,
+                               sizeof(value));
+                    /* RSXB v2's VP epilogue constants are defined in clip
+                     * space. Canonicalize x/y at the consumer boundary so
+                     * captures from before the recorder fix remain valid. */
+                    if (guest == 512) {
+                        value[0] = 1.0f; value[1] = 1.0f; value[3] = 1.0f;
+                    } else if (guest == 513) {
+                        value[0] = 0.0f; value[1] = 0.0f; value[3] = 0.0f;
+                    }
+                    memcpy(destination + dense * 4u, value, sizeof(value));
                 }
             }
             vertex_constants = commit_dynamic_upload(
@@ -2670,8 +2958,13 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             }
             pending_clear = op;
         } else if (op->type == RSX_RENDER_OP_DRAW) {
-            int valid = get_pipeline(op) && vertices && vertex_offsets &&
-                        vertex_offsets[i] != UINT32_MAX;
+            shader_entry* vertex_shader = get_shader(
+                op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
+            int valid = get_pipeline(op) && vertex_shader && vertices &&
+                        vertex_offsets && vertex_offsets[i] != UINT32_MAX &&
+                        (!vertex_shader->resources.num_storage_buffers ||
+                         (vertex_constants && vertex_constant_offsets &&
+                          vertex_constant_offsets[i] != UINT32_MAX));
             if (!valid) {
                 if (active_pass) {
                     SDL_EndGPURenderPass(active_pass);
@@ -2710,7 +3003,11 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             execute_draw(commands, active_pass, op, vertices,
                          vertex_offsets ? vertex_offsets[i] : UINT32_MAX,
                          vertex_constants,
-                         i * RSX_BATCH_VP_CONSTANTS);
+                         vertex_constant_offsets &&
+                             vertex_constant_offsets[i] != UINT32_MAX
+                             ? vertex_constant_offsets[i] /
+                                   (4u * (u32)sizeof(float))
+                             : 0u);
         }
     }
     if (active_pass) SDL_EndGPURenderPass(active_pass);
@@ -2763,6 +3060,7 @@ done:
     s_sdl.perf_render_ns += perf_mark - perf_start;
     s_sdl.perf_render_passes += render_passes;
     perf_start = perf_mark;
+    free(vertex_constant_offsets);
     free(vertex_offsets);
     const Uint64 present_start_ns = perf_start;
     if (present_display(commands) == 0)

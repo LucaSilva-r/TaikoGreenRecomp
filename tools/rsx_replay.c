@@ -81,6 +81,8 @@ int main(int argc, char** argv)
     const char* output_dir = NULL;
     const char* dump_texture_dir = NULL;
     u32 stop_after_op = ~(u32)0;
+    u32 skip_draw_first = 0, skip_draw_last = 0;
+    int have_skip_draw_range = 0;
     u32 blend_override_op = ~(u32)0;
     u32 blend_override_sfactor = 0;
     u32 blend_override_dfactor = 0;
@@ -92,12 +94,23 @@ int main(int argc, char** argv)
     u32 dump_draw_op = 0;
     char dump_draw_prefix[1024] = {0};
     int have_dump_draw = 0;
+    u32 extract_frame = 0;
+    char extract_path[1024] = {0};
+    int have_extract_frame = 0;
+    u32 fragment_override_op[16], fragment_override_reference[16];
+    u32 fragment_override_count = 0;
+    struct {
+        u32 op, x, y, width, height;
+    } scissor_override[16];
+    u32 scissor_override_count = 0;
     int inspect = 0, inspect_only = 0;
+    int surface_inits_once = 0;
     u32 loops = 1;
     u32 frame_delay_ms = 0;
     u32 frame_first = 0, frame_last = ~(u32)0;
     int interactive = 0;
     int save_frames = 1;
+    u32 save_pass = 0;
     for (int i = 1; i < argc; ++i) {
         const char* value;
         if ((value = value_after(argv[i], "--backend="))) backend = value;
@@ -113,6 +126,16 @@ int main(int argc, char** argv)
                 return 2;
             }
             stop_after_op = (u32)parsed;
+        }
+        else if ((value = value_after(argv[i], "--skip-draw-range="))) {
+            char tail;
+            if (sscanf(value, "%u,%u%c", &skip_draw_first,
+                       &skip_draw_last, &tail) != 2 ||
+                skip_draw_last < skip_draw_first) {
+                fprintf(stderr, "invalid skipped draw range: %s\n", value);
+                return 2;
+            }
+            have_skip_draw_range = 1;
         }
         else if ((value = value_after(argv[i], "--blend-override="))) {
             unsigned op, sfactor, dfactor;
@@ -147,6 +170,42 @@ int main(int argc, char** argv)
             }
             have_dump_draw = 1;
         }
+        else if ((value = value_after(argv[i], "--extract-frame="))) {
+            char tail;
+            if (sscanf(value, "%u,%1023s%c", &extract_frame,
+                       extract_path, &tail) != 2) {
+                fprintf(stderr, "invalid frame extraction: %s\n", value);
+                return 2;
+            }
+            have_extract_frame = 1;
+        }
+        else if ((value = value_after(argv[i], "--fragment-override="))) {
+            char tail;
+            if (fragment_override_count == 16 ||
+                sscanf(value, "%u,%u%c",
+                       &fragment_override_op[fragment_override_count],
+                       &fragment_override_reference[fragment_override_count],
+                       &tail) != 2) {
+                fprintf(stderr, "invalid fragment override: %s\n", value);
+                return 2;
+            }
+            ++fragment_override_count;
+        }
+        else if ((value = value_after(argv[i], "--scissor-override="))) {
+            char tail;
+            if (scissor_override_count == 16 ||
+                sscanf(value, "%u,%u,%u,%u,%u%c",
+                       &scissor_override[scissor_override_count].op,
+                       &scissor_override[scissor_override_count].x,
+                       &scissor_override[scissor_override_count].y,
+                       &scissor_override[scissor_override_count].width,
+                       &scissor_override[scissor_override_count].height,
+                       &tail) != 5) {
+                fprintf(stderr, "invalid scissor override: %s\n", value);
+                return 2;
+            }
+            ++scissor_override_count;
+        }
         else if ((value = value_after(argv[i], "--loop="))) {
             /* Replay the capture N times. A single pass over a 30-frame
              * capture is far too short to sample GPU counters against; this
@@ -159,6 +218,9 @@ int main(int argc, char** argv)
             /* Slow the loop down so a human can see which frame is wrong. */
             frame_delay_ms = (u32)strtoul(value, NULL, 0);
         }
+        else if ((value = value_after(argv[i], "--save-pass="))) {
+            save_pass = (u32)strtoul(value, NULL, 0);
+        }
         else if ((value = value_after(argv[i], "--frame-range="))) {
             /* Replay only frames [A,B] of the capture, so a suspect frame can
              * be held on screen by looping a range of one. */
@@ -168,6 +230,8 @@ int main(int argc, char** argv)
                                               : frame_first;
         }
         else if (strcmp(argv[i], "--no-save") == 0) save_frames = 0;
+        else if (strcmp(argv[i], "--surface-inits-once") == 0)
+            surface_inits_once = 1;
         else if (strcmp(argv[i], "--interactive") == 0) interactive = 1;
         else if (strcmp(argv[i], "--inspect") == 0) inspect = 1;
         else if (strcmp(argv[i], "--inspect-only") == 0)
@@ -177,16 +241,22 @@ int main(int argc, char** argv)
             return 2;
         }
     }
-    if (!backend || strcmp(backend, "sdl_gpu") != 0 || !input || !output_dir) {
+    if (!backend || strcmp(backend, "sdl_gpu") != 0 || !input ||
+        (!output_dir && !have_extract_frame)) {
         fprintf(stderr,
                 "usage: rsx_replay --backend=sdl_gpu --input=FILE "
                 "--output-dir=DIR [--inspect|--inspect-only] [--loop=N] "
                 "[--no-save] [--frame-delay-ms=N] "
+                "[--save-pass=N] "
                 "[--frame-range=A[,B]] [--interactive] "
-                "[--stop-after-op=N] [--dump-textures=DIR] "
+                "[--surface-inits-once] "
+                "[--stop-after-op=N] [--skip-draw-range=FIRST,LAST] "
+                "[--dump-textures=DIR] "
                 "[--blend-override=OP,SFACTOR,DFACTOR] "
                 "[--draw-range-override=FIRST,LAST,REF_FILE,REF_FIRST] "
-                "[--dump-draw=OP,PREFIX]\n");
+                "[--dump-draw=OP,PREFIX] [--extract-frame=N,FILE] "
+                "[--fragment-override=OP,REFERENCE_OP] "
+                "[--scissor-override=OP,X,Y,W,H]\n");
         return 2;
     }
     rsx_render_batch* batches = NULL;
@@ -195,6 +265,65 @@ int main(int argc, char** argv)
     if (rsxb_read_file(input, &batches, &count, error, sizeof(error)) != 0) {
         fprintf(stderr, "rsx_replay: %s\n", error);
         return 1;
+    }
+    if (have_extract_frame) {
+        if (extract_frame >= count ||
+            rsxb_write_file(extract_path, &batches[extract_frame], 1,
+                            error, sizeof(error)) != 0) {
+            fprintf(stderr, "rsx_replay: frame extraction: %s\n",
+                    extract_frame >= count ? "frame is out of bounds" : error);
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        fprintf(stderr, "[REPLAY] extracted frame %u to %s\n",
+                extract_frame, extract_path);
+        rsxb_free_batches(batches, count);
+        return 0;
+    }
+    for (u32 i = 0; i < fragment_override_count; ++i) {
+        const u32 destination_index = fragment_override_op[i];
+        const u32 reference_index = fragment_override_reference[i];
+        if (!count || destination_index >= batches[0].operation_count ||
+            reference_index >= batches[0].operation_count ||
+            batches[0].operations[destination_index].type != RSX_RENDER_OP_DRAW ||
+            batches[0].operations[reference_index].type != RSX_RENDER_OP_DRAW) {
+            fprintf(stderr, "rsx_replay: fragment override is out of bounds\n");
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        rsx_draw_op_data* destination =
+            &batches[0].operations[destination_index].data.draw;
+        const rsx_draw_op_data* reference =
+            &batches[0].operations[reference_index].data.draw;
+        if (rsx_owned_blob_copy(&destination->fragment_shader,
+                                reference->fragment_shader.data,
+                                reference->fragment_shader.size) != 0) {
+            fprintf(stderr, "rsx_replay: fragment override allocation failed\n");
+            rsxb_free_batches(batches, count);
+            return 1;
+        }
+        destination->pipeline.fragment_shader_hash =
+            reference->pipeline.fragment_shader_hash;
+    }
+    for (u32 i = 0; i < scissor_override_count; ++i) {
+        const u32 op_index = scissor_override[i].op;
+        for (u32 batch_index = 0; batch_index < count; ++batch_index) {
+            if (op_index >= batches[batch_index].operation_count ||
+                batches[batch_index].operations[op_index].type !=
+                    RSX_RENDER_OP_DRAW) {
+                fprintf(stderr,
+                        "rsx_replay: scissor override is out of bounds in "
+                        "batch %u\n", batch_index);
+                rsxb_free_batches(batches, count);
+                return 1;
+            }
+            rsx_render_op* op =
+                &batches[batch_index].operations[op_index];
+            op->scissor[0] = scissor_override[i].x;
+            op->scissor[1] = scissor_override[i].y;
+            op->scissor[2] = scissor_override[i].width;
+            op->scissor[3] = scissor_override[i].height;
+        }
     }
     if (have_dump_draw) {
         if (!count || dump_draw_op >= batches[0].operation_count ||
@@ -314,6 +443,7 @@ int main(int argc, char** argv)
     }
     if (inspect) {
         for (u32 i = 0; i < count; ++i) {
+            if (i < frame_first || i > frame_last) continue;
             const rsx_render_batch* batch = &batches[i];
             fprintf(stderr,
                     "[RSXB] batch=%u serial=%llu display=%u ops=%u inits=%u\n",
@@ -508,12 +638,44 @@ int main(int argc, char** argv)
             op->data.draw.pipeline.blend_sfactor = blend_override_sfactor;
             op->data.draw.pipeline.blend_dfactor = blend_override_dfactor;
         }
+        rsx_render_op* saved_operations = batches[i].operations;
         u32 saved_operation_count = batches[i].operation_count;
+        u32 saved_surface_init_count = batches[i].surface_init_count;
+        rsx_render_op* filtered_operations = NULL;
+        if (surface_inits_once && pass > 0)
+            batches[i].surface_init_count = 0;
         if (stop_after_op != ~(u32)0 &&
             stop_after_op + 1u < batches[i].operation_count)
             batches[i].operation_count = stop_after_op + 1u;
+        if (have_skip_draw_range && batches[i].operation_count) {
+            filtered_operations = malloc(
+                (size_t)batches[i].operation_count *
+                    sizeof(*filtered_operations));
+            if (!filtered_operations) {
+                fprintf(stderr, "skipped draw range allocation failed\n");
+                batches[i].operation_count = saved_operation_count;
+                batches[i].surface_init_count = saved_surface_init_count;
+                result = 1;
+                break;
+            }
+            u32 filtered_count = 0;
+            for (u32 op_index = 0;
+                 op_index < batches[i].operation_count; ++op_index) {
+                const rsx_render_op* op = &batches[i].operations[op_index];
+                if (op->type == RSX_RENDER_OP_DRAW &&
+                    op_index >= skip_draw_first &&
+                    op_index <= skip_draw_last)
+                    continue;
+                filtered_operations[filtered_count++] = *op;
+            }
+            batches[i].operations = filtered_operations;
+            batches[i].operation_count = filtered_count;
+        }
         if (rsx_sdl_gpu_backend_submit_batch(&batches[i]) != 0) {
+            batches[i].operations = saved_operations;
             batches[i].operation_count = saved_operation_count;
+            batches[i].surface_init_count = saved_surface_init_count;
+            free(filtered_operations);
             result = 1;
             break;
         }
@@ -521,8 +683,11 @@ int main(int argc, char** argv)
             rsx_sdl_gpu_backend_main_iterate(0);
         } while (rsx_sdl_gpu_backend_has_pending_batches());
         if (frame_delay_ms) SDL_Delay(frame_delay_ms);
+        batches[i].operations = saved_operations;
         batches[i].operation_count = saved_operation_count;
-        if (pass == 0 && save_frames) {
+        batches[i].surface_init_count = saved_surface_init_count;
+        free(filtered_operations);
+        if (pass == save_pass && save_frames) {
             char path[1024];
             int written = snprintf(path, sizeof(path), "%s/frame_%06u.bmp",
                                    output_dir, i);

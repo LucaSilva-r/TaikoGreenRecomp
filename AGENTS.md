@@ -155,7 +155,9 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   frame can be replayed offline, repeatedly, without the game running.
   These variables auto-arm capture at recorder startup. For an F10-only
   capture, use `RSX_BATCH_CAPTURE_HOTKEY=<file>` and
-  `RSX_BATCH_CAPTURE_HOTKEY_FRAMES=N`; the file is not created until F10.
+  `RSX_BATCH_CAPTURE_HOTKEY_FRAMES=N`; the file is not created until F10. The
+  4 GiB Pi service uses 4 frames: a 30-frame Song Select capture reached 3.33
+  GiB resident, exhausted 2 GiB swap and was OOM-killed before writing a file.
 - `build-linux/rsx_replay --backend=sdl_gpu <file.rsxb>` — replay a capture.
   `--loop=N` repeats it, which is how a capture becomes a steady load to sample
   GPU counters against (`TAIKO_RPI_BUILD_REPLAY=1` cross-builds it for the Pi).
@@ -164,6 +166,10 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   Deterministic, and the fastest way to tell a recorder bug from a renderer
   bug: if the capture replays correctly in a fresh process, the defect is in
   what was recorded, not in how it was drawn.
+  `--extract-frame=N,FILE` makes a small one-frame reproduction;
+  `--skip-draw-range`, `--fragment-override`, `--scissor-override`,
+  `--surface-inits-once`, and `--save-pass` support deterministic draw and
+  filter A/B tests.
 - `RSX_RESOURCE_TRACE=1` — per-frame resource accounting; prints
   `[SDL_GPU-SLOWPREP]` with new shader/pipeline/texture/sampler counts whenever
   preparation exceeds 5 ms. This is what identified the Go-Go slowdown.
@@ -188,6 +194,12 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, and
   `TAIKO_GPU_UPLOAD_FENCE_WAIT=1` are the validated set. The `*_GPU_IDLE` and
   `TAIKO_KMS_ATOMIC_WAIT` switches are diagnostic serialization controls.
+- `TAIKO_GPU_CHARACTER_FILTER_SCISSOR=N` applies an exact-shader-guarded crop
+  to the 600x600 character outline/composite chain. Do not deploy `N=128`: it
+  clips the tall orange festival costume. The Pi uses `N=0`, which retains the
+  transform-derived display bound without cropping the source character.
+  `TAIKO_GPU_CHARACTER_OUTLINE=0` replaces only the redundant nine-sample
+  outer-outline pass with the title's direct-copy shader.
 - `PS3RECOMP_NULL_RSX=1` / `PS3RECOMP_NULL_AUDIO=1` — headless backends, used
   by `scripts/test-linux-headless.sh`.
 - Guest-side: `[WAIT]`, `[fs]`, `[taiko_usio]`, `[taiko_netstate]` lines in
@@ -214,7 +226,7 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   alternating between two addresses is invisible to them; `YDKJ_HOTMAP=1`
   (hottest read per 8M-read window + `[SPINBT]` host rvas) does catch those.
 
-## Current state / known issues (as of 2026-08-16)
+## Current state / known issues (as of 2026-08-24)
 
 - Game boots to credits/attract; gradient backgrounds and direct-drawn UI
   render. Layer flicker (text/gradient/icon alternating per frame) was fixed
@@ -326,6 +338,27 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   buffer before rendering. It survived steady playback and the same CPU0 load
   pulse that reliably broke the asynchronous path; full device idle and atomic
   vblank waits are not required.
+- **Raspberry Pi vertex-constant uploads are densely packed** (2026-08-24;
+  replay and live validated). SDL previously uploaded the complete 514-float4
+  bank for every draw: the 421-draw Song Select reproduction transferred about
+  3.5 MB/frame even though its sprite shaders read only a few slots. The VP
+  scanner now maps statically addressed constants to dense storage-buffer
+  slots; address-register-indexed shaders automatically retain the complete
+  identity-mapped bank. Traffic fell to 47 KiB/frame, constant-copy time from
+  1.22 to 0.15 ms, upload-fence wait from 1.92 to 1.47 ms, and the deterministic
+  Pi replay improved from about 49.5 to 56.9 FPS with byte-identical output.
+  Live worst-costume Song Select improved from roughly 40 to 45 FPS with no
+  visible regression. The remaining V3DV render wait is about 14 ms of real
+  blended-sprite fill/overdraw; earlier batching was slower.
+- **Song Select character filtering is bounded** (2026-08-24; live validated).
+  A fixed 128-pixel crop made the default-costume replay 30/30 byte-identical
+  and raised it from 44--45 to 51--52 FPS, but clipped the tall festival
+  costume, so it is not a safe default. The service uses margin zero plus an
+  independent bypass of the nine-sample outer-outline pass. On the captured
+  worst costume, that bypass was pixel-identical, reduced KMS render wait by
+  about 2.2 ms, and raised replay from 50.5 to 56.4 FPS. The final five-sample
+  display composite remains enabled because replacing it recovered only about
+  0.8 ms in Song Select and visibly reduced edge quality.
 - **Gameplay rainbow masking is repaired** (2026-08-16; capture validated).
   The rainbow transition is a two-draw stencil sequence: an invisible black
   952x384 texture alpha-tests a clean arch into stencil with `ALWAYS`, ref 1,

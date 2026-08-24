@@ -48,12 +48,19 @@ Environment=TAIKO_AUDIO_SPU=1
 # produced rare incomplete frames whenever a small CPU load changed timing.
 Environment=TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1
 Environment=TAIKO_GPU_UPLOAD_FENCE_WAIT=1
+# The fixed 128-pixel character crop clipped tall costumes. Margin zero keeps
+# only the transform-derived display bound; bypass the redundant outer outline
+# pass independently. Both paths are exact-shader/target guarded.
+Environment=TAIKO_GPU_CHARACTER_FILTER_SCISSOR=0
+Environment=TAIKO_GPU_CHARACTER_OUTLINE=0
 # Show the one-second FPS average as a number. F9 toggles it at runtime.
 Environment=TAIKO_PERF_OVERLAY=1
 # Keep F10 useful on the appliance without auto-capturing during startup.
 # The fixed path bounds disk use: a later capture replaces the previous one.
 Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb
-Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=30
+# Song Select owns enough texture data that a 30-frame capture exhausted RAM
+# and swap on the 4 GiB Pi. Four frames cover dynamic state without the OOM.
+Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=4
 # RSX_VERTEX_TRACE and TAIKO_VERTEX_RACE_TRACE are deliberately absent: the
 # race trace hashes every skin job and vertex buffer and scans indexed
 # triangles, which costs several FPS. Add them to /etc/taikos/taikos.env only

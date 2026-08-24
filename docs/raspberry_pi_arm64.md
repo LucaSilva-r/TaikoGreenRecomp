@@ -869,6 +869,99 @@ Select problem. The next useful renderer work must reduce actual fragment/
 texture work, avoid the KMS GPU-to-CPU copy, or identify an individually costly
 draw; repackaging the same work into fewer SDL draw calls is not enough.
 
+### Song Select character-filter crop (2026-08-24)
+
+Draw-range bisection of the 421-draw Song Select frame found one concentrated
+cost that batching could not remove. Each player character is first assembled
+inside a 600x600 transparent render target. A nine-sample outline shader then
+ran over the entire target even though the character occupied only its central
+area, and the following five-sample display composite shaded the transparent
+border again. The two outline draws alone cost about 1.7 ms each on V3DV.
+
+`TAIKO_GPU_CHARACTER_FILTER_SCISSOR=N` now makes the SDL backend crop only this
+exact filter chain. It is deliberately opt-in and guarded by the structural
+fragment hashes, vertex hash/layout, six-vertex quad, display/offscreen role,
+and 600x600 source and target sizes. The outline uses the central
+`N, N, 600-2N, 600-2N` rectangle. For the display composite, the backend runs
+the known affine vertex transform over that source rectangle and intersects
+the resulting display-space bound with the guest scissor; moving or scaling
+the character therefore does not turn the crop into a fixed screen rectangle.
+
+With `N=128`, the captured outline passes use 344x344 instead of 600x600. The
+fixed-frame replay improved from 16.27 to **13.36 ms** of KMS render-fence wait
+and from roughly 44--45 to **51--52 FPS** including the scanout path. All 30
+distinct Song Select frames were byte-for-byte identical through the real
+renderer implementation. The same option did not match any guarded draw in
+the gameplay or drumming-challenge captures, so those scenes are unchanged.
+Live testing then found exactly why this cannot be the appliance default: the
+large orange festival costume extends above the default character's captured
+bound, and `N=128` visibly clipped the top. The service therefore uses `N=0`
+until a worst-costume capture can supply a safe bound or the backend tracks a
+dynamic content bound. Do not infer a universal crop from the default costume.
+
+`TAIKO_GPU_CHARACTER_OUTLINE=0` is the independent quality/performance lever.
+It replaces only the guarded nine-sample outer-outline fragment program with
+the title's own one-sample direct-copy program. Don-chan's artwork already has
+an inner black edge, so the normal filter appears as a second, much thicker
+border. The bypass preserves the artwork and all transforms while removing
+that extra stroke and its full-target neighbour sampling; it does not rely on
+the unsafe fixed crop.
+
+The replay tool gained the diagnostic controls used to establish this without
+changing game code: `--skip-draw-range`, `--extract-frame`,
+`--fragment-override`, `--scissor-override`, `--surface-inits-once`, and
+`--save-pass`. Shader overrides established the cost and appearance of the
+outline bypass before it became the explicit live A/B above; replacing the
+final display filter as well saved a little more but degraded edge quality and
+was not retained.
+
+### Dense vertex constants (2026-08-24)
+
+The next Song Select capture separated the remaining cost into three parts.
+The portable recorder/SDL resource preparation was already cheap, V3DV spent
+about 14.1 ms rendering the authored sprite overdraw, and dynamic uploads still
+copied a complete 514-float4 vertex-constant bank for every draw. The captured
+421-draw frame consequently transferred about 3.5 MB of constant-buffer data
+each frame, even though its common sprite vertex shader reads only a few slots.
+Constant packing cost 1.22 ms of CPU time and the required V3DV upload-fence
+wait cost another 1.92 ms.
+
+The vertex-program scanner now records the exact statically addressed
+`vp_c[]` slots used by each shader. The SDL backend rewrites those references
+to dense storage-buffer indices, appends the two viewport epilogue vectors,
+and uploads only that map for each draw. A program using address-register
+constant indexing automatically retains the identity map and complete 514-slot
+bank, so this is a general optimization with a correctness fallback rather
+than a Taiko shader allow-list. `RSXFPS` now reports `const_kib` separately
+from vertex bytes.
+
+On the Pi reproduction, constant traffic fell from about 3.5 MB to **47 KiB
+per frame** (roughly 74x smaller), constant-copy CPU time fell from 1.22 to
+**0.15 ms**, and upload-fence wait fell from 1.92 to **1.47 ms**. The steady
+single-frame replay improved from about 49.5 to **56.9 FPS** while V3DV render
+wait remained essentially unchanged at 14.0 ms. Old and new display BMPs were
+byte-for-byte identical. Live Song Select with the worst large costume
+improved from roughly 40 to **45 FPS**, with no visible regression.
+
+Draw-range bisection also quantified what remains. In this frame, display draws
+1--50 account for about 4.2 ms of V3DV time and draws 301--350 for about 2.7
+ms; these are ordinary blended sprite layers rather than shader-creation or
+draw-call overhead. The final five-sample character composite is expensive but
+substituting a one-sample copy recovered only about 0.8 ms and visibly reduced
+edge quality, so it remains intact. Earlier batching experiments were slower.
+The remaining path is genuinely fragment/fill and presentation bound.
+
+### Pi capture memory limit
+
+A 30-frame F10 capture in the heavy Song Select scene exhausted both RAM and
+the 2 GiB swap file before the recorder could write its final capture. The
+kernel OOM-killed `taiko_boot` at about 3.33 GiB resident, leaving no new RSXB
+file. The appliance service therefore uses
+`RSX_BATCH_CAPTURE_HOTKEY_FRAMES=4`; this retains enough consecutive frames for
+dynamic shader/pipeline diagnosis while keeping the recorder below the Pi's
+practical memory ceiling. Use longer captures only on a larger-memory host or
+after implementing streaming RSXB output.
+
 ### Remaining live issues
 
 - Gameplay has a noticeable audio-to-beatmap delay even though rendering and
@@ -881,8 +974,10 @@ draw; repackaging the same work into fewer SDL draw calls is not enough.
   `TAIKO_AUDIO_LATENCY_TRACE=1`, `TAIKO_AUDIO_SINK_TRACE=1`, and
   `TAIKO_AUDIO_RING_TRACE=1`, then compare the guest block timestamp, host
   queued audio, and visible chart timing at song start and after a minute.
-- Song Select needs a dedicated multi-frame capture to identify which draws or
-  fragment programs own its measured 15--18 ms GPU render fence.
+- Song Select remains fill-bound after dense constant uploads and the exact
+  character-filter changes. Its remaining display work is spread across
+  hundreds of blended sprite quads; draw-call batching was slower, and the
+  final character filter is not large enough to justify its quality loss.
 - Eliminating the 1280x720 GPU download through dmabuf remains the largest
   renderer-side opportunity, but SDL_GPU does not currently expose the native
   image handle required by that path.

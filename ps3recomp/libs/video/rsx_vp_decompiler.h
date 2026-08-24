@@ -52,6 +52,14 @@ int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size,
  * rsx_vp_decompile, so both always agree on the layout. */
 u32 rsx_vp_input_mask(const u8* ucode, u32 max_bytes);
 
+/* Mark the statically addressed vertex constants read by a program. `used`
+ * has one byte per vp_c[0..511] and is cleared by the function. Returns 0
+ * when all reads are static, 1 when an address-register-indexed constant read
+ * requires the complete bank, or -1 for invalid input. This deliberately
+ * follows the same implemented opcodes as rsx_vp_decompile: operands encoded
+ * in unused instruction fields do not force a false full-bank fallback. */
+int rsx_vp_constant_usage(const u8* ucode, u32 max_bytes, u8 used[512]);
+
 /* Mnemonics for the vector / scalar opcode fields ("?" if unknown). */
 const char* rsx_vp_vec_name(u32 op);
 const char* rsx_vp_sca_name(u32 op);

@@ -151,6 +151,62 @@ u32 rsx_vp_input_mask(const u8* ucode, u32 max_bytes)
     return mask ? mask : 1u;
 }
 
+int rsx_vp_constant_usage(const u8* ucode, u32 max_bytes, u8 used[512])
+{
+    u32 off = 0;
+    int indexed = 0;
+    if (!ucode || !used) return -1;
+    memset(used, 0, 512);
+    while (off + 16 <= max_bytes) {
+        u32 d0 = rd_le(ucode + off + 0);
+        u32 d1 = rd_le(ucode + off + 4);
+        u32 d2 = rd_le(ucode + off + 8);
+        u32 d3 = rd_le(ucode + off + 12);
+        u32 vec_op = (d1 >> 22) & 0x1F;
+        u32 sca_op = (d1 >> 27) & 0x1F;
+        u32 const_src = (d1 >> 12) & 0x3FF;
+        u32 src0 = ((d2 >> 23) & 0x1FF) | ((d1 & 0xFF) << 9);
+        u32 src1 = (d2 >> 6) & 0x1FFFF;
+        u32 src2 = ((d3 >> 21) & 0x7FF) | ((d2 & 0x3F) << 11);
+        int vm = (d3 >> 13) & 0xFu;
+        int sm = (d3 >> 17) & 0xFu;
+        unsigned vec_sources = 0;
+
+        if (vm) {
+            switch (vec_op) {
+            case 0x01: case 0x0D: case 0x0E: case 0x0F: case 0x16:
+                vec_sources = 1u; break;
+            case 0x02: case 0x05: case 0x06: case 0x07: case 0x08:
+            case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x10:
+            case 0x12: case 0x13: case 0x14:
+                vec_sources = 3u; break;
+            case 0x03: vec_sources = 5u; break;
+            case 0x04: vec_sources = 7u; break;
+            default: break; /* NOP, literal results, or unimplemented flow. */
+            }
+        }
+        int uses_constant =
+            ((vec_sources & 1u) && (src0 & 3u) == 3u) ||
+            ((vec_sources & 2u) && (src1 & 3u) == 3u) ||
+            ((vec_sources & 4u) && (src2 & 3u) == 3u);
+        /* Every implemented scalar ALU operation reads SRC2. Flow-control
+         * encodings are intentionally omitted because the decompiler emits
+         * no read for them. */
+        if (sm && ((sca_op >= 0x01 && sca_op <= 0x07) ||
+                   (sca_op >= 0x0D && sca_op <= 0x10)) &&
+            (src2 & 3u) == 3u)
+            uses_constant = 1;
+        if (uses_constant) {
+            if (d3 & 2u) indexed = 1;
+            else used[const_src & 511u] = 1;
+        }
+        off += 16;
+        if (d3 & 1u) break;
+        (void)d0;
+    }
+    return indexed;
+}
+
 int rsx_vp_decompile(const u8* ucode, u32 max_bytes, char* out, u32 out_size,
                      u32 input_mask)
 {
