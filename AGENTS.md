@@ -374,6 +374,14 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   3840x2160@30. Live attract held 60 FPS through 201 draws with zero renderer
   errors and roughly 0.01 ms scanout-target waits. The mapped 128x40 FPS badge
   retained the same 53.9--55.2 FPS stress throughput and cost 0.01 ms/frame.
+  A later unattended attract run exposed an implicit-sync deadlock: the main
+  thread remained forever in `drmSyncobjWait` from
+  `submit_kms_render_and_wait`, V3D registers showed the core completely idle,
+  and DRM still had an atomic plane update pending. This was not an audio hang.
+  Zero-copy rendering now completes the preceding nonblocking atomic out-fence
+  immediately before the next Vulkan render submit. The deferred boundary
+  keeps CPU command recording overlapped with KMS and avoids the always-wait
+  cost of `TAIKO_KMS_ATOMIC_WAIT`.
 - **Song Select character filtering and model outlines are bounded**
   (2026-08-24; filter live validated, complete outline replay validated).
   A fixed 128-pixel crop made the default-costume replay 30/30 byte-identical

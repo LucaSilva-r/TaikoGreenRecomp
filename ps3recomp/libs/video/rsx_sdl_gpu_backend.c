@@ -484,6 +484,28 @@ static int submit_commands_and_wait(SDL_GPUCommandBuffer* commands)
 
 static int submit_kms_render_and_wait(SDL_GPUCommandBuffer* commands)
 {
+#ifdef RSX_SDL_KMS_PRESENT
+    if (s_sdl.kms_zero_copy) {
+        /* V3DV and VC4 both own these imported dma-bufs. Leaving the previous
+         * nonblocking plane update pending while submitting the next Vulkan
+         * render can form an implicit-sync cycle: V3D waits without ever
+         * reaching hardware while KMS still holds an update dependency. The
+         * Pi then sits forever in drmSyncobjWait with an idle V3D core.
+         *
+         * Wait here, after CPU command recording but before GPU submission.
+         * Normally the preceding vblank has already signalled the fence, so
+         * this is free; unlike TAIKO_KMS_ATOMIC_WAIT it also retains all useful
+         * inter-frame CPU/KMS overlap. */
+        Uint64 scanout_wait_ns = 0;
+        if (rsx_kms_present_wait_pending(&scanout_wait_ns) != 0) {
+            fprintf(stderr, "[SDL_GPU] pending KMS commit wait failed\n");
+            ++s_sdl.errors;
+            return -1;
+        }
+        __atomic_fetch_add(&s_sdl.perf_kms_scanout_wait_ns, scanout_wait_ns,
+                           __ATOMIC_RELAXED);
+    }
+#endif
     if (submit_commands_and_wait(commands) != 0) return -1;
     if (!s_sdl.kms_gpu_idle) return 0;
 
