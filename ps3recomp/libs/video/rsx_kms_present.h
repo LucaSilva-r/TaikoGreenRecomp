@@ -33,6 +33,23 @@ int rsx_kms_present_frame(const void *pixels, unsigned pitch,
                           unsigned overlay_width, unsigned overlay_height,
                           uint64_t *scanout_wait_ns, uint64_t *copy_ns,
                           uint64_t *flip_ns);
+
+/* Zero-copy variant. Returns the DRM modifiers accepted by the selected KMS
+ * plane for XBGR8888, preferring tiled modifiers over linear. Each imported
+ * dma-buf is a 1280x720 image rendered directly by Vulkan. import_dmabuf takes
+ * ownership of dma_fd. acquire_dmabuf waits until KMS has stopped
+ * scanning out that slot before the renderer writes it again. */
+unsigned rsx_kms_present_get_modifiers(uint64_t *modifiers,
+                                       unsigned capacity);
+int rsx_kms_present_import_dmabuf(unsigned index, int dma_fd,
+                                  unsigned pitch, uint64_t offset,
+                                  uint64_t modifier);
+int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns);
+int rsx_kms_present_dmabuf(unsigned index,
+                           const void *overlay_pixels, unsigned overlay_pitch,
+                           unsigned overlay_x, unsigned overlay_y,
+                           unsigned overlay_width, unsigned overlay_height,
+                           uint64_t *copy_ns, uint64_t *flip_ns);
 void rsx_kms_present_shutdown(void);
 
 #ifdef __cplusplus

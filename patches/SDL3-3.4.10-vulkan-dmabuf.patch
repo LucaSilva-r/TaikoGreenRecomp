@@ -1,0 +1,416 @@
+--- a/src/gpu/vulkan/SDL_gpu_vulkan.c
++++ b/src/gpu/vulkan/SDL_gpu_vulkan.c
+@@ -31,6 +31,8 @@
+
+ #include <SDL3/SDL_vulkan.h>
+
++#include <unistd.h>
++
+ #include "../SDL_sysgpu.h"
+ #include "../../events/SDL_windowevents_c.h"
+
+@@ -596,6 +598,11 @@
+     Uint32 containerIndex;
+
+     VulkanMemoryUsedRegion *usedRegion;
++    /* TaikoRecomp's direct-KMS path asks for a dedicated, exportable linear
++     * allocation. Ordinary SDL textures continue through the suballocator. */
++    VkDeviceMemory dmaBufMemory;
++    bool dmaBufExportable;
++    Uint64 dmaBufModifier;
+
+     VkImage image;
+     VkImageView fullView; // used for samplers and storage reads
+@@ -2230,6 +2237,135 @@
+     return bindResult;
+ }
+
++static Uint8 VULKAN_INTERNAL_BindDMABufMemoryForImage(
++    VulkanRenderer *renderer,
++    VkImage image,
++    VkDeviceMemory *memory)
++{
++    VkMemoryRequirements requirements;
++    renderer->vkGetImageMemoryRequirements(
++        renderer->logicalDevice, image, &requirements);
++
++    Uint32 memoryTypeIndex = VK_MAX_MEMORY_TYPES;
++    for (Uint32 i = 0; i < renderer->memoryProperties.memoryTypeCount; ++i) {
++        if ((requirements.memoryTypeBits & (1u << i)) &&
++            (renderer->memoryProperties.memoryTypes[i].propertyFlags &
++             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
++            memoryTypeIndex = i;
++            break;
++        }
++    }
++    if (memoryTypeIndex == VK_MAX_MEMORY_TYPES) {
++        for (Uint32 i = 0; i < renderer->memoryProperties.memoryTypeCount; ++i)
++            if (requirements.memoryTypeBits & (1u << i)) {
++                memoryTypeIndex = i;
++                break;
++            }
++    }
++    if (memoryTypeIndex == VK_MAX_MEMORY_TYPES) return 0;
++
++    VkExportMemoryAllocateInfo exportInfo;
++    SDL_zero(exportInfo);
++    exportInfo.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
++    exportInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
++
++    VkMemoryDedicatedAllocateInfo dedicatedInfo;
++    SDL_zero(dedicatedInfo);
++    dedicatedInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
++    dedicatedInfo.pNext = &exportInfo;
++    dedicatedInfo.image = image;
++
++    VkMemoryAllocateInfo allocationInfo;
++    SDL_zero(allocationInfo);
++    allocationInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
++    allocationInfo.pNext = &dedicatedInfo;
++    allocationInfo.allocationSize = requirements.size;
++    allocationInfo.memoryTypeIndex = memoryTypeIndex;
++    VkResult result = renderer->vkAllocateMemory(
++        renderer->logicalDevice, &allocationInfo, NULL, memory);
++    if (result != VK_SUCCESS) return 0;
++    result = renderer->vkBindImageMemory(
++        renderer->logicalDevice, image, *memory, 0);
++    if (result != VK_SUCCESS) {
++        renderer->vkFreeMemory(renderer->logicalDevice, *memory, NULL);
++        *memory = VK_NULL_HANDLE;
++        return 0;
++    }
++    return 1;
++}
++
++static Uint32 VULKAN_INTERNAL_IntersectDMABufModifiers(
++    VulkanRenderer *renderer,
++    VkFormat format,
++    VkImageUsageFlags usage,
++    const Uint64 *scanoutModifiers,
++    Uint32 scanoutModifierCount,
++    Uint64 **compatibleModifiers)
++{
++    *compatibleModifiers = NULL;
++    if (!renderer->vkGetPhysicalDeviceFormatProperties2 ||
++        !scanoutModifiers || scanoutModifierCount == 0)
++        return 0;
++
++    VkDrmFormatModifierPropertiesListEXT list;
++    SDL_zero(list);
++    list.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT;
++    VkFormatProperties2 properties;
++    SDL_zero(properties);
++    properties.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
++    properties.pNext = &list;
++    renderer->vkGetPhysicalDeviceFormatProperties2(
++        renderer->physicalDevice, format, &properties);
++    if (list.drmFormatModifierCount == 0) return 0;
++
++    VkDrmFormatModifierPropertiesEXT *available = SDL_calloc(
++        list.drmFormatModifierCount,
++        sizeof(VkDrmFormatModifierPropertiesEXT));
++    if (!available) return 0;
++    list.pDrmFormatModifierProperties = available;
++    renderer->vkGetPhysicalDeviceFormatProperties2(
++        renderer->physicalDevice, format, &properties);
++
++    VkFormatFeatureFlags required = 0;
++    if (usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
++        required |= VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
++    if (usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
++        required |= VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
++    if (usage & VK_IMAGE_USAGE_SAMPLED_BIT)
++        required |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
++    if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
++        required |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
++    if (usage & VK_IMAGE_USAGE_STORAGE_BIT)
++        required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
++
++    Uint64 *result = SDL_malloc(scanoutModifierCount * sizeof(Uint64));
++    if (!result) {
++        SDL_free(available);
++        return 0;
++    }
++    Uint32 resultCount = 0;
++    for (Uint32 wanted = 0; wanted < scanoutModifierCount; ++wanted) {
++        for (Uint32 have = 0; have < list.drmFormatModifierCount; ++have) {
++            const VkDrmFormatModifierPropertiesEXT *candidate =
++                &available[have];
++            if (candidate->drmFormatModifier == scanoutModifiers[wanted] &&
++                candidate->drmFormatModifierPlaneCount == 1 &&
++                (candidate->drmFormatModifierTilingFeatures & required) ==
++                    required) {
++                result[resultCount++] = scanoutModifiers[wanted];
++                break;
++            }
++        }
++    }
++    SDL_free(available);
++    if (resultCount == 0) {
++        SDL_free(result);
++        return 0;
++    }
++    *compatibleModifiers = result;
++    return resultCount;
++}
++
+ static Uint8 VULKAN_INTERNAL_BindMemoryForBuffer(
+     VulkanRenderer *renderer,
+     VkBuffer buffer,
+@@ -3152,6 +3288,12 @@
+             renderer,
+             texture->usedRegion);
+     }
++    if (texture->dmaBufMemory) {
++        renderer->vkFreeMemory(
++            renderer->logicalDevice,
++            texture->dmaBufMemory,
++            NULL);
++    }
+
+     SDL_free(texture);
+ }
+@@ -5734,6 +5876,30 @@
+     VkImageUsageFlags vkUsageFlags = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+     Uint32 layerCount = (createinfo->type == SDL_GPU_TEXTURETYPE_3D) ? 1 : createinfo->layer_count_or_depth;
+     Uint32 depth = (createinfo->type == SDL_GPU_TEXTURETYPE_3D) ? createinfo->layer_count_or_depth : 1;
++    const bool exportDMABuf = SDL_GetBooleanProperty(
++        createinfo->props,
++        "SDL.gpu.texture.create.vulkan.dmabuf",
++        false);
++    if (exportDMABuf) {
++        /* Direct scanout images are rendered and displayed in place. Keeping
++         * SDL's generic transfer usage can exclude otherwise shared native
++         * render/scanout modifiers even though no transfer ever targets them. */
++        vkUsageFlags = 0;
++    }
++    const Uint64 *scanoutModifiers = (const Uint64 *)SDL_GetPointerProperty(
++        createinfo->props,
++        "SDL.gpu.texture.create.vulkan.dmabuf.modifiers",
++        NULL);
++    Sint64 scanoutModifierCountValue = SDL_GetNumberProperty(
++        createinfo->props,
++        "SDL.gpu.texture.create.vulkan.dmabuf.modifier_count",
++        0);
++    Uint32 scanoutModifierCount = scanoutModifierCountValue > 0 &&
++        scanoutModifierCountValue <= UINT32_MAX
++        ? (Uint32)scanoutModifierCountValue : 0;
++    Uint64 *compatibleModifiers = NULL;
++    Uint32 compatibleModifierCount = 0;
++    Uint64 selectedModifier = 0;
+
+     VulkanTexture *texture = SDL_calloc(1, sizeof(VulkanTexture));
+     texture->swizzle = SwizzleForSDLFormat(createinfo->format);
+@@ -5776,8 +5942,40 @@
+         vkUsageFlags |= VK_IMAGE_USAGE_STORAGE_BIT;
+     }
+
++    if (exportDMABuf && scanoutModifierCount > 0) {
++        compatibleModifierCount = VULKAN_INTERNAL_IntersectDMABufModifiers(
++            renderer,
++            SDLToVK_TextureFormat[createinfo->format],
++            vkUsageFlags,
++            scanoutModifiers,
++            scanoutModifierCount,
++            &compatibleModifiers);
++        if (compatibleModifierCount == 0) {
++            SDL_free(texture);
++            SDL_SetError("Vulkan and KMS share no usable dma-buf modifier");
++            return NULL;
++        }
++        /* Supplying exactly one modifier makes the driver's selection
++         * deterministic, so export does not need a native-image query. */
++        compatibleModifierCount = 1;
++        selectedModifier = compatibleModifiers[0];
++    }
++
+     imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+-    imageCreateInfo.pNext = NULL;
++    VkImageDrmFormatModifierListCreateInfoEXT modifierListInfo;
++    SDL_zero(modifierListInfo);
++    modifierListInfo.sType =
++        VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT;
++    modifierListInfo.drmFormatModifierCount = compatibleModifierCount;
++    modifierListInfo.pDrmFormatModifiers = compatibleModifiers;
++    VkExternalMemoryImageCreateInfo externalImageInfo;
++    SDL_zero(externalImageInfo);
++    externalImageInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
++    externalImageInfo.pNext = compatibleModifierCount > 0
++        ? &modifierListInfo : NULL;
++    externalImageInfo.handleTypes =
++        VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
++    imageCreateInfo.pNext = exportDMABuf ? &externalImageInfo : NULL;
+     imageCreateInfo.flags = imageCreateFlags;
+     imageCreateInfo.imageType = createinfo->type == SDL_GPU_TEXTURETYPE_3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+     imageCreateInfo.format = SDLToVK_TextureFormat[createinfo->format];
+@@ -5787,7 +5985,9 @@
+     imageCreateInfo.mipLevels = createinfo->num_levels;
+     imageCreateInfo.arrayLayers = layerCount;
+     imageCreateInfo.samples = SDLToVK_SampleCount[createinfo->sample_count];
+-    imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
++    imageCreateInfo.tiling = compatibleModifierCount > 0
++        ? VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT
++        : (exportDMABuf ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL);
+     imageCreateInfo.usage = vkUsageFlags;
+     imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+     imageCreateInfo.queueFamilyIndexCount = 0;
+@@ -5799,16 +5999,18 @@
+         &imageCreateInfo,
+         NULL,
+         &texture->image);
++    SDL_free(compatibleModifiers);
+
+     if (vulkanResult != VK_SUCCESS) {
+         VULKAN_INTERNAL_DestroyTexture(renderer, texture);
+         CHECK_VULKAN_ERROR_AND_RETURN(vulkanResult, vkCreateImage, NULL);
+     }
+
+-    bindResult = VULKAN_INTERNAL_BindMemoryForImage(
+-        renderer,
+-        texture->image,
+-        &texture->usedRegion);
++    bindResult = exportDMABuf
++        ? VULKAN_INTERNAL_BindDMABufMemoryForImage(
++              renderer, texture->image, &texture->dmaBufMemory)
++        : VULKAN_INTERNAL_BindMemoryForImage(
++              renderer, texture->image, &texture->usedRegion);
+
+     if (bindResult != 1) {
+         renderer->vkDestroyImage(
+@@ -5820,7 +6022,10 @@
+         SET_STRING_ERROR_AND_RETURN("Unable to bind memory for texture!", NULL);
+     }
+
+-    texture->usedRegion->vulkanTexture = texture; // lol
++    if (texture->usedRegion)
++        texture->usedRegion->vulkanTexture = texture; // lol
++    texture->dmaBufExportable = exportDMABuf;
++    texture->dmaBufModifier = selectedModifier;
+
+     if (createinfo->usage & (SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ)) {
+
+@@ -6937,7 +7142,7 @@
+         SDL_CopyProperties(createinfo->props, container->header.info.props);
+     }
+
+-    container->canBeCycled = true;
++    container->canBeCycled = !texture->dmaBufExportable;
+     container->activeTexture = texture;
+     container->textureCapacity = 1;
+     container->textureCount = 1;
+@@ -6975,6 +7180,65 @@
+     return (SDL_GPUTexture *)container;
+ }
+
++/* Narrow native interop used by TaikoRecomp's direct-KMS path. The returned
++ * fd is a new dma-buf descriptor owned by the caller. Only textures created
++ * with SDL.gpu.texture.create.vulkan.dmabuf are accepted. */
++SDL_DECLSPEC bool SDLCALL SDL_GPUVulkanExportTextureDMABUF(
++    SDL_GPUDevice *device,
++    SDL_GPUTexture *gpuTexture,
++    int *fd,
++    Uint32 *pitch,
++    Uint64 *offset,
++    Uint64 *modifier)
++{
++    if (!device || !gpuTexture || !fd || !pitch || !offset || !modifier ||
++        !device->backend || SDL_strcmp(device->backend, "vulkan") != 0) {
++        return SDL_InvalidParamError("Vulkan dma-buf export arguments");
++    }
++    VulkanRenderer *renderer = (VulkanRenderer *)device->driverData;
++    VulkanTextureContainer *container = (VulkanTextureContainer *)gpuTexture;
++    VulkanTexture *texture = container->activeTexture;
++    if (!texture) {
++        return SDL_SetError("GPU texture has no active Vulkan image");
++    }
++    if (!texture->dmaBufExportable) {
++        return SDL_SetError("GPU texture lacks the dma-buf creation marker");
++    }
++    if (!texture->dmaBufMemory) {
++        return SDL_SetError("GPU texture lacks dedicated dma-buf memory");
++    }
++    if (!renderer->vkGetMemoryFdKHR) {
++        return SDL_SetError("vkGetMemoryFdKHR was not loaded");
++    }
++
++    VkMemoryGetFdInfoKHR fdInfo;
++    SDL_zero(fdInfo);
++    fdInfo.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
++    fdInfo.memory = texture->dmaBufMemory;
++    fdInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
++    VkResult result = renderer->vkGetMemoryFdKHR(
++        renderer->logicalDevice, &fdInfo, fd);
++    if (result != VK_SUCCESS) {
++        return SDL_SetError("vkGetMemoryFdKHR failed: %d", result);
++    }
++
++    VkImageSubresource subresource;
++    SDL_zero(subresource);
++    subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++    VkSubresourceLayout layout;
++    renderer->vkGetImageSubresourceLayout(
++        renderer->logicalDevice, texture->image, &subresource, &layout);
++    if (layout.rowPitch > UINT32_MAX) {
++        close(*fd);
++        *fd = -1;
++        return SDL_SetError("dma-buf row pitch exceeds 32 bits");
++    }
++    *pitch = (Uint32)layout.rowPitch;
++    *offset = (Uint64)layout.offset;
++    *modifier = texture->dmaBufModifier;
++    return true;
++}
++
+ static SDL_GPUBuffer *VULKAN_CreateBuffer(
+     SDL_GPURenderer *driverData,
+     SDL_GPUBufferUsageFlags usageFlags,
+@@ -12541,12 +12805,20 @@
+     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+     deviceCreateInfo.enabledLayerCount = 0;
+     deviceCreateInfo.ppEnabledLayerNames = NULL;
+-    deviceCreateInfo.enabledExtensionCount = GetDeviceExtensionCount(
++    const Uint32 builtinDeviceExtensionCount = GetDeviceExtensionCount(
+         &renderer->supports);
++    deviceCreateInfo.enabledExtensionCount = builtinDeviceExtensionCount +
++        features->additionalDeviceExtensionCount;
+     deviceExtensions = SDL_stack_alloc(
+         const char *,
+         deviceCreateInfo.enabledExtensionCount);
+     CreateDeviceExtensionArray(&renderer->supports, deviceExtensions);
++    if (features->additionalDeviceExtensionCount > 0) {
++        SDL_memcpy(
++            (void *)(deviceExtensions + builtinDeviceExtensionCount),
++            features->additionalDeviceExtensionNames,
++            features->additionalDeviceExtensionCount * sizeof(const char *));
++    }
+     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions;
+
+     VkPhysicalDeviceFeatures2 featureList;
+--- a/src/gpu/vulkan/SDL_gpu_vulkan_vkfuncs.h
++++ b/src/gpu/vulkan/SDL_gpu_vulkan_vkfuncs.h
+@@ -53,6 +53,7 @@
+
+ // Vulkan 1.1 (Needed for opt-in feature checks)
+ VULKAN_INSTANCE_FUNCTION(vkGetPhysicalDeviceFeatures2)
++VULKAN_INSTANCE_FUNCTION(vkGetPhysicalDeviceFormatProperties2)
+
+ // VK_KHR_get_physical_device_properties2, needed for KHR_driver_properties
+ VULKAN_INSTANCE_FUNCTION(vkGetPhysicalDeviceProperties2KHR)
+@@ -153,6 +154,7 @@
+ VULKAN_DEVICE_FUNCTION(vkGetFenceStatus)
+ VULKAN_DEVICE_FUNCTION(vkGetBufferMemoryRequirements)
+ VULKAN_DEVICE_FUNCTION(vkGetImageMemoryRequirements)
++VULKAN_DEVICE_FUNCTION(vkGetImageSubresourceLayout)
+ VULKAN_DEVICE_FUNCTION(vkMapMemory)
+ VULKAN_DEVICE_FUNCTION(vkQueueSubmit)
+ VULKAN_DEVICE_FUNCTION(vkQueueWaitIdle)
+@@ -171,6 +173,9 @@
+ VULKAN_DEVICE_FUNCTION(vkQueuePresentKHR)
+ VULKAN_DEVICE_FUNCTION(vkGetSwapchainImagesKHR)
+
++// VK_KHR_external_memory_fd
++VULKAN_DEVICE_FUNCTION(vkGetMemoryFdKHR)
++
+ /*
+  * Redefine these every time you include this header!
+  */

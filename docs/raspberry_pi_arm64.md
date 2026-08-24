@@ -740,9 +740,7 @@ broken frames while the counters reported `errors=0`:**
 
 Measured on the Player Entry capture: serial 29.5 FPS, pipelined 49.6, and the
 remainder is GPU-bound at roughly 11 ms of scene render plus 6 ms of download.
-Exporting the presentation texture as a dmabuf would remove the download and
-close the gap to 60, but SDL_GPU exposes no `VkImage` and that means a
-permanent SDL fork.
+The dma-buf experiment that removes the download is described below.
 
 Combined submission was tested and rejected on 2026-08-23. It appended
 the download copy pass immediately after the render passes in the same SDL_GPU
@@ -781,9 +779,10 @@ same clean result with nonblocking atomic KMS and about 49.6--50.4 FPS on the
 mesh-heavy replay. A full idle after rendering and an atomic vblank wait could
 then both be removed without bringing the artifact back.
 
-The remaining major performance opportunity is a dmabuf path that eliminates
-the display download; SDL_GPU still exposes no `VkImage`, so doing that cleanly
-requires an SDL extension or maintained fork.
+`TAIKO_KMS_ZERO_COPY=1` is now the measured dma-buf path that eliminates the
+display download. It uses the small pinned SDL extension described under
+"Direct dma-buf scanout" below; it is not available with an unpatched system
+SDL build.
 
 With `RSX_FPS_LOG=1`, the KMS breakdown now reports `render_wait`, download
 `issue`, worker-side download `fence_wait`, CPU `copy`, and KMS plane `flip`
@@ -829,6 +828,9 @@ On the tested 4 GB Pi 5:
 - on that capture, the steady breakdown was roughly 16.3 ms render wait,
   1.5 ms download-fence wait, 3.5--3.7 ms CPU scanout copy, and 0.03 ms atomic
   plane commit. The worker overlaps the latter stages with the next render;
+- direct dma-buf scanout with three buffers removed the download and copy and
+  raised the same heavy reproduction to about 53.8--54.6 FPS; its atomic flip
+  cost 0.03--0.04 ms and scanout-target acquire wait remained zero;
 - nonblocking atomic KMS measured 51.97 FPS before the final upload fence,
   versus 51.21 for the legacy plane ioctl. Waiting every atomic out-fence did
   not improve correctness and is diagnostic-only;
@@ -848,6 +850,57 @@ nor power throttled during these runs. The runtime reserves a contiguous 4 GiB
 **virtual** guest address range with `MAP_NORESERVE`; pages consume physical
 memory only when touched. `VmSize` is not a useful RAM measurement here—use
 RSS or `memory.current`.
+
+### Direct dma-buf scanout (2026-08-24)
+
+`TAIKO_KMS_ZERO_COPY=1` makes Vulkan render directly into three images imported
+by KMS instead of downloading each completed frame and copying it into a dumb
+scanout buffer. The Pi dependency setup applies
+`patches/SDL3-3.4.10-vulkan-dmabuf.patch` to the pinned SDL source. That narrow
+extension fixes SDL 3.4.10's omission of requested Vulkan device extensions,
+creates dedicated exportable textures, intersects Vulkan's format modifiers
+with the selected KMS plane's `IN_FORMATS` list, and exports the dma-buf file
+descriptor, row pitch, offset, and modifier. Normal SDL textures and non-Pi
+builds are unchanged; the backend weak-links the added export entry point.
+
+VC4 advertises its native tiled modifier and linear XBGR8888 scanout, but the
+tested V3DV version exposes no matching tiled color-attachment modifier. The
+shared result is therefore linear (`modifier=0`, 5120-byte pitch). Removing
+unused sampler and generic transfer usage from this special image was
+important: it keeps the render target as narrow as the path actually needs.
+
+Three direct-scanout images are required. With two, a frame taking just over
+16.7 ms missed vblank and then immediately waited about 13.8 ms for its other
+image to leave scanout, locking the replay to 29 FPS. With three, the same
+acquire wait is zero and the renderer can continue while the previous commit
+reaches the CRTC. This does not relax synchronization: rendering still crosses
+its completed fence before the plane flip, and a target is not reused until
+the atomic release fence signals.
+
+At the appliance's required 1920x1080@60 output mode, the 30-frame heavy Player
+Entry reproduction held about **53.8--54.6 FPS**, versus **49.6--50.4 FPS** for
+the validated download/copy path. Preparation remained about 0.5--0.6 ms,
+render-fence time about 16.3 ms, scanout-target acquire wait was 0.00 ms, and
+the atomic flip cost 0.03--0.04 ms. The previous path additionally paid about
+1.5 ms of download-fence wait and 3.5--3.7 ms of CPU copy, partly overlapped by
+its worker. The image was visually correct and renderer errors remained zero.
+
+One reboot-time control accidentally selected the monitor's preferred
+3840x2160@30 mode and was likewise capped near 30 FPS for an unrelated reason.
+Always set `TAIKOS_OUTPUT_MODE=1920x1080@60` in standalone replay commands; the
+appliance service already does. The 1.5 GiB Song Select capture also drove
+the 4 GB Pi into swap churn during repeated comparison loads, so use the
+483 MiB Player Entry capture or reboot between oversized replay attempts.
+
+The FPS badge remains available without restoring an extra GPU pass. Each
+exported linear dma-buf is CPU-mappable on the tested V3DV stack, so after the
+render fence the KMS path synchronizes and writes only the opaque 128x40 badge
+into the completed target. That is 20 KiB rather than a full-frame copy and
+measured about **0.01 ms/frame** with unchanged replay throughput. If an export
+is not CPU-mappable, zero-copy presentation still works and the import log
+reports `CPU-map=no`; only the badge is omitted. `TAIKO_KMS_ZERO_COPY_LINEAR=1`
+forces linear allocation directly and exists only to diagnose modifier
+selection.
 
 ### Aggressive batching A/B (rejected)
 
@@ -978,9 +1031,11 @@ after implementing streaming RSXB output.
   character-filter changes. Its remaining display work is spread across
   hundreds of blended sprite quads; draw-call batching was slower, and the
   final character filter is not large enough to justify its quality loss.
-- Eliminating the 1280x720 GPU download through dmabuf remains the largest
-  renderer-side opportunity, but SDL_GPU does not currently expose the native
-  image handle required by that path.
+- Direct dma-buf scanout now removes the 1280x720 GPU download and recovers
+  roughly four FPS on the heavy Player Entry reproduction. V3DV and VC4 share
+  only a linear render/scanout layout on the tested stack, so the remaining
+  scene cost is still the authored fragment work rather than a hidden tiled
+  zero-copy option.
 
 Useful live diagnostics are:
 

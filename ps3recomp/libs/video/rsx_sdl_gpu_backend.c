@@ -14,6 +14,17 @@
 #include <SDL3/SDL_gpu.h>
 #include <SDL3_shadercross/SDL_shadercross.h>
 
+#ifdef RSX_SDL_KMS_PRESENT
+/* Local SDL 3.4.10 Vulkan extension applied by the Pi dependency build. */
+extern bool SDL_GPUVulkanExportTextureDMABUF(
+    SDL_GPUDevice* device, SDL_GPUTexture* texture, int* fd, Uint32* pitch,
+    Uint64* offset, Uint64* modifier)
+#if defined(__GNUC__)
+    __attribute__((weak))
+#endif
+    ;
+#endif
+
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -34,6 +45,7 @@
 #define SDL_RSX_MAX_PIPELINES 1024u
 #define SDL_RSX_MAX_TEXTURES 1024u
 #define SDL_RSX_MAX_SAMPLERS 64u
+#define SDL_RSX_KMS_MODIFIERS 64u
 #define SDL_RSX_SHADER_DIALECT_VERSION 3u
 #define SDL_RSX_PACE_SAMPLES 256u
 #define FPS_OVERLAY_WIDTH 128
@@ -186,6 +198,9 @@ typedef struct sdl_rsx_state {
     Uint64 perf_vertex_bytes;
     Uint64 perf_constant_bytes;
     int kms_present;
+    int kms_zero_copy;
+    uint64_t kms_modifiers[SDL_RSX_KMS_MODIFIERS];
+    unsigned kms_modifier_count;
     Uint64 perf_kms_render_ns;
     Uint64 perf_kms_download_ns;
     Uint64 perf_kms_wait_ns;
@@ -503,14 +518,34 @@ static SDL_GPUTexture* create_presentation_slot(void)
     SDL_zero(info);
     info.type = SDL_GPU_TEXTURETYPE_2D;
     info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET |
-                 SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+    if (!s_sdl.kms_zero_copy)
+        info.usage |= SDL_GPU_TEXTUREUSAGE_SAMPLER;
     info.width = SDL_RSX_WIDTH;
     info.height = SDL_RSX_HEIGHT;
     info.layer_count_or_depth = 1;
     info.num_levels = 1;
     info.sample_count = SDL_GPU_SAMPLECOUNT_1;
-    return SDL_CreateGPUTexture(s_sdl.device, &info);
+    SDL_PropertiesID props = 0;
+    if (s_sdl.kms_zero_copy) {
+        props = SDL_CreateProperties();
+        if (!props) return NULL;
+        SDL_SetBooleanProperty(
+            props, "SDL.gpu.texture.create.vulkan.dmabuf", true);
+        if (s_sdl.kms_modifier_count > 0 &&
+            getenv("TAIKO_KMS_ZERO_COPY_LINEAR") == NULL) {
+            SDL_SetPointerProperty(
+                props, "SDL.gpu.texture.create.vulkan.dmabuf.modifiers",
+                s_sdl.kms_modifiers);
+            SDL_SetNumberProperty(
+                props, "SDL.gpu.texture.create.vulkan.dmabuf.modifier_count",
+                s_sdl.kms_modifier_count);
+        }
+        info.props = props;
+    }
+    SDL_GPUTexture* result = SDL_CreateGPUTexture(s_sdl.device, &info);
+    if (props) SDL_DestroyProperties(props);
+    return result;
 }
 
 /* Rotate complete display render targets. Frame N renders into one target
@@ -2350,6 +2385,39 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
         commands = NULL;
     }
 
+    if (s_sdl.kms_zero_copy) {
+        const unsigned current = s_sdl.kms_display_index;
+        const void *overlay = s_sdl.perf_overlay &&
+            s_fps_overlay.cpu_version != 0 ? s_fps_overlay.pixels : NULL;
+        Uint64 copy_ns = 0, flip_ns = 0;
+        if (rsx_kms_present_dmabuf(
+                current, overlay, FPS_OVERLAY_WIDTH * 4u, 12u, 12u,
+                FPS_OVERLAY_WIDTH, FPS_OVERLAY_HEIGHT,
+                &copy_ns, &flip_ns) != 0) {
+            fprintf(stderr, "[SDL_GPU] KMS dma-buf present failed\n");
+            ++s_sdl.errors;
+            return -1;
+        }
+        const unsigned next = (current + 1u) % s_sdl.kms_display_count;
+        Uint64 acquire_ns = 0;
+        if (rsx_kms_present_acquire_dmabuf(next, &acquire_ns) != 0) {
+            fprintf(stderr, "[SDL_GPU] KMS dma-buf acquire failed\n");
+            ++s_sdl.errors;
+            return -1;
+        }
+        __atomic_fetch_add(&s_sdl.perf_kms_scanout_wait_ns, acquire_ns,
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_copy_ns, copy_ns,
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_flip_ns, flip_ns,
+                           __ATOMIC_RELAXED);
+        __atomic_fetch_add(&s_sdl.perf_kms_frames, 1u,
+                           __ATOMIC_RELAXED);
+        s_sdl.kms_display_index = next;
+        s_sdl.display = s_sdl.kms_display[next];
+        return 0;
+    }
+
     Uint32 width = 0, height = 0;
     SDL_GPUTexture* source = presentation_texture(&width, &height);
     if (!source || !width || !height) return -1;
@@ -3633,6 +3701,8 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
      * and no swapchain: frames go from the display target to a scanout buffer.
      * See rsx_kms_present.h for why the Pi needs this. */
     s_sdl.kms_present = getenv("TAIKO_KMS_PRESENT") != NULL;
+    s_sdl.kms_zero_copy = s_sdl.kms_present &&
+        getenv("TAIKO_KMS_ZERO_COPY") != NULL;
 #endif
     SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
     if (getenv("TAIKO_FULLSCREEN")) window_flags |= SDL_WINDOW_FULLSCREEN;
@@ -3645,9 +3715,41 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     if (getenv("TAIKO_HIDE_CURSOR")) SDL_HideCursor();
     const char* requested_driver = getenv("TAIKO_GPU_DRIVER");
     if (requested_driver && !requested_driver[0]) requested_driver = NULL;
-    s_sdl.device = SDL_CreateGPUDevice(SDL_ShaderCross_GetHLSLShaderFormats(),
-                                      getenv("SDL_GPU_DEBUG") != NULL,
-                                      requested_driver);
+    const SDL_GPUShaderFormat shader_formats =
+        SDL_ShaderCross_GetHLSLShaderFormats();
+    if (s_sdl.kms_zero_copy) {
+        const char* extensions[] = {
+            "VK_KHR_external_memory",
+            "VK_KHR_external_memory_fd",
+            "VK_EXT_external_memory_dma_buf",
+        };
+        SDL_GPUVulkanOptions vulkan_options;
+        SDL_zero(vulkan_options);
+        vulkan_options.vulkan_api_version = (1u << 22) | (1u << 12); /* 1.1 */
+        vulkan_options.device_extension_count = SDL_arraysize(extensions);
+        vulkan_options.device_extension_names = extensions;
+        SDL_PropertiesID props = SDL_CreateProperties();
+        if (!props) goto fail;
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_SPIRV) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN,
+            getenv("SDL_GPU_DEBUG") != NULL);
+        if (requested_driver)
+            SDL_SetStringProperty(
+                props, SDL_PROP_GPU_DEVICE_CREATE_NAME_STRING,
+                requested_driver);
+        SDL_SetPointerProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_VULKAN_OPTIONS_POINTER,
+            &vulkan_options);
+        s_sdl.device = SDL_CreateGPUDeviceWithProperties(props);
+        SDL_DestroyProperties(props);
+    } else {
+        s_sdl.device = SDL_CreateGPUDevice(
+            shader_formats, getenv("SDL_GPU_DEBUG") != NULL,
+            requested_driver);
+    }
     if (!s_sdl.device) goto fail;
     if (requested_driver)
         fprintf(stderr, "[SDL_GPU] driver: %s (requested %s)\n",
@@ -3662,11 +3764,46 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
             fprintf(stderr, "[SDL_GPU] KMS presentation unavailable\n");
             goto fail;
         }
-        s_sdl.kms_display_count = 2u;
+        if (s_sdl.kms_zero_copy) {
+            s_sdl.kms_modifier_count = rsx_kms_present_get_modifiers(
+                s_sdl.kms_modifiers, SDL_RSX_KMS_MODIFIERS);
+        }
+        /* A direct-scanout target remains owned by KMS until a later atomic
+         * commit reaches the CRTC. Two slots turn a frame that narrowly misses
+         * vblank into a 30 Hz render/acquire cycle; the normal download path
+         * does not have that ownership constraint on its render targets. */
+        s_sdl.kms_display_count = s_sdl.kms_zero_copy ? 3u : 2u;
         for (unsigned i = 0; i < s_sdl.kms_display_count; ++i) {
             s_sdl.kms_display[i] = create_presentation_slot();
             s_sdl.kms_display_reader[i] = -1;
             if (!s_sdl.kms_display[i]) goto fail;
+            if (s_sdl.kms_zero_copy) {
+                int fd = -1;
+                Uint32 pitch = 0;
+                Uint64 offset = 0, modifier = 0;
+                if (!SDL_GPUVulkanExportTextureDMABUF) {
+                    fprintf(stderr,
+                            "[SDL_GPU] zero-copy KMS needs the Pi SDL "
+                            "dma-buf extension\n");
+                    goto fail;
+                }
+                if (!SDL_GPUVulkanExportTextureDMABUF(
+                        s_sdl.device, s_sdl.kms_display[i], &fd, &pitch,
+                        &offset, &modifier)) {
+                    fprintf(stderr,
+                            "[SDL_GPU] presentation dma-buf export failed: %s\n",
+                            SDL_GetError());
+                    goto fail;
+                }
+                if (rsx_kms_present_import_dmabuf(
+                        i, fd, pitch, offset, modifier) != 0)
+                    goto fail;
+            }
+        }
+        if (s_sdl.kms_zero_copy) {
+            Uint64 wait_ns = 0;
+            if (rsx_kms_present_acquire_dmabuf(0, &wait_ns) != 0) goto fail;
+            fprintf(stderr, "[SDL_GPU] zero-copy KMS dma-buf path active\n");
         }
         s_sdl.display = s_sdl.kms_display[0];
 #endif

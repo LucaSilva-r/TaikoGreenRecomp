@@ -54,6 +54,11 @@ sdl_source="${source_dir}/SDL3-${sdl_version}"
 if [[ ! -f "${sdl_source}/CMakeLists.txt" ]]; then
     tar -xzf "${sdl_archive}" -C "${source_dir}"
 fi
+sdl_dmabuf_patch="${repo_dir}/patches/SDL3-3.4.10-vulkan-dmabuf.patch"
+if ! grep -q 'SDL_GPUVulkanExportTextureDMABUF' \
+        "${sdl_source}/src/gpu/vulkan/SDL_gpu_vulkan.c"; then
+    git -C "${sdl_source}" apply "${sdl_dmabuf_patch}"
+fi
 # KMSDRM stays off deliberately. SDL's KMSDRM video driver builds fine, but the
 # SDL_GPU Vulkan backend then needs direct-to-display, and on the Pi the render
 # device (v3d) is render-only while the display lives on a separate vc4 node --

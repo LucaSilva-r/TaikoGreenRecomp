@@ -194,6 +194,11 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, and
   `TAIKO_GPU_UPLOAD_FENCE_WAIT=1` are the validated set. The `*_GPU_IDLE` and
   `TAIKO_KMS_ATOMIC_WAIT` switches are diagnostic serialization controls.
+  `TAIKO_KMS_ZERO_COPY=1` uses the pinned SDL dma-buf extension and three
+  direct-scanout textures; it removes the download/CPU copy and is faster on
+  the measured Pi. The FPS badge writes only its 20 KiB opaque rectangle into
+  a mapped linear export after the render fence and costs about 0.01 ms/frame.
+  `TAIKO_KMS_ZERO_COPY_LINEAR=1` is modifier-selection diagnosis only.
 - `TAIKO_GPU_CHARACTER_FILTER_SCISSOR=N` applies an exact-shader-guarded crop
   to the 600x600 character outline/composite chain. Do not deploy `N=128`: it
   clips the tall orange festival costume. The Pi uses `N=0`, which retains the
@@ -350,6 +355,19 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   Live worst-costume Song Select improved from roughly 40 to 45 FPS with no
   visible regression. The remaining V3DV render wait is about 14 ms of real
   blended-sprite fill/overdraw; earlier batching was slower.
+- **Raspberry Pi direct dma-buf scanout is implemented** (2026-08-24; replay
+  measured and visually checked). The Pi SDL setup applies a narrow tracked
+  patch to SDL 3.4.10 that creates dedicated exportable Vulkan textures and
+  exports their dma-buf layout. KMS imports three of them and waits the atomic
+  release fence before reuse. V3DV and VC4 share only linear XBGR8888 for this
+  color target, but eliminating the download and 3.5--3.7 ms CPU copy still
+  raised the 30-frame heavy Player Entry reproduction from 49.6--50.4 to
+  53.8--54.6 FPS. Two scanout textures falsely locked the same test near 29
+  FPS after a missed vblank; three eliminated its 13.8 ms slot wait. Standalone
+  tests must set `TAIKOS_OUTPUT_MODE=1920x1080@60` or this monitor selects
+  3840x2160@30. Live attract held 60 FPS through 201 draws with zero renderer
+  errors and roughly 0.01 ms scanout-target waits. The mapped 128x40 FPS badge
+  retained the same 53.9--55.2 FPS stress throughput and cost 0.01 ms/frame.
 - **Song Select character filtering is bounded** (2026-08-24; live validated).
   A fixed 128-pixel crop made the default-costume replay 30/30 byte-identical
   and raised it from 44--45 to 51--52 FPS, but clipped the tall festival

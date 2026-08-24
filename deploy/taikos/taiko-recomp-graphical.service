@@ -38,6 +38,9 @@ Environment=TAIKO_GPU_DRIVER=vulkan
 Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*
 Environment=TAIKO_KMS_PRESENT=1
 Environment=TAIKO_KMS_ATOMIC=1
+# Render directly into three KMS-imported Vulkan dma-bufs. The Pi dependency
+# setup carries the narrow SDL export extension required by this path.
+Environment=TAIKO_KMS_ZERO_COPY=1
 Environment=PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs
 Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
 Environment=FLOW_NOSPILL=1

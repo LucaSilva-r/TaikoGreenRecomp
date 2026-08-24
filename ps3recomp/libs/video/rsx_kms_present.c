@@ -24,6 +24,28 @@ int rsx_kms_present_frame(const void *pixels, unsigned pitch,
     if (flip_ns) *flip_ns = 0;
     return -1;
 }
+unsigned rsx_kms_present_get_modifiers(uint64_t *modifiers,
+                                       unsigned capacity)
+{ (void)modifiers; (void)capacity; return 0; }
+int rsx_kms_present_import_dmabuf(unsigned index, int dma_fd,
+                                  unsigned pitch, uint64_t offset,
+                                  uint64_t modifier)
+{ (void)index; (void)dma_fd; (void)pitch; (void)offset; (void)modifier; return -1; }
+int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns)
+{ (void)index; if (wait_ns) *wait_ns = 0; return -1; }
+int rsx_kms_present_dmabuf(unsigned index,
+                           const void *overlay_pixels, unsigned overlay_pitch,
+                           unsigned overlay_x, unsigned overlay_y,
+                           unsigned overlay_width, unsigned overlay_height,
+                           uint64_t *copy_ns, uint64_t *flip_ns)
+{
+    (void)index; (void)overlay_pixels; (void)overlay_pitch;
+    (void)overlay_x; (void)overlay_y;
+    (void)overlay_width; (void)overlay_height;
+    if (copy_ns) *copy_ns = 0;
+    if (flip_ns) *flip_ns = 0;
+    return -1;
+}
 void rsx_kms_present_shutdown(void) {}
 #else
 
@@ -50,9 +72,11 @@ typedef struct kms_buffer {
     uint32_t pitch;
     uint32_t fb;
     uint64_t size;
+    uint64_t data_offset;
     uint8_t *map;
     int prime_fd;
     int release_fd;
+    int imported;
 } kms_buffer;
 
 typedef struct kms_plane_properties {
@@ -87,6 +111,7 @@ static struct {
     int swizzle;
     int atomic;
     int atomic_wait;
+    int external_active;
     uint32_t crtc_out_fence_ptr;
     kms_plane_properties plane_props;
     unsigned long frames;
@@ -145,7 +170,12 @@ static void kms_destroy_buffer(kms_buffer *buffer)
     if (buffer->prime_fd >= 0) close(buffer->prime_fd);
     if (buffer->map) munmap(buffer->map, (size_t)buffer->size);
     if (buffer->fb) drmModeRmFB(s_kms.fd, buffer->fb);
-    if (buffer->handle) {
+    if (buffer->handle && buffer->imported) {
+        struct drm_gem_close close_request;
+        memset(&close_request, 0, sizeof(close_request));
+        close_request.handle = buffer->handle;
+        drmIoctl(s_kms.fd, DRM_IOCTL_GEM_CLOSE, &close_request);
+    } else if (buffer->handle) {
         struct drm_mode_destroy_dumb destroy;
         memset(&destroy, 0, sizeof(destroy));
         destroy.handle = buffer->handle;
@@ -154,6 +184,44 @@ static void kms_destroy_buffer(kms_buffer *buffer)
     memset(buffer, 0, sizeof(*buffer));
     buffer->prime_fd = -1;
     buffer->release_fd = -1;
+}
+
+static int kms_import_dmabuf(int dma_fd, unsigned pitch, uint64_t offset,
+                             uint64_t modifier, kms_buffer *out)
+{
+    const uint64_t image_bytes = (uint64_t)pitch * s_kms.height;
+    if (offset > UINT32_MAX || image_bytes > UINT64_MAX - offset ||
+        offset + image_bytes > SIZE_MAX) {
+        close(dma_fd);
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    out->prime_fd = dma_fd;
+    out->release_fd = -1;
+    if (drmPrimeFDToHandle(s_kms.fd, dma_fd, &out->handle) != 0) {
+        kms_destroy_buffer(out);
+        return -1;
+    }
+    out->pitch = pitch;
+    out->size = offset + image_bytes;
+    out->data_offset = offset;
+    out->imported = 1;
+    uint32_t handles[4] = {out->handle, 0, 0, 0};
+    uint32_t pitches[4] = {pitch, 0, 0, 0};
+    uint32_t offsets[4] = {(uint32_t)offset, 0, 0, 0};
+    uint64_t modifiers[4] = {modifier, 0, 0, 0};
+    const uint32_t flags = modifier != DRM_FORMAT_MOD_LINEAR
+        ? DRM_MODE_FB_MODIFIERS : 0;
+    if (drmModeAddFB2WithModifiers(
+            s_kms.fd, s_kms.width, s_kms.height, DRM_FORMAT_XBGR8888,
+            handles, pitches, offsets, modifiers, &out->fb, flags) != 0) {
+        kms_destroy_buffer(out);
+        return -1;
+    }
+    out->map = mmap(NULL, (size_t)out->size, PROT_READ | PROT_WRITE,
+                    MAP_SHARED, dma_fd, 0);
+    if (out->map == MAP_FAILED) out->map = NULL;
+    return 0;
 }
 
 static int kms_cpu_sync(kms_buffer *buffer, uint64_t flags)
@@ -508,6 +576,187 @@ fail:
 int rsx_kms_present_active(void)
 {
     return s_kms.active;
+}
+
+unsigned rsx_kms_present_get_modifiers(uint64_t *modifiers,
+                                       unsigned capacity)
+{
+    if (!s_kms.active || !modifiers || capacity == 0) return 0;
+    drmModeObjectProperties *object = drmModeObjectGetProperties(
+        s_kms.fd, s_kms.plane_id, DRM_MODE_OBJECT_PLANE);
+    if (!object) return 0;
+    uint32_t blob_id = 0;
+    for (uint32_t i = 0; i < object->count_props; ++i) {
+        drmModePropertyRes *property = drmModeGetProperty(
+            s_kms.fd, object->props[i]);
+        if (property && strcmp(property->name, "IN_FORMATS") == 0)
+            blob_id = (uint32_t)object->prop_values[i];
+        if (property) drmModeFreeProperty(property);
+    }
+    drmModeFreeObjectProperties(object);
+    if (!blob_id) return 0;
+
+    drmModePropertyBlobRes *blob = drmModeGetPropertyBlob(s_kms.fd, blob_id);
+    if (!blob || blob->length < sizeof(struct drm_format_modifier_blob)) {
+        if (blob) drmModeFreePropertyBlob(blob);
+        return 0;
+    }
+    const uint8_t *data = (const uint8_t *)blob->data;
+    const struct drm_format_modifier_blob *header =
+        (const struct drm_format_modifier_blob *)data;
+    const uint64_t formats_end = (uint64_t)header->formats_offset +
+        (uint64_t)header->count_formats * sizeof(uint32_t);
+    const uint64_t modifiers_end = (uint64_t)header->modifiers_offset +
+        (uint64_t)header->count_modifiers * sizeof(struct drm_format_modifier);
+    if (formats_end > blob->length || modifiers_end > blob->length) {
+        drmModeFreePropertyBlob(blob);
+        return 0;
+    }
+    const uint32_t *formats =
+        (const uint32_t *)(data + header->formats_offset);
+    const struct drm_format_modifier *available =
+        (const struct drm_format_modifier *)(data + header->modifiers_offset);
+
+    unsigned count = 0;
+    /* Keep linear as the last fallback so Vulkan chooses a native tiled
+     * layout whenever VC4 and V3DV share one. */
+    for (unsigned pass = 0; pass < 2 && count < capacity; ++pass) {
+        for (uint32_t f = 0; f < header->count_formats && count < capacity; ++f) {
+            if (formats[f] != DRM_FORMAT_XBGR8888) continue;
+            for (uint32_t m = 0; m < header->count_modifiers && count < capacity; ++m) {
+                const struct drm_format_modifier *candidate = &available[m];
+                if (f < candidate->offset || f >= candidate->offset + 64u ||
+                    !(candidate->formats & (1ULL << (f - candidate->offset))))
+                    continue;
+                const int linear = candidate->modifier == DRM_FORMAT_MOD_LINEAR;
+                if ((pass == 0 && linear) || (pass == 1 && !linear)) continue;
+                int duplicate = 0;
+                for (unsigned i = 0; i < count; ++i)
+                    if (modifiers[i] == candidate->modifier) duplicate = 1;
+                if (!duplicate) modifiers[count++] = candidate->modifier;
+            }
+        }
+    }
+    drmModeFreePropertyBlob(blob);
+    fprintf(stderr, "[KMS] XBGR8888 scanout modifiers:");
+    for (unsigned i = 0; i < count; ++i)
+        fprintf(stderr, " %#llx", (unsigned long long)modifiers[i]);
+    fprintf(stderr, "\n");
+    return count;
+}
+
+int rsx_kms_present_import_dmabuf(unsigned index, int dma_fd,
+                                  unsigned pitch, uint64_t offset,
+                                  uint64_t modifier)
+{
+    if (dma_fd < 0) return -1;
+    if (!s_kms.active || index >= KMS_BUFFERS) {
+        close(dma_fd);
+        return -1;
+    }
+    if (!s_kms.external_active) {
+        kms_wait_fence(&s_kms.pending_fence_fd);
+        for (unsigned i = 0; i < KMS_BUFFERS; ++i)
+            kms_destroy_buffer(&s_kms.buffers[i]);
+        s_kms.displayed = -1;
+        s_kms.next = 0;
+        s_kms.external_active = 1;
+    }
+    if (s_kms.buffers[index].handle)
+        kms_destroy_buffer(&s_kms.buffers[index]);
+    if (kms_import_dmabuf(dma_fd, pitch, offset, modifier,
+                          &s_kms.buffers[index]) != 0) {
+        fprintf(stderr, "[KMS] dma-buf %u import failed: %s\n",
+                index, strerror(errno));
+        return -1;
+    }
+    fprintf(stderr,
+            "[KMS] dma-buf %u imported pitch=%u offset=%llu modifier=%#llx "
+            "CPU-map=%s\n",
+            index, pitch, (unsigned long long)offset,
+            (unsigned long long)modifier,
+            s_kms.buffers[index].map ? "yes" : "no");
+    return 0;
+}
+
+int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns)
+{
+    if (wait_ns) *wait_ns = 0;
+    if (!s_kms.active || !s_kms.external_active || index >= KMS_BUFFERS ||
+        !s_kms.buffers[index].fb)
+        return -1;
+    const uint64_t start = kms_monotonic_ns();
+    const int result = kms_wait_fence(&s_kms.buffers[index].release_fd);
+    const uint64_t end = kms_monotonic_ns();
+    if (wait_ns && end >= start) *wait_ns = end - start;
+    return result;
+}
+
+int rsx_kms_present_dmabuf(unsigned index,
+                           const void *overlay_pixels, unsigned overlay_pitch,
+                           unsigned overlay_x, unsigned overlay_y,
+                           unsigned overlay_width, unsigned overlay_height,
+                           uint64_t *copy_ns, uint64_t *flip_ns)
+{
+    if (copy_ns) *copy_ns = 0;
+    if (flip_ns) *flip_ns = 0;
+    if (!s_kms.active || !s_kms.external_active || index >= KMS_BUFFERS ||
+        !s_kms.buffers[index].fb)
+        return -1;
+    kms_buffer *buffer = &s_kms.buffers[index];
+    if (overlay_pixels && overlay_pitch && buffer->map &&
+        overlay_x < s_kms.width && overlay_y < s_kms.height) {
+        const uint64_t copy_start = kms_monotonic_ns();
+        unsigned copy_width = overlay_width;
+        unsigned copy_height = overlay_height;
+        if (copy_width > s_kms.width - overlay_x)
+            copy_width = s_kms.width - overlay_x;
+        if (copy_height > s_kms.height - overlay_y)
+            copy_height = s_kms.height - overlay_y;
+        const int dma_sync = kms_cpu_sync(
+            buffer, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE) == 0;
+        const uint8_t *overlay = (const uint8_t *)overlay_pixels;
+        for (unsigned y = 0; y < copy_height; ++y) {
+            uint8_t *destination = buffer->map + buffer->data_offset +
+                (size_t)(overlay_y + y) * buffer->pitch +
+                (size_t)overlay_x * 4u;
+            memcpy(destination, overlay + (size_t)y * overlay_pitch,
+                   (size_t)copy_width * 4u);
+        }
+        if (dma_sync)
+            kms_cpu_sync(buffer, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
+        else
+            msync(buffer->map, (size_t)buffer->size, MS_SYNC);
+        __sync_synchronize();
+        const uint64_t copy_end = kms_monotonic_ns();
+        if (copy_ns && copy_end >= copy_start)
+            *copy_ns = copy_end - copy_start;
+    }
+    const uint64_t start = kms_monotonic_ns();
+    int result = s_kms.atomic ? kms_atomic_set_plane(index, NULL) :
+        drmModeSetPlane(s_kms.fd, s_kms.plane_id, s_kms.crtc_id,
+                        s_kms.buffers[index].fb, 0,
+                        0, 0, s_kms.mode.hdisplay, s_kms.mode.vdisplay,
+                        0, 0, s_kms.width << 16, s_kms.height << 16);
+    if (result != 0 && s_kms.atomic) {
+        const int atomic_errno = errno;
+        kms_wait_fence(&s_kms.pending_fence_fd);
+        fprintf(stderr, "[KMS] atomic dma-buf commit failed: %s; "
+                        "falling back to legacy updates\n",
+                strerror(atomic_errno));
+        s_kms.atomic = 0;
+        result = drmModeSetPlane(
+            s_kms.fd, s_kms.plane_id, s_kms.crtc_id,
+            s_kms.buffers[index].fb, 0,
+            0, 0, s_kms.mode.hdisplay, s_kms.mode.vdisplay,
+            0, 0, s_kms.width << 16, s_kms.height << 16);
+    }
+    if (result == 0 && s_kms.atomic && s_kms.atomic_wait)
+        result = kms_wait_fence(&s_kms.pending_fence_fd);
+    const uint64_t end = kms_monotonic_ns();
+    if (flip_ns && end >= start) *flip_ns = end - start;
+    if (result == 0) ++s_kms.frames;
+    return result;
 }
 
 int rsx_kms_present_frame(const void *pixels, unsigned pitch,
