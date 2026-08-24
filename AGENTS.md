@@ -173,6 +173,9 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
 - `RSX_RESOURCE_TRACE=1` — per-frame resource accounting; prints
   `[SDL_GPU-SLOWPREP]` with new shader/pipeline/texture/sampler counts whenever
   preparation exceeds 5 ms. This is what identified the Go-Go slowdown.
+  Add `RSX_RESOURCE_TRACE_ALL=1` to print every frame; use it sparingly for
+  replay analysis. It exposed repeated batch-zero surface initialization when
+  a capture loop omitted `--surface-inits-once`.
 - `TAIKO_PERF_OVERLAY=1` — show only the one-second FPS average as a number in
   a built-in 5x7 digit font. F9 toggles it through both SDL keyboard events and
   the direct-KMS evdev path. Windowed output uses a 128x40 texture and GPU quad;
@@ -203,8 +206,11 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   to the 600x600 character outline/composite chain. Do not deploy `N=128`: it
   clips the tall orange festival costume. The Pi uses `N=0`, which retains the
   transform-derived display bound without cropping the source character.
-  `TAIKO_GPU_CHARACTER_OUTLINE=0` replaces only the redundant nine-sample
-  outer-outline pass with the title's direct-copy shader.
+  `TAIKO_GPU_CHARACTER_OUTLINE=0` replaces the redundant nine-sample
+  outer-outline pass with the title's direct-copy shader and omits the exact
+  reversed-cull expanded-mesh outline draws from preparation, uploads, and
+  rendering. The worst-costume capture falls from 440 draws/2.79 MiB of
+  vertices to 424 draws/1.02 MiB and settles around 56 FPS after heat soak.
 - `PS3RECOMP_NULL_RSX=1` / `PS3RECOMP_NULL_AUDIO=1` — headless backends, used
   by `scripts/test-linux-headless.sh`.
 - Guest-side: `[WAIT]`, `[fs]`, `[taiko_usio]`, `[taiko_netstate]` lines in
@@ -368,15 +374,21 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   3840x2160@30. Live attract held 60 FPS through 201 draws with zero renderer
   errors and roughly 0.01 ms scanout-target waits. The mapped 128x40 FPS badge
   retained the same 53.9--55.2 FPS stress throughput and cost 0.01 ms/frame.
-- **Song Select character filtering is bounded** (2026-08-24; live validated).
+- **Song Select character filtering and model outlines are bounded**
+  (2026-08-24; filter live validated, complete outline replay validated).
   A fixed 128-pixel crop made the default-costume replay 30/30 byte-identical
   and raised it from 44--45 to 51--52 FPS, but clipped the tall festival
   costume, so it is not a safe default. The service uses margin zero plus an
-  independent bypass of the nine-sample outer-outline pass. On the captured
-  worst costume, that bypass was pixel-identical, reduced KMS render wait by
-  about 2.2 ms, and raised replay from 50.5 to 56.4 FPS. The final five-sample
-  display composite remains enabled because replacing it recovered only about
-  0.8 ms in Song Select and visibly reduced edge quality.
+  independent complete outline disable. Besides replacing the nine-sample
+  filter, it drops the exact expanded-mesh outline programs before dynamic
+  upload. On the captured worst costume this reduces 440 draws/2.79 MiB of
+  vertices to 424 draws/1.02 MiB, raises the heat-soaked replay from about
+  51.6 to 56.1 FPS (58.6--58.8 before heat soak), and removes only the extra
+  red/black border. The final five-sample display composite remains enabled
+  because replacing it recovered only about 0.8 ms in Song Select and visibly
+  reduced edge quality. Always use `--surface-inits-once` for loop profiling:
+  otherwise the capture's 17 batch-zero surface payloads are reapplied every
+  four frames and masquerade as 3.5 ms of live preparation work.
 - **Gameplay rainbow masking is repaired** (2026-08-16; capture validated).
   The rainbow transition is a two-draw stencil sequence: an invisible black
   952x384 texture alpha-tests a clean arch into stencil with `ALWAYS`, ref 1,

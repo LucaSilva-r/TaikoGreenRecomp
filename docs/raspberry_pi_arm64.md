@@ -953,20 +953,44 @@ until a worst-costume capture can supply a safe bound or the backend tracks a
 dynamic content bound. Do not infer a universal crop from the default costume.
 
 `TAIKO_GPU_CHARACTER_OUTLINE=0` is the independent quality/performance lever.
-It replaces only the guarded nine-sample outer-outline fragment program with
-the title's own one-sample direct-copy program. Don-chan's artwork already has
-an inner black edge, so the normal filter appears as a second, much thicker
-border. The bypass preserves the artwork and all transforms while removing
-that extra stroke and its full-target neighbour sampling; it does not rely on
-the unsafe fixed crop.
+It replaces the guarded nine-sample outer-outline fragment program with the
+title's own one-sample direct-copy program. It also omits Lumen's expanded-mesh
+outline pass: the same character mesh is otherwise submitted again with
+reversed culling and two outline-only fragment programs. The option recognizes
+those draws by the exact two program hashes, reversed-cull state, disabled
+blending, offscreen role, and 600x600 character target. Omitted draws are
+excluded from resource preparation, constant packing, and the dynamic vertex
+upload as well as from command recording.
+
+The 2026-08-24 worst-costume capture contains 445 operations and 440 draws per
+frame. Replaying surface initializations only once (the live-equivalent replay
+mode) showed that the earlier filter-only bypass settled around 51.6 FPS. The
+complete outline disable executes 424 draws, reduces vertex traffic from 2.79
+MiB to 1.02 MiB/frame, and settles around 56.1 FPS after heat soak; before the
+Pi heats up it holds 58.6--58.8 FPS. The removed pixels are exactly the
+expanded red/black border; costume detail, face, shading, and transforms remain.
+The option does not rely on the unsafe fixed crop.
+
+This capture also explained an apparent 3.5 ms of steady preparation cost in
+the first replay. Batch zero owns 17 serialized surface initializations, and
+ordinary `--loop` reapplied them every four frames. `--surface-inits-once`
+removes that replay artifact: real steady preparation is 0.14--0.20 ms, while
+KMS render-fence wait is about 14.2 ms. Use that flag for live-equivalent loop
+timings. `RSX_RESOURCE_TRACE_ALL=1` together with `RSX_RESOURCE_TRACE=1` prints
+the resource-preparation split for every frame instead of only frames over the
+5 ms slow threshold; it is how the repeating initialization cost was isolated.
 
 The replay tool gained the diagnostic controls used to establish this without
 changing game code: `--skip-draw-range`, `--extract-frame`,
 `--fragment-override`, `--scissor-override`, `--surface-inits-once`, and
 `--save-pass`. Shader overrides established the cost and appearance of the
-outline bypass before it became the explicit live A/B above; replacing the
-final display filter as well saved a little more but degraded edge quality and
-was not retained.
+filter bypass before it became the explicit live A/B above; draw-range
+bisection then isolated the expanded-mesh outline. A padded asymmetric crop was
+pixel-identical for all four worst-costume capture frames, but was not retained:
+four adjacent animation frames do not establish a safe bound for every costume
+pose, and the prior symmetric crop already demonstrated that this failure is
+visible. Replacing the final display filter also saved a little more but
+degraded edge quality and was not retained.
 
 ### Dense vertex constants (2026-08-24)
 

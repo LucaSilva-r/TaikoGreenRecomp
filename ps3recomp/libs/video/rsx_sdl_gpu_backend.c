@@ -52,6 +52,10 @@ extern bool SDL_GPUVulkanExportTextureDMABUF(
 #define FPS_OVERLAY_HEIGHT 40
 #define FPS_GLYPH_SCALE 4
 #define SDL_RSX_CHARACTER_OUTLINE_FP UINT64_C(0x5DCB6858EEF22438)
+#define SDL_RSX_CHARACTER_MESH_OUTLINE_SKINNED_FP \
+    UINT64_C(0x5B1C86BF4A00F902)
+#define SDL_RSX_CHARACTER_MESH_OUTLINE_RIGID_FP \
+    UINT64_C(0xC319DC6592122177)
 #define SDL_RSX_CHARACTER_COMPOSITE_VP UINT64_C(0x4D27AA0BFB40F830)
 #define SDL_RSX_CHARACTER_COMPOSITE_FP UINT64_C(0x19BF731FEF02629F)
 #define SDL_RSX_DIRECT_COPY_FP UINT64_C(0x1533A97E809FFB4A)
@@ -779,17 +783,55 @@ static int is_character_outline_filter(const rsx_render_op* op)
         op->data.draw.textures[0].height == 600;
 }
 
-static int bypass_character_outline(const rsx_render_op* op)
+static int character_outline_enabled(void)
 {
     static int initialized;
-    static int enabled;
-    static int announced;
+    static int enabled = 1;
     if (!initialized) {
         const char* value = getenv("TAIKO_GPU_CHARACTER_OUTLINE");
-        enabled = value && strcmp(value, "0") == 0;
+        enabled = !(value && strcmp(value, "0") == 0);
         initialized = 1;
     }
-    if (!enabled || !is_character_outline_filter(op)) return 0;
+    return enabled;
+}
+
+static int is_character_mesh_outline(const rsx_render_op* op)
+{
+    /* Lumen's model renderer expands the same character meshes behind the
+     * normal pass with reversed culling and two outline-only programs. This
+     * is the inner red/black shell visible beneath the later 600x600 outline
+     * filter. Keep the optional removal tied to both program identities and
+     * the title-specific character-target shape. */
+    if (!op || op->type != RSX_RENDER_OP_DRAW || op->color_count != 1 ||
+        op->color[0].is_display || op->color[0].width != 600 ||
+        op->color[0].height != 600)
+        return 0;
+    const rsx_pipeline_key* pipeline = &op->data.draw.pipeline;
+    const u64 fragment_hash = pipeline->fragment_shader_hash;
+    return !pipeline->blend_enable && pipeline->cull_enable &&
+        (pipeline->cull_face & 0xffffu) == 0x0404u &&
+        (fragment_hash == SDL_RSX_CHARACTER_MESH_OUTLINE_SKINNED_FP ||
+         fragment_hash == SDL_RSX_CHARACTER_MESH_OUTLINE_RIGID_FP);
+}
+
+static int skip_character_mesh_outline(const rsx_render_op* op)
+{
+    static int announced;
+    if (character_outline_enabled() || !is_character_mesh_outline(op))
+        return 0;
+    if (!announced) {
+        announced = 1;
+        fprintf(stderr,
+                "[SDL_GPU] character expanded-mesh outline disabled\n");
+    }
+    return 1;
+}
+
+static int bypass_character_outline(const rsx_render_op* op)
+{
+    static int announced;
+    if (character_outline_enabled() || !is_character_outline_filter(op))
+        return 0;
     if (!announced) {
         announced = 1;
         fprintf(stderr,
@@ -2754,6 +2796,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
     for (unsigned i = 0; i < batch->operation_count; ++i)
         if (batch->operations[i].type == RSX_RENDER_OP_DRAW) {
             const rsx_render_op* op = &batch->operations[i];
+            if (skip_character_mesh_outline(op)) continue;
             ++draw_count;
             u64 aligned = (vertex_bytes + 15u) & ~(u64)15u;
             if (aligned > UINT32_MAX ||
@@ -2787,6 +2830,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             resource_mark = now;
         }
         if (op->type != RSX_RENDER_OP_DRAW) continue;
+        if (skip_character_mesh_outline(op)) continue;
         get_pipeline(op);
         if (resource_trace) {
             Uint64 now = SDL_GetTicksNS();
@@ -2818,7 +2862,9 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
     }
     perf_mark = SDL_GetTicksNS();
     s_sdl.perf_prepare_ns += perf_mark - perf_start;
-    if (resource_trace && perf_mark - perf_start >= UINT64_C(5000000))
+    if (resource_trace &&
+        (getenv("RSX_RESOURCE_TRACE_ALL") ||
+         perf_mark - perf_start >= UINT64_C(5000000)))
         fprintf(stderr,
                 "[SDL_GPU-SLOWPREP] serial=%llu total=%.2fms "
                 "surface_init=%.2f surface=%.2f pipeline=%.2f texture=%.2f "
@@ -2851,6 +2897,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW ||
+                    skip_character_mesh_outline(op) ||
                     !op->data.draw.vertex_shader.size)
                     continue;
                 shader_entry* shader = get_shader(
@@ -2892,6 +2939,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW ||
+                    skip_character_mesh_outline(op) ||
                     vertex_constant_offsets[i] == UINT32_MAX)
                     continue;
                 shader_entry* shader = get_shader(
@@ -2944,6 +2992,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW ||
+                    skip_character_mesh_outline(op) ||
                     !op->data.draw.vertex_data.size)
                     continue;
                 offset = (offset + 15u) & ~(u64)15u;
@@ -3026,6 +3075,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
             }
             pending_clear = op;
         } else if (op->type == RSX_RENDER_OP_DRAW) {
+            if (skip_character_mesh_outline(op)) continue;
             shader_entry* vertex_shader = get_shader(
                 op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
             int valid = get_pipeline(op) && vertex_shader && vertices &&
