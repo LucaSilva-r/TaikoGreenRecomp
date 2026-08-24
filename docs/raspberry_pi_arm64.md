@@ -312,7 +312,15 @@ TAIKO_KMS_PRESENT=1
 TAIKO_KMS_ATOMIC=1
 TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1
 TAIKO_GPU_UPLOAD_FENCE_WAIT=1
+TAIKO_PERF_OVERLAY=1
 ```
+
+The last switch shows only the one-second FPS average as a number; F9 toggles
+it without a restart. It uses a built-in 5x7 digit font in a 128x40 badge.
+Windowed output uses a tiny GPU texture and quad. Direct KMS copies the opaque
+20 KiB badge into the scanout buffer after the frame's existing row memcpy;
+this avoids making V3D load and store the entire 1280x720 target for a sixth
+render pass merely to draw the counter.
 
 Without the separate submission, vertex and vertex-constant uploads made
 earlier in a command buffer can be consumed as stale data by later draws. The
@@ -783,6 +791,10 @@ separately. Earlier `kms(copy=0.00)` output was not a fast copy: that counter
 was never updated, while the download counter only measured command submission
 and omitted the worker's real fence wait.
 
+The FPS average is available without SSH through `TAIKO_PERF_OVERLAY=1`. The
+shipping service enables it, and F9 toggles it via the direct-KMS evdev keyboard
+path. Detailed timings remain in `RSX_FPS_LOG=1` rather than on screen.
+
 **The failure is not reported by instrumentation.** FPS, GPU counters and
 renderer error counts all look perfect while the screen is visibly wrong.
 First-pass frame dumps are also a weak oracle because their extra readback
@@ -820,9 +832,12 @@ On the tested 4 GB Pi 5:
 - nonblocking atomic KMS measured 51.97 FPS before the final upload fence,
   versus 51.21 for the legacy plane ioctl. Waiting every atomic out-fence did
   not improve correctness and is diagnostic-only;
-- Song Select still drops below 60 FPS. It has always been one of the title's
-  heavier scenes and needs its own fixed capture/profile before attributing the
-  cost to the renderer;
+- a 2026-08-23 live trace with the original GPU-drawn FPS badge measured Player
+  Entry at 45.8--46.4 FPS (145--150 draws, 20.1--20.4 ms render, 17.3--17.5 ms
+  render fence) and busy Song Select at 37.9--43.7 FPS (395--429 draws,
+  20.2--23.2 ms render, 15.0--17.5 ms render fence). CPU preparation remained
+  below 0.5 ms in both. These scenes are GPU-bound; recorder or CPU tuning is
+  not the primary opportunity;
 - SDL audio delivered about 187.5 mixer blocks/s with zero queue failures,
   races, or stale blocks in the trace;
 - stress testing reported `throttled=0x0`; core pinning and CPU governors
@@ -834,16 +849,40 @@ nor power throttled during these runs. The runtime reserves a contiguous 4 GiB
 memory only when touched. `VmSize` is not a useful RAM measurement here—use
 RSS or `memory.current`.
 
+### Aggressive batching A/B (rejected)
+
+A 2026-08-24 replay experiment tested whether SDL/V3DV draw submission was the
+Song Select bottleneck. The fixed 30-frame capture contains 421 draws per
+frame. A conservative indirect path combining only compatible RGBA8/R8 draws
+reduced that to 348 host draw calls, but steady KMS render-fence time changed
+from 16.39 ms to 16.50 ms (total render 20.81 ms to 21.75 ms). A structural
+sprite-atlas prototype reduced the same frame to just 18 host calls in nine
+multi-draw runs, yet render-fence time rose to 19.08 ms and total render to
+22.13 ms. Its CPU-decoded BC textures also did not reproduce native V3DV BC
+filtering exactly.
+
+The batching prototype was therefore not retained. Even the deliberately
+aggressive upper bound made this workload slower: indirect-command processing,
+per-draw storage-buffer indexing, and atlas sampling cost more on V3DV than 403
+saved submissions. This rules out host draw-call count as the primary Song
+Select problem. The next useful renderer work must reduce actual fragment/
+texture work, avoid the KMS GPU-to-CPU copy, or identify an individually costly
+draw; repackaging the same work into fewer SDL draw calls is not enough.
+
 ### Remaining live issues
 
 - Gameplay has a noticeable audio-to-beatmap delay even though rendering and
-  input are now smooth. Treat this as a clock/queue-latency investigation, not
-  a graphics-frame-rate symptom. The next run should combine
+  input are now smooth. The 2026-08-23 trace held the required 187.5 blocks/s
+  through the 40--46 FPS screens, and vblank drains accumulated no new backlog,
+  so the song was not playing fast and collapsed visual ticks do not explain
+  that run. The implemented `cellAudioGetPortBlockTag`/`GetPortTimestamp`
+  diagnostics were never called during the play, which is now the clock-path
+  question to resolve. A follow-up run should combine
   `TAIKO_AUDIO_LATENCY_TRACE=1`, `TAIKO_AUDIO_SINK_TRACE=1`, and
   `TAIKO_AUDIO_RING_TRACE=1`, then compare the guest block timestamp, host
   queued audio, and visible chart timing at song start and after a minute.
-- Song Select needs a dedicated multi-frame capture and the same
-  `RSX_RESOURCE_TRACE=1`/`RSX_FPS_LOG=1` breakdown used for Player Entry.
+- Song Select needs a dedicated multi-frame capture to identify which draws or
+  fragment programs own its measured 15--18 ms GPU render fence.
 - Eliminating the 1280x720 GPU download through dmabuf remains the largest
   renderer-side opportunity, but SDL_GPU does not currently expose the native
   image handle required by that path.

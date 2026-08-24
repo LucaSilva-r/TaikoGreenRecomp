@@ -9,10 +9,16 @@ int rsx_kms_present_init(unsigned source_width, unsigned source_height)
 { (void)source_width; (void)source_height; return -1; }
 int rsx_kms_present_active(void) { return 0; }
 int rsx_kms_present_frame(const void *pixels, unsigned pitch,
+                          const void *overlay_pixels, unsigned overlay_pitch,
+                          unsigned overlay_x, unsigned overlay_y,
+                          unsigned overlay_width, unsigned overlay_height,
                           uint64_t *scanout_wait_ns, uint64_t *copy_ns,
                           uint64_t *flip_ns)
 {
     (void)pixels; (void)pitch;
+    (void)overlay_pixels; (void)overlay_pitch;
+    (void)overlay_x; (void)overlay_y;
+    (void)overlay_width; (void)overlay_height;
     if (scanout_wait_ns) *scanout_wait_ns = 0;
     if (copy_ns) *copy_ns = 0;
     if (flip_ns) *flip_ns = 0;
@@ -505,6 +511,9 @@ int rsx_kms_present_active(void)
 }
 
 int rsx_kms_present_frame(const void *pixels, unsigned pitch,
+                          const void *overlay_pixels, unsigned overlay_pitch,
+                          unsigned overlay_x, unsigned overlay_y,
+                          unsigned overlay_width, unsigned overlay_height,
                           uint64_t *scanout_wait_ns, uint64_t *copy_ns,
                           uint64_t *flip_ns)
 {
@@ -544,6 +553,29 @@ int rsx_kms_present_frame(const void *pixels, unsigned pitch,
             destination[x * 4 + 1] = row[x * 4 + 1];
             destination[x * 4 + 2] = row[x * 4 + 0];
             destination[x * 4 + 3] = 0xff;
+        }
+    }
+    /* Small opaque diagnostics belong in the copy we already have to perform,
+     * not in a separate GPU render pass. On V3D even a 128x40 quad can make a
+     * 1280x720 target pay another complete tile load/store. The FPS badge is
+     * black and white, so its byte order is unchanged by the optional R/B
+     * swizzle. Clipping keeps this helper generally safe for source-sized
+     * overlays without turning the full-frame memcpy into a per-pixel loop. */
+    if (overlay_pixels && overlay_pitch && overlay_x < s_kms.width &&
+        overlay_y < s_kms.height) {
+        unsigned copy_width = overlay_width;
+        unsigned copy_height = overlay_height;
+        if (copy_width > s_kms.width - overlay_x)
+            copy_width = s_kms.width - overlay_x;
+        if (copy_height > s_kms.height - overlay_y)
+            copy_height = s_kms.height - overlay_y;
+        const uint8_t *overlay = (const uint8_t *)overlay_pixels;
+        for (unsigned y = 0; y < copy_height; ++y) {
+            uint8_t *destination = buffer->map +
+                (size_t)(overlay_y + y) * buffer->pitch +
+                (size_t)overlay_x * 4u;
+            memcpy(destination, overlay + (size_t)y * overlay_pitch,
+                   (size_t)copy_width * 4u);
         }
     }
     if (dma_sync) {

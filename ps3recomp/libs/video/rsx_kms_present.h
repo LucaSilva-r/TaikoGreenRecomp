@@ -21,11 +21,16 @@ extern "C" {
 int rsx_kms_present_init(unsigned source_width, unsigned source_height);
 int rsx_kms_present_active(void);
 
-/* pixels are tightly packed R8G8B8A8 rows of the source size. The optional
- * timings split waiting for a scanout buffer, copying into it and issuing the
- * KMS plane update. They are measured here, where those operations actually
- * happen, rather than around the asynchronous GPU download submit. */
+/* pixels are tightly packed R8G8B8A8 rows of the source size. An optional
+ * opaque RGBA overlay is copied into the source-sized scanout image after the
+ * frame copy; pass NULL/zeroes when unused. The optional timings split waiting
+ * for a scanout buffer, copying into it and issuing the KMS plane update. They
+ * are measured here, where those operations actually happen, rather than
+ * around the asynchronous GPU download submit. */
 int rsx_kms_present_frame(const void *pixels, unsigned pitch,
+                          const void *overlay_pixels, unsigned overlay_pitch,
+                          unsigned overlay_x, unsigned overlay_y,
+                          unsigned overlay_width, unsigned overlay_height,
                           uint64_t *scanout_wait_ns, uint64_t *copy_ns,
                           uint64_t *flip_ns);
 void rsx_kms_present_shutdown(void);

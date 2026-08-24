@@ -167,7 +167,12 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
 - `RSX_RESOURCE_TRACE=1` — per-frame resource accounting; prints
   `[SDL_GPU-SLOWPREP]` with new shader/pipeline/texture/sampler counts whenever
   preparation exceeds 5 ms. This is what identified the Go-Go slowdown.
-- `RSX_FPS_LOG=1`, `RSX_FRAME_PACING_TRACE=1` — frame rate and pacing.
+- `TAIKO_PERF_OVERLAY=1` — show only the one-second FPS average as a number in
+  a built-in 5x7 digit font. F9 toggles it through both SDL keyboard events and
+  the direct-KMS evdev path. Windowed output uses a 128x40 texture and GPU quad;
+  direct KMS copies the opaque 20 KiB badge into the scanout buffer after the
+  existing frame memcpy, avoiding a sixth full-target V3D render pass.
+- `RSX_FPS_LOG=1`, `RSX_FRAME_PACING_TRACE=1` — log frame rate and pacing.
 - `RSX_TEXTURE_CACHE_LIMIT=16..1024` — shrink the sampled-texture cache to
   force continuous eviction; how the long-session white-rectangle bug was
   reproduced on demand.

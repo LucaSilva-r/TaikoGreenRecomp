@@ -48,6 +48,8 @@ Environment=TAIKO_AUDIO_SPU=1
 # produced rare incomplete frames whenever a small CPU load changed timing.
 Environment=TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1
 Environment=TAIKO_GPU_UPLOAD_FENCE_WAIT=1
+# Show the one-second FPS average as a number. F9 toggles it at runtime.
+Environment=TAIKO_PERF_OVERLAY=1
 # Keep F10 useful on the appliance without auto-capturing during startup.
 # The fixed path bounds disk use: a later capture replaces the previous one.
 Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb

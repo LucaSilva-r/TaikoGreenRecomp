@@ -36,6 +36,9 @@
 #define SDL_RSX_MAX_SAMPLERS 64u
 #define SDL_RSX_SHADER_DIALECT_VERSION 2u
 #define SDL_RSX_PACE_SAMPLES 256u
+#define FPS_OVERLAY_WIDTH 128
+#define FPS_OVERLAY_HEIGHT 40
+#define FPS_GLYPH_SCALE 4
 /* Four, not three: with three, the slot chosen for presentation is the same
  * slot the next batch renders into, so a frame that runs long lets the next
  * clear and draws land in the texture the present blit is still reading. */
@@ -189,6 +192,8 @@ typedef struct sdl_rsx_state {
         Uint32 height;
         Uint32 pitch;
         Uint32 bytes;
+        uint32_t fps_overlay[FPS_OVERLAY_WIDTH * FPS_OVERLAY_HEIGHT];
+        int fps_overlay_enabled;
         int busy;
     } kms_slots[3];
     unsigned kms_write;
@@ -219,6 +224,7 @@ typedef struct sdl_rsx_state {
     Uint64 perf_submits;
     unsigned last_batch_draws;
     int fps_log;
+    int perf_overlay;
     int pace_trace;
     Uint64 pace_window_start_ns;
     Uint64 pace_last_enqueue_ns;
@@ -1540,11 +1546,12 @@ static SDL_GPUTexture* presentation_texture(Uint32* source_width,
     return result;
 }
 
-/* Optional overlay, supplied by the title layer (src/taiko_overlay.c): an
- * RGBA image drawn over the presented frame. NULL hook means no overlay, which
- * is what a build without one gets. The blit below cannot blend, so the image
- * is expected to be opaque where it should be seen. */
-const uint32_t* (*g_rsx_overlay_frame)(int* width, int* height, uint32_t* version);
+/* Optional overlay, supplied by the title layer (src/taiko_overlay.c): a
+ * straight-alpha RGBA image drawn over the presented frame. Windowed output
+ * uses the GPU quad below; direct KMS blends it during the scanout CPU copy.
+ * A build without the title hook simply draws nothing. */
+const uint32_t* (*g_rsx_overlay_frame)(int* width, int* height,
+                                      uint32_t* version);
 
 static struct {
     SDL_GPUTexture* texture;
@@ -1555,6 +1562,30 @@ static struct {
     SDL_GPUSampler* sampler;
     SDL_GPUTextureFormat pipeline_format;
 } s_overlay;
+
+static struct {
+    SDL_GPUTexture* texture;
+    uint32_t pixels[FPS_OVERLAY_WIDTH * FPS_OVERLAY_HEIGHT];
+    uint32_t cpu_version;
+    uint32_t gpu_version;
+    char text[8];
+} s_fps_overlay;
+
+/* Five pixels wide, seven high. Only digits are needed; the decimal point is
+ * drawn separately. Keeping this here avoids FreeType work and a large font
+ * dependency in the once-per-second counter update. */
+static const uint8_t k_fps_digits[10][7] = {
+    {0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e},
+    {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e},
+    {0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f},
+    {0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e},
+    {0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02},
+    {0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e},
+    {0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e},
+    {0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
+    {0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e},
+    {0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e},
+};
 
 /* A textured quad with straight alpha blending -- the overlay artwork has
  * rounded, transparent ends, and a blit would punch them into the frame as
@@ -1577,10 +1608,8 @@ static const char* k_overlay_fragment_hlsl =
     "    return source.Sample(state, uv);\n"
     "}\n";
 
-static int overlay_pipeline_ready(void)
+static int overlay_pipeline_ready(SDL_GPUTextureFormat format)
 {
-    const SDL_GPUTextureFormat format =
-        SDL_GetGPUSwapchainTextureFormat(s_sdl.device, s_sdl.window);
     if (s_overlay.pipeline && s_overlay.pipeline_format == format)
         return 1;
     if (s_overlay.pipeline) {
@@ -1651,11 +1680,165 @@ static int overlay_pipeline_ready(void)
     return s_overlay.sampler != NULL;
 }
 
+static void fps_overlay_set_value(double fps)
+{
+    char text[8];
+    if (fps < 0.0) fps = 0.0;
+    if (fps > 999.0) fps = 999.0;
+    if (fps >= 99.95)
+        snprintf(text, sizeof(text), "%.0f", fps);
+    else
+        snprintf(text, sizeof(text), "%.1f", fps);
+    if (strcmp(text, s_fps_overlay.text) == 0) return;
+    snprintf(s_fps_overlay.text, sizeof(s_fps_overlay.text), "%s", text);
+
+    for (unsigned i = 0; i < SDL_arraysize(s_fps_overlay.pixels); ++i)
+        s_fps_overlay.pixels[i] = 0xff000000u;
+
+    int text_width = 0;
+    for (const char* c = text; *c; ++c)
+        text_width += (*c == '.' ? 2 : 6) * FPS_GLYPH_SCALE;
+    if (text_width) text_width -= FPS_GLYPH_SCALE;
+    int pen_x = (FPS_OVERLAY_WIDTH - text_width) / 2;
+    const int top = (FPS_OVERLAY_HEIGHT - 7 * FPS_GLYPH_SCALE) / 2;
+    for (const char* c = text; *c; ++c) {
+        if (*c == '.') {
+            for (int y = 0; y < FPS_GLYPH_SCALE; ++y)
+                for (int x = 0; x < FPS_GLYPH_SCALE; ++x)
+                    s_fps_overlay.pixels[
+                        (top + 6 * FPS_GLYPH_SCALE + y) * FPS_OVERLAY_WIDTH +
+                        pen_x + x] = 0xffffffffu;
+            pen_x += 2 * FPS_GLYPH_SCALE;
+            continue;
+        }
+        if (*c < '0' || *c > '9') continue;
+        const uint8_t* glyph = k_fps_digits[*c - '0'];
+        for (int row = 0; row < 7; ++row) {
+            for (int column = 0; column < 5; ++column) {
+                if (!(glyph[row] & (1u << (4 - column)))) continue;
+                for (int y = 0; y < FPS_GLYPH_SCALE; ++y)
+                    for (int x = 0; x < FPS_GLYPH_SCALE; ++x)
+                        s_fps_overlay.pixels[
+                            (top + row * FPS_GLYPH_SCALE + y) *
+                                FPS_OVERLAY_WIDTH +
+                            pen_x + column * FPS_GLYPH_SCALE + x] =
+                                0xffffffffu;
+            }
+        }
+        pen_x += 6 * FPS_GLYPH_SCALE;
+    }
+    ++s_fps_overlay.cpu_version;
+}
+
+/* Record the tiny upload alongside the frame's existing dynamic-buffer
+ * uploads. The Pi's normal upload fence therefore covers it too, without an
+ * extra submission or a same-command-buffer visibility gamble. */
+static int upload_fps_overlay(SDL_GPUCommandBuffer* commands)
+{
+    if (s_sdl.kms_present || !s_sdl.perf_overlay ||
+        !s_fps_overlay.cpu_version ||
+        s_fps_overlay.gpu_version == s_fps_overlay.cpu_version)
+        return 0;
+    if (!s_fps_overlay.texture) {
+        SDL_GPUTextureCreateInfo info;
+        SDL_zero(info);
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        info.width = FPS_OVERLAY_WIDTH;
+        info.height = FPS_OVERLAY_HEIGHT;
+        info.layer_count_or_depth = 1;
+        info.num_levels = 1;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        s_fps_overlay.texture = SDL_CreateGPUTexture(s_sdl.device, &info);
+        if (!s_fps_overlay.texture) return 0;
+    }
+
+    SDL_GPUTransferBufferCreateInfo transfer_info;
+    SDL_zero(transfer_info);
+    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    transfer_info.size = sizeof(s_fps_overlay.pixels);
+    SDL_GPUTransferBuffer* transfer =
+        SDL_CreateGPUTransferBuffer(s_sdl.device, &transfer_info);
+    if (!transfer) return 0;
+    void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, transfer, false);
+    if (!mapped) {
+        SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
+        return 0;
+    }
+    memcpy(mapped, s_fps_overlay.pixels, sizeof(s_fps_overlay.pixels));
+    SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
+
+    SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
+    if (!copy) {
+        SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
+        return 0;
+    }
+    ++s_sdl.perf_copy_passes;
+    SDL_GPUTextureTransferInfo upload;
+    SDL_zero(upload);
+    upload.transfer_buffer = transfer;
+    upload.pixels_per_row = FPS_OVERLAY_WIDTH;
+    upload.rows_per_layer = FPS_OVERLAY_HEIGHT;
+    SDL_GPUTextureRegion destination;
+    SDL_zero(destination);
+    destination.texture = s_fps_overlay.texture;
+    destination.w = FPS_OVERLAY_WIDTH;
+    destination.h = FPS_OVERLAY_HEIGHT;
+    destination.d = 1;
+    SDL_UploadToGPUTexture(copy, &upload, &destination, false);
+    SDL_EndGPUCopyPass(copy);
+    SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
+    s_fps_overlay.gpu_version = s_fps_overlay.cpu_version;
+    return 1;
+}
+
+static int draw_fps_overlay(SDL_GPUCommandBuffer* commands,
+                            SDL_GPUTexture* target_texture,
+                            Uint32 target_width, Uint32 target_height,
+                            Uint32 frame_x, Uint32 frame_y,
+                            Uint32 frame_width, Uint32 frame_height,
+                            SDL_GPUTextureFormat target_format)
+{
+    if (!s_sdl.perf_overlay || !s_fps_overlay.texture ||
+        !s_fps_overlay.gpu_version || !overlay_pipeline_ready(target_format))
+        return 0;
+    const float scale = (float)frame_width / (float)SDL_RSX_WIDTH;
+    const float draw_w = FPS_OVERLAY_WIDTH * scale;
+    const float draw_h = FPS_OVERLAY_HEIGHT * scale;
+    const float x = (float)frame_x + 12.0f * scale;
+    const float y = (float)frame_y + 12.0f * scale;
+    const float rect[4] = {
+        x / (float)target_width * 2.0f - 1.0f,
+        1.0f - y / (float)target_height * 2.0f,
+        draw_w / (float)target_width * 2.0f,
+        -draw_h / (float)target_height * 2.0f,
+    };
+    SDL_GPUColorTargetInfo target;
+    SDL_zero(target);
+    target.texture = target_texture;
+    target.load_op = SDL_GPU_LOADOP_LOAD;
+    target.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &target, 1, NULL);
+    if (!pass) return 0;
+    SDL_BindGPUGraphicsPipeline(pass, s_overlay.pipeline);
+    SDL_GPUTextureSamplerBinding binding;
+    SDL_zero(binding);
+    binding.texture = s_fps_overlay.texture;
+    binding.sampler = s_overlay.sampler;
+    SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+    SDL_PushGPUVertexUniformData(commands, 0, rect, sizeof(rect));
+    SDL_DrawGPUPrimitives(pass, 4, 1, 0, 0);
+    SDL_EndGPURenderPass(pass);
+    return 1;
+}
+
 /* Upload when the pixels changed, then blit into the frame's top-left. */
 static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapchain,
                          Uint32 swapchain_width, Uint32 swapchain_height,
                          Uint32 frame_x, Uint32 frame_y,
-                         Uint32 frame_width, Uint32 frame_height)
+                         Uint32 frame_width, Uint32 frame_height,
+                         SDL_GPUTextureFormat target_format)
 {
     int width = 0, height = 0;
     uint32_t version = 0;
@@ -1685,7 +1868,6 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
         s_overlay.height = height;
         s_overlay.uploaded = 0;
     }
-
     if (!s_overlay.uploaded || s_overlay.version != version) {
         const Uint32 size = (Uint32)width * (Uint32)height * 4u;
         SDL_GPUTransferBufferCreateInfo transfer_info;
@@ -1705,7 +1887,6 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
 
         SDL_GPUCopyPass* copy = SDL_BeginGPUCopyPass(commands);
         ++s_sdl.perf_copy_passes;
-    ++s_sdl.perf_copy_passes;
         if (copy) {
             SDL_GPUTextureTransferInfo upload;
             SDL_zero(upload);
@@ -1725,7 +1906,7 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
         }
         SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
     }
-    if (!s_overlay.uploaded || !overlay_pipeline_ready()) return;
+    if (!s_overlay.uploaded || !overlay_pipeline_ready(target_format)) return;
 
     /* Sized and placed against the *presented frame*, not the window: the
      * frame is letterboxed inside it, and an overlay measured in window pixels
@@ -1841,8 +2022,12 @@ static int kms_copy_worker(void* userdata)
             ? SDL_MapGPUTransferBuffer(s_sdl.device, slot->transfer, false)
             : NULL;
         if (mapped) {
-            rsx_kms_present_frame(mapped, slot->pitch, &scanout_wait_ns,
-                                  &copy_ns, &flip_ns);
+            rsx_kms_present_frame(
+                mapped, slot->pitch,
+                slot->fps_overlay_enabled ? slot->fps_overlay : NULL,
+                FPS_OVERLAY_WIDTH * 4u, 12u, 12u,
+                FPS_OVERLAY_WIDTH, FPS_OVERLAY_HEIGHT,
+                &scanout_wait_ns, &copy_ns, &flip_ns);
             SDL_UnmapGPUTransferBuffer(s_sdl.device, slot->transfer);
         } else if (download_ready) {
             fprintf(stderr, "[SDL_GPU] KMS transfer-buffer map failed: %s\n",
@@ -1955,6 +2140,11 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
     slot->width = width;
     slot->height = height;
     slot->pitch = pitch;
+    slot->fps_overlay_enabled = s_sdl.perf_overlay &&
+        s_fps_overlay.cpu_version != 0;
+    if (slot->fps_overlay_enabled)
+        memcpy(slot->fps_overlay, s_fps_overlay.pixels,
+               sizeof(slot->fps_overlay));
 
     if (kms_submit_download(slot, commands) != 0) {
         ++s_sdl.errors;
@@ -2047,7 +2237,13 @@ static int present_display(SDL_GPUCommandBuffer* commands)
         SDL_BlitGPUTexture(commands, &blit);
         ++s_sdl.perf_blits;
         draw_overlay(commands, swapchain, width, height,
-                     blit.destination.x, blit.destination.y, draw_w, draw_h);
+                     blit.destination.x, blit.destination.y, draw_w, draw_h,
+                     SDL_GetGPUSwapchainTextureFormat(s_sdl.device,
+                                                      s_sdl.window));
+        draw_fps_overlay(commands, swapchain, width, height,
+                         blit.destination.x, blit.destination.y, draw_w, draw_h,
+                         SDL_GetGPUSwapchainTextureFormat(s_sdl.device,
+                                                          s_sdl.window));
     }
     /* V3DV presents a swapchain image whose GPU work is not finished: the
      * frame shows a diagonal band of completed 128x64 tiles -- V3D's tile size
@@ -2099,6 +2295,7 @@ static void update_window_title(void)
         &s_sdl.perf_kms_copy_ns, 0, __ATOMIC_RELAXED);
     const Uint64 kms_flip_ns = __atomic_exchange_n(
         &s_sdl.perf_kms_flip_ns, 0, __ATOMIC_RELAXED);
+    fps_overlay_set_value(fps);
     if (s_sdl.fps_log)
         fprintf(stderr,
                 "[RSXFPS] %.2f fps draws=%u errors=%u "
@@ -2329,6 +2526,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
         ++s_sdl.errors;
         goto done;
     }
+    const int fps_overlay_uploaded = upload_fps_overlay(commands);
 
     u64 constant_bytes = needs_constants
         ? (u64)batch->operation_count * constant_stride : 0;
@@ -2418,7 +2616,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
         getenv("TAIKO_GPU_UPLOAD_FENCE_WAIT") != NULL;
     if ((getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT") || upload_idle ||
          upload_fence_wait) &&
-        (vertex_constants || vertices)) {
+        (vertex_constants || vertices || fps_overlay_uploaded)) {
         if ((upload_fence_wait && !upload_idle
                  ? submit_commands_and_wait(commands)
                  : submit_commands(commands)) != 0) {
@@ -2665,6 +2863,13 @@ static unsigned keyboard_action(SDL_Scancode code)
 }
 
 #ifndef RSX_SDL_REPLAY_STANDALONE
+static void toggle_performance_overlay(void)
+{
+    s_sdl.perf_overlay = !s_sdl.perf_overlay;
+    fprintf(stderr, "[SDL_GPU] performance overlay %s\n",
+            s_sdl.perf_overlay ? "enabled" : "disabled");
+}
+
 static void arm_capture_hotkey(void)
 {
     /* Hotkey-specific variables do not auto-arm the recorder during startup.
@@ -2700,6 +2905,7 @@ static SDL_Scancode evdev_scancode(unsigned code)
     case KEY_ENTER: case KEY_KPENTER: return SDL_SCANCODE_RETURN;
     case KEY_F1: return SDL_SCANCODE_F1;
     case KEY_F2: return SDL_SCANCODE_F2;
+    case KEY_F9: return SDL_SCANCODE_F9;
     case KEY_F10: return SDL_SCANCODE_F10;
     case KEY_C: return SDL_SCANCODE_C;
     case KEY_UP: return SDL_SCANCODE_UP;
@@ -2764,6 +2970,10 @@ static void evdev_handle_key(unsigned code, int down)
         return;
     }
 #else
+    if (down && scancode == SDL_SCANCODE_F9) {
+        toggle_performance_overlay();
+        return;
+    }
     if (down && scancode == SDL_SCANCODE_F10) {
         arm_capture_hotkey();
         return;
@@ -2869,6 +3079,10 @@ static void handle_event(const SDL_Event* event)
             return;
         }
 #ifndef RSX_SDL_REPLAY_STANDALONE
+        if (event->key.down && event->key.scancode == SDL_SCANCODE_F9) {
+            toggle_performance_overlay();
+            return;
+        }
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F10) {
             arm_capture_hotkey();
             return;
@@ -3079,6 +3293,10 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     snprintf(s_sdl.base_title, sizeof(s_sdl.base_title), "%s",
              title ? title : "Taiko no Tatsujin (ps3recomp)");
     s_sdl.fps_log = getenv("RSX_FPS_LOG") != NULL;
+    const char* perf_overlay = getenv("TAIKO_PERF_OVERLAY");
+    s_sdl.perf_overlay = perf_overlay && strcmp(perf_overlay, "0") != 0;
+    if (s_sdl.perf_overlay)
+        fprintf(stderr, "[SDL_GPU] performance overlay enabled (F9 toggles)\n");
     s_sdl.fence_present = getenv("TAIKO_GPU_UNFENCED_PRESENT") == NULL;
     /* The producer is already paced to 60 Hz by the guest's vblank, so queueing
      * several finished frames buys no throughput -- it only adds latency, and
@@ -3459,6 +3677,16 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
             SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.white_texture);
         if (s_sdl.default_sampler)
             SDL_ReleaseGPUSampler(s_sdl.device, s_sdl.default_sampler);
+        if (s_overlay.texture)
+            SDL_ReleaseGPUTexture(s_sdl.device, s_overlay.texture);
+        if (s_overlay.pipeline)
+            SDL_ReleaseGPUGraphicsPipeline(s_sdl.device, s_overlay.pipeline);
+        if (s_overlay.sampler)
+            SDL_ReleaseGPUSampler(s_sdl.device, s_overlay.sampler);
+        SDL_zero(s_overlay);
+        if (s_fps_overlay.texture)
+            SDL_ReleaseGPUTexture(s_sdl.device, s_fps_overlay.texture);
+        SDL_zero(s_fps_overlay);
         release_dynamic_upload(&s_sdl.vertices_upload);
         release_dynamic_upload(&s_sdl.vertex_constants_upload);
         if (s_sdl.window) SDL_ReleaseWindowFromGPUDevice(s_sdl.device, s_sdl.window);
