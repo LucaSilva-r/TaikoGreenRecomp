@@ -886,12 +886,19 @@ MMU violation while DRM still reported an atomic plane update pending. That is
 an implicit synchronization cycle between V3DV and the nonblocking VC4 update,
 not an audio failure or an expensive frame.
 
-The zero-copy path now waits the previous atomic out-fence just before
-submitting the next Vulkan render. The placement matters: CPU command recording
-and the guest's inter-frame work remain overlapped with KMS, and in the normal
-case the vblank has already signalled by the time the check runs. This is more
-targeted than `TAIKO_KMS_ATOMIC_WAIT=1`, which waits immediately after every
-plane commit and remains a diagnostic switch rather than the shipping mode.
+A first attempted repair waited the previous atomic out-fence just before
+submitting the next Vulkan render, after CPU command recording. It did not fix
+the driver failure. The next live run reached the same partial-attract state,
+and its main thread was blocked directly in that out-fence wait. ALSA remained
+`RUNNING` and its SDL/audio-mixer threads were healthy; presentation had stopped
+draining batches, which then stalled the guest state machine, audio changes,
+and drum input behind the full render queue.
+
+Zero-copy now uses legacy plane updates even when the service exports
+`TAIKO_KMS_ATOMIC=1`; the atomic setting remains active for the download/copy
+path. `TAIKO_KMS_ZERO_COPY_ATOMIC=1` explicitly restores nonblocking atomic
+zero-copy for diagnosis only. This keeps the faster dma-buf rendering path
+while removing the repeatedly unsignalled VC4 out-fence from it.
 
 At the appliance's required 1920x1080@60 output mode, the 30-frame heavy Player
 Entry reproduction held about **53.8--54.6 FPS**, versus **49.6--50.4 FPS** for

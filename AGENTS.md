@@ -195,12 +195,16 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   presentation and driver selection.
 - Pi direct KMS: `TAIKO_KMS_PRESENT=1`, `TAIKO_KMS_ATOMIC=1`,
   `TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1`, and
-  `TAIKO_GPU_UPLOAD_FENCE_WAIT=1` are the validated set. The `*_GPU_IDLE` and
-  `TAIKO_KMS_ATOMIC_WAIT` switches are diagnostic serialization controls.
+  `TAIKO_GPU_UPLOAD_FENCE_WAIT=1` are the validated download/copy set. The
+  `*_GPU_IDLE` and `TAIKO_KMS_ATOMIC_WAIT` switches are diagnostic
+  serialization controls.
   `TAIKO_KMS_ZERO_COPY=1` uses the pinned SDL dma-buf extension and three
   direct-scanout textures; it removes the download/CPU copy and is faster on
-  the measured Pi. The FPS badge writes only its 20 KiB opaque rectangle into
-  a mapped linear export after the render fence and costs about 0.01 ms/frame.
+  the measured Pi. Zero-copy deliberately ignores `TAIKO_KMS_ATOMIC` and uses
+  legacy plane updates: nonblocking atomic out-fences deadlocked twice during
+  live attract. `TAIKO_KMS_ZERO_COPY_ATOMIC=1` re-enables that broken path for
+  diagnosis only. The FPS badge writes only its 20 KiB opaque rectangle into a
+  mapped linear export after the render fence and costs about 0.01 ms/frame.
   `TAIKO_KMS_ZERO_COPY_LINEAR=1` is modifier-selection diagnosis only.
 - `TAIKO_GPU_CHARACTER_FILTER_SCISSOR=N` applies an exact-shader-guarded crop
   to the 600x600 character outline/composite chain. Do not deploy `N=128`: it
@@ -378,10 +382,11 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   thread remained forever in `drmSyncobjWait` from
   `submit_kms_render_and_wait`, V3D registers showed the core completely idle,
   and DRM still had an atomic plane update pending. This was not an audio hang.
-  Zero-copy rendering now completes the preceding nonblocking atomic out-fence
-  immediately before the next Vulkan render submit. The deferred boundary
-  keeps CPU command recording overlapped with KMS and avoids the always-wait
-  cost of `TAIKO_KMS_ATOMIC_WAIT`.
+  A deferred wait immediately before the next Vulkan submit did not repair it:
+  the next live run instead remained forever in that atomic out-fence wait,
+  while frames, audio, and input eventually stopped behind the full render
+  queue. Zero-copy therefore defaults to legacy plane updates; the atomic path
+  remains opt-in for diagnosis only.
 - **Song Select character filtering and model outlines are bounded**
   (2026-08-24; filter live validated, complete outline replay validated).
   A fixed 128-pixel crop made the default-costume replay 30/30 byte-identical
