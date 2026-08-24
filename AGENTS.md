@@ -281,6 +281,20 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   movie/video path is not rendered yet. Neither should be diagnosed as the
   loading hang. Inserting coins from attract reaches the rendered player-entry
   screen.
+- **Long-running attract/Player Entry softlock is repaired** (2026-08-24;
+  live validated). Every attract jingle creates short-lived CnuSound2 loader
+  and ATRAC decoder threads. The runtime ignored `sys_ppu_thread_create` flags,
+  treated detached threads as joinable, and could recycle a descriptor from
+  guest `thread_exit` before its host wrapper unwound; the wrapper then wrote
+  the reused slot back to `FINISHED`. Eventually all 64 descriptors were lost
+  and the next scene BGM could not start, which also prevented Player Entry
+  from accepting the drum. Create flags, detach/join ownership, host-exit
+  publication, and per-descriptor guest stack reuse are now correct. A live
+  soak repeatedly reused thread IDs 30/31 and entered Player Entry normally.
+  Keep the unrendered movie on the generic failed-open/skip path. The
+  pointer-correct experimental stream path is available only through
+  `TAIKO_SAIL_LIFECYCLE=1`; synthetic `SOURCE_EOS` alone leaves the game in
+  wrapper state 13 and softlocks earlier. See `docs/raspberry_pi_arm64.md`.
 - UI is composited through offscreen RT chains (448×256 tiles →
   `0x1AE1000`/`0x2069000`); `off_rt_*` in the backend keeps those persistent
   across frames. Depth is one shared buffer, **cleared on every RT switch**

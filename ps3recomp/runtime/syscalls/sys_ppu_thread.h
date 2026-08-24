@@ -12,6 +12,7 @@
 #include "../../include/ps3emu/ps3types.h"
 #include "../../include/ps3emu/error_codes.h"
 #include "../memory/vm.h"
+#include "ppu_thread_lifecycle.h"
 
 #include <stdint.h>
 
@@ -30,13 +31,6 @@ extern "C" {
 /* Maximum concurrent PPU threads */
 #define PPU_THREAD_MAX  64
 
-/* Thread states */
-#define PPU_THREAD_STATE_FREE       0
-#define PPU_THREAD_STATE_RUNNING    1
-#define PPU_THREAD_STATE_FINISHED   2
-#define PPU_THREAD_STATE_DETACHED   3
-#define PPU_THREAD_STATE_JOINING    4
-
 /* Thread entry point type - recompiled function pointer */
 typedef void (*ppu_thread_entry_fn)(ppu_context* ctx);
 
@@ -48,6 +42,7 @@ typedef struct ppu_thread_info {
     int32_t      priority;
     int64_t      exit_status;
     int          joinable;
+    int          completion_initialized;
     uint32_t     stack_addr;   /* guest stack base */
     uint32_t     stack_size;
     uint64_t     entry_addr;   /* guest entry point */

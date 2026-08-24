@@ -618,6 +618,13 @@ if(BUILD_TESTING AND TAIKO_RSX_BACKEND STREQUAL "null" AND
 endif()
 
 if(BUILD_TESTING)
+    add_executable(ppu_thread_lifecycle_tests
+        "tests/ppu_thread_lifecycle_tests.c")
+    target_include_directories(ppu_thread_lifecycle_tests PRIVATE
+        "${PS3RECOMP_DIR}/runtime/syscalls")
+    add_test(NAME ppu_thread_lifecycle_tests
+        COMMAND ppu_thread_lifecycle_tests)
+
     # Semantics of the host mutex behind sys_lwmutex: recursive ownership,
     # FIFO fairness, cross-thread release, and the timed-out-acquire fallback.
     add_executable(fair_mutex_tests "tests/fair_mutex_tests.cpp")

@@ -125,33 +125,57 @@ static void* ppu_host_thread_proc(void* param)
                 (unsigned long long)info->ctx.thread_id);
     }
 
-    /* Mark as finished */
+    /* Mark as finished.  A detached descriptor must not become reusable until
+     * this host entry has completely unwound: sys_ppu_thread_exit runs inside
+     * the lifted entry and is therefore too early to publish FREE. */
     table_lock();
     info->exit_status = (int64_t)info->ctx.gpr[3];
 
-    if (info->state == PPU_THREAD_STATE_DETACHED) {
-        /* Detached threads self-clean */
-        info->state = PPU_THREAD_STATE_FREE;
-    } else if (info->state != PPU_THREAD_STATE_JOINING) {
-        /* A joiner reserves the slot while it waits outside s_table_lock. */
-        info->state = PPU_THREAD_STATE_FINISHED;
+    const int detached = (info->state == PPU_THREAD_STATE_DETACHED);
+    const int final_state = ppu_thread_state_after_host_exit(info->state);
+    if (detached) {
+        /* Threads created detached have no completion objects.  A running
+         * joinable thread can also be detached later, in which case its now
+         * unreachable completion objects are owned and destroyed here. */
+#ifdef _WIN32
+        if (info->completion_initialized && info->finish_event)
+            CloseHandle(info->finish_event);
+        if (info->host_thread)
+            CloseHandle(info->host_thread);
+        info->finish_event = NULL;
+        info->host_thread = NULL;
+#else
+        if (info->completion_initialized) {
+            pthread_mutex_destroy(&info->finish_mutex);
+            pthread_cond_destroy(&info->finish_cond);
+        }
+#endif
+        info->completion_initialized = 0;
+    }
+    /* A joiner reserves the slot while it waits outside s_table_lock. */
+    info->state = final_state;
+
+    /* Signal before dropping s_table_lock.  Otherwise a concurrent detach of
+     * this now-FINISHED thread could destroy the completion object first. */
+    if (!detached && info->completion_initialized) {
+#ifdef _WIN32
+        SetEvent(info->finish_event);
+#else
+        pthread_mutex_lock(&info->finish_mutex);
+        info->finished = 1;
+        pthread_cond_signal(&info->finish_cond);
+        pthread_mutex_unlock(&info->finish_mutex);
+#endif
     }
     table_unlock();
 
-    /* Signal anyone waiting for join */
 #ifdef _WIN32
-    SetEvent(info->finish_event);
     return 0;
 #else
-    pthread_mutex_lock(&info->finish_mutex);
-    info->finished = 1;
-    pthread_cond_signal(&info->finish_cond);
-    pthread_mutex_unlock(&info->finish_mutex);
     return NULL;
 #endif
 }
 
-/* ---------------------------------------------------------------------------
 /* YDKJ_THREADGATE: PS3 priority scheduling — a newly created same/lower-priority
  * thread does NOT run until the creating thread blocks. Our HLE spawns host threads
  * immediately, so a worker (GThread entry=0x5353C0) can read its job object's
@@ -160,6 +184,7 @@ static void* ppu_host_thread_proc(void* param)
  * an event-queue wait (by then the creator has finished initialization). */
 #ifdef _WIN32
 static HANDLE g_gate_pending[256];
+static int    g_gate_close_after_resume[256];
 static int    g_gate_n = 0;
 static int    g_gate_on = -1;
 void ydkj_release_pending_threads(void)
@@ -167,7 +192,14 @@ void ydkj_release_pending_threads(void)
     if (g_gate_on <= 0) return;
     table_lock();
     int n = g_gate_n; g_gate_n = 0;
-    for (int i = 0; i < n; i++) if (g_gate_pending[i]) ResumeThread(g_gate_pending[i]);
+    for (int i = 0; i < n; i++) {
+        if (!g_gate_pending[i]) continue;
+        ResumeThread(g_gate_pending[i]);
+        if (g_gate_close_after_resume[i])
+            CloseHandle(g_gate_pending[i]);
+        g_gate_pending[i] = NULL;
+        g_gate_close_after_resume[i] = 0;
+    }
     table_unlock();
     if (n) fprintf(stderr, "[THREADGATE] released %d pending worker thread(s) on first block\n", n);
 }
@@ -193,8 +225,9 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
     uint64_t arg          = LV2_ARG_U64(ctx, 2);
     int32_t  priority     = LV2_ARG_S32(ctx, 3);
     uint32_t stack_size   = LV2_ARG_U32(ctx, 4);
-    /* uint64_t flags     = LV2_ARG_U64(ctx, 5); */
+    uint64_t flags        = LV2_ARG_U64(ctx, 5);
     uint32_t name_addr    = LV2_ARG_PTR(ctx, 6);
+    const int joinable    = ppu_thread_flags_joinable(flags);
 
     if (stack_size == 0) stack_size = VM_PPU_STACK_SIZE;
     if (stack_size < 0x4000) stack_size = 0x4000; /* 16 KB minimum */
@@ -209,11 +242,21 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
     }
 
     ppu_thread_info* t = &g_ppu_threads[slot];
+    /* Keep one guest stack cached per descriptor.  The old bump-only path
+     * leaked a stack on every joined or detached short-lived thread. */
+    const uint32_t cached_stack_addr = t->stack_addr;
+    const uint32_t cached_stack_size = t->stack_size;
     memset(t, 0, sizeof(*t));
 
     /* Allocate guest stack */
-    uint32_t stack_addr = vm_stack_allocate(&g_vm_stack_alloc, stack_size);
+    uint32_t stack_addr = 0;
+    if (cached_stack_addr && cached_stack_size >= stack_size)
+        stack_addr = cached_stack_addr;
+    else
+        stack_addr = vm_stack_allocate(&g_vm_stack_alloc, stack_size);
     if (stack_addr == 0) {
+        t->stack_addr = cached_stack_addr;
+        t->stack_size = cached_stack_size;
         table_unlock();
         return (int64_t)(int32_t)CELL_ENOMEM;
     }
@@ -229,9 +272,10 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
     uint64_t thread_id = (uint64_t)(slot + 1);
     t->ctx.thread_id = thread_id;
 
-    t->state      = PPU_THREAD_STATE_RUNNING;
+    t->state      = joinable ? PPU_THREAD_STATE_RUNNING
+                             : PPU_THREAD_STATE_DETACHED;
     t->priority   = priority;
-    t->joinable   = 1;
+    t->joinable   = joinable;
     t->stack_addr = stack_addr;
     t->stack_size = stack_size;
     t->entry_addr = entry;
@@ -243,14 +287,18 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
         t->name[sizeof(t->name) - 1] = '\0';
     }
 
-    /* Create synchronization for join */
+    /* Detached-at-creation threads have no legal joiner, so do not create
+     * completion objects that would need a second owner to reap them. */
+    t->completion_initialized = joinable;
+    if (joinable) {
 #ifdef _WIN32
-    t->finish_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+        t->finish_event = CreateEventA(NULL, TRUE, FALSE, NULL);
 #else
-    pthread_mutex_init(&t->finish_mutex, NULL);
-    pthread_cond_init(&t->finish_cond, NULL);
-    t->finished = 0;
+        pthread_mutex_init(&t->finish_mutex, NULL);
+        pthread_cond_init(&t->finish_cond, NULL);
+        t->finished = 0;
 #endif
+    }
 
     /* Write thread ID to output pointer */
     if (tid_out_addr != 0) {
@@ -270,9 +318,10 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
         *out = be_id;
     }
 
-    fprintf(stderr, "[SYS] sys_ppu_thread_create name=\"%s\" entry=0x%08llX arg=0x%llX stack=0x%X prio=%d\n",
+    fprintf(stderr, "[SYS] sys_ppu_thread_create name=\"%s\" entry=0x%08llX arg=0x%llX stack=0x%X prio=%d flags=0x%llX %s\n",
             t->name, (unsigned long long)entry, (unsigned long long)arg,
-            stack_size, priority);
+            stack_size, priority, (unsigned long long)flags,
+            joinable ? "joinable" : "detached");
     /* YDKJ: dump the worker arg-object: func_000750A8 (thread body) does
      * this=[arg+0x8], vtable=[arg+0xC], method=[vtable+0]. If this(+0x8) is null
      * the worker dispatches its job on a null object -> construction never runs. */
@@ -312,21 +361,39 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
                                   _initflag, (unsigned*)&t->host_tid);
     if (t->host_thread == NULL) {
         t->state = PPU_THREAD_STATE_FREE;
-        CloseHandle(t->finish_event);
+        if (t->completion_initialized)
+            CloseHandle(t->finish_event);
+        t->completion_initialized = 0;
         table_unlock();
         return (int64_t)(int32_t)CELL_EAGAIN;
     }
-    if (_gate_this && g_gate_n < 256) g_gate_pending[g_gate_n++] = t->host_thread;
+    if (_gate_this && g_gate_n < 256) {
+        g_gate_pending[g_gate_n] = t->host_thread;
+        g_gate_close_after_resume[g_gate_n] = !joinable;
+        g_gate_n++;
+    }
+    if (!joinable) {
+        /* Closing a Windows thread handle does not terminate the thread.  Do
+         * it while s_table_lock prevents the descriptor from being reused. */
+        if (!_gate_this)
+            CloseHandle(t->host_thread);
+        t->host_thread = NULL;
+    }
 #else
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 256u * 1024 * 1024);
+    if (!joinable)
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     int rc = pthread_create(&t->host_thread, &attr, ppu_host_thread_proc, t);
     pthread_attr_destroy(&attr);
     if (rc != 0) {
         t->state = PPU_THREAD_STATE_FREE;
-        pthread_mutex_destroy(&t->finish_mutex);
-        pthread_cond_destroy(&t->finish_cond);
+        if (t->completion_initialized) {
+            pthread_mutex_destroy(&t->finish_mutex);
+            pthread_cond_destroy(&t->finish_cond);
+        }
+        t->completion_initialized = 0;
         table_unlock();
         return (int64_t)(int32_t)CELL_EAGAIN;
     }
@@ -352,20 +419,19 @@ int64_t sys_ppu_thread_exit(ppu_context* ctx)
     ppu_thread_info* t = find_thread(tid);
     if (t) {
         t->exit_status = (int64_t)status;
-        if (t->state == PPU_THREAD_STATE_DETACHED) {
-            t->state = PPU_THREAD_STATE_FREE;
-        } else if (t->state != PPU_THREAD_STATE_JOINING) {
-            t->state = PPU_THREAD_STATE_FINISHED;
-        }
+        const int detached = (t->state == PPU_THREAD_STATE_DETACHED);
+        t->state = ppu_thread_state_after_guest_exit(t->state);
 
+        if (!detached && t->completion_initialized) {
 #ifdef _WIN32
-        SetEvent(t->finish_event);
+            SetEvent(t->finish_event);
 #else
-        pthread_mutex_lock(&t->finish_mutex);
-        t->finished = 1;
-        pthread_cond_signal(&t->finish_cond);
-        pthread_mutex_unlock(&t->finish_mutex);
+            pthread_mutex_lock(&t->finish_mutex);
+            t->finished = 1;
+            pthread_cond_signal(&t->finish_cond);
+            pthread_mutex_unlock(&t->finish_mutex);
 #endif
+        }
     }
     table_unlock();
 
@@ -457,6 +523,7 @@ int64_t sys_ppu_thread_join(ppu_context* ctx)
     t->host_thread = NULL;
     t->finish_event = NULL;
 #endif
+    t->completion_initialized = 0;
     t->state = PPU_THREAD_STATE_FREE;
     table_unlock();
 
@@ -489,16 +556,24 @@ int64_t sys_ppu_thread_detach(ppu_context* ctx)
 #ifdef _WIN32
         CloseHandle(t->host_thread);
         CloseHandle(t->finish_event);
+        t->host_thread = NULL;
+        t->finish_event = NULL;
 #else
         pthread_detach(t->host_thread);
         pthread_mutex_destroy(&t->finish_mutex);
         pthread_cond_destroy(&t->finish_cond);
 #endif
+        t->completion_initialized = 0;
         t->state = PPU_THREAD_STATE_FREE;
     } else {
         t->state = PPU_THREAD_STATE_DETACHED;
         t->joinable = 0;
-#ifndef _WIN32
+#ifdef _WIN32
+        if (t->host_thread) {
+            CloseHandle(t->host_thread);
+            t->host_thread = NULL;
+        }
+#else
         pthread_detach(t->host_thread);
 #endif
     }

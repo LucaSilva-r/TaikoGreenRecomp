@@ -1039,6 +1039,43 @@ dynamic shader/pipeline diagnosis while keeping the recorder below the Pi's
 practical memory ceiling. Use longer captures only on a larger-memory host or
 after implementing streaming RSXB output.
 
+### Long-running attract softlock and PPU thread reuse (2026-08-24)
+
+Leaving the cabinet in attract mode eventually produced a misleading partial
+hang: the attract picture stopped advancing, coin sounds still played, and
+Player Entry either did not appear or remained unable to accept a drum hit.
+The gating symptom was audio -- `JINGLE_ENTRY` could not start -- but the SDL
+audio sink and SPU mixer were both still healthy.
+
+Each opening loop creates a short-lived joinable `CnuSound2Thread` and ATRAC
+decoder thread. The PPU runtime ignored the create flags, treated every thread
+as joinable, and published detached descriptors as free from
+`sys_ppu_thread_exit`, before the host wrapper had unwound. The wrapper could
+then overwrite a reused descriptor back to `FINISHED`. Over a kiosk session
+this exhausted the 64-entry PPU table and also leaked bump-allocated guest
+stacks, preventing the next jingle loader from being created.
+
+The runtime now honors `SYS_PPU_THREAD_CREATE_JOINABLE`, gives
+detached-at-creation threads detached host resources, and does not return a
+detached descriptor to the free list until the host entry has fully returned.
+Join reserves its descriptor while waiting without the global table lock;
+detach and host completion have a single owner for their synchronization
+objects. Freed descriptors retain one guest stack for reuse. The standalone
+`ppu_thread_lifecycle_tests` exercises flag decoding, the guest-exit/host-exit
+boundary, and 10,000 attract-style descriptor cycles.
+
+Live validation repeatedly reused guest thread IDs 30 and 31 across attract
+loops, then entered Player Entry normally after a long soak. The Pi service
+remained responsive and continued producing audio.
+
+An attempted pointer-correct cellSail stream lifecycle was useful as an A/B but
+is not the shipping behavior. With no movie decoder, a synthetic
+`CELL_SAIL_EVENT_SOURCE_EOS` leaves Taiko's wrapper in state 13 and creates an
+earlier black-screen softlock. Stream overrides therefore remain disabled by
+default and the generic failed-open path intentionally skips the unrendered
+attract movie, as before. `TAIKO_SAIL_LIFECYCLE=1` enables the experimental
+path only for future movie-decoder work.
+
 ### Remaining live issues
 
 - Gameplay has a noticeable audio-to-beatmap delay even though rendering and
