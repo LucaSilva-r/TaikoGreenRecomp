@@ -33,6 +33,7 @@ extern bool SDL_GPUVulkanExportTextureDMABUF(
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
@@ -174,7 +175,9 @@ typedef struct sdl_rsx_state {
     gamepad_slot gamepads[2];
 #if defined(__linux__)
     int evdev_keyboards[16];
+    int evdev_indices[16];          /* /dev/input/eventN, to skip duplicates */
     unsigned evdev_keyboard_count;
+    long evdev_dir_mtime;           /* /dev/input mtime; rescan only on change */
     Uint64 evdev_rescan_ns;
 #endif
     shader_entry shaders[SDL_RSX_MAX_SHADERS];
@@ -3344,12 +3347,22 @@ static void evdev_close_keyboards(void)
     s_sdl.evdev_keyboard_count = 0;
 }
 
+/* Additive: keep what is already open and pick up anything new. This used to
+ * return as soon as one keyboard was open, and only rescanned when none were,
+ * so whichever device enumerated first won for the rest of the session and a
+ * drum plugged in later was invisible. Most drums present as generic keyboards,
+ * so there is no useful way to prefer one -- open them all. */
 static void evdev_open_keyboards(void)
 {
-    if (!s_sdl.kms_present || s_sdl.evdev_keyboard_count) return;
+    if (!s_sdl.kms_present) return;
     for (unsigned index = 0; index < 64 &&
              s_sdl.evdev_keyboard_count < SDL_arraysize(s_sdl.evdev_keyboards);
          ++index) {
+        int already = 0;
+        for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
+            if (s_sdl.evdev_indices[i] == (int)index) { already = 1; break; }
+        if (already) continue;
+
         char path[64];
         snprintf(path, sizeof(path), "/dev/input/event%u", index);
         int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -3364,6 +3377,7 @@ static void evdev_open_keyboards(void)
         }
         char name[128] = "keyboard";
         ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        s_sdl.evdev_indices[s_sdl.evdev_keyboard_count] = (int)index;
         s_sdl.evdev_keyboards[s_sdl.evdev_keyboard_count++] = fd;
         fprintf(stderr, "[SDL_INPUT] evdev keyboard: %s (%s)\n", name, path);
     }
@@ -3407,8 +3421,18 @@ static void evdev_poll_keyboards(void)
 {
     if (!s_sdl.kms_present) return;
     const Uint64 now = SDL_GetTicksNS();
-    if (!s_sdl.evdev_keyboard_count && now >= s_sdl.evdev_rescan_ns) {
-        evdev_open_keyboards();
+    if (now >= s_sdl.evdev_rescan_ns) {
+        /* Scanning means up to 64 open()+ioctl()+close() calls, and this runs on
+         * the render thread -- doing that every second is a visible hitch on the
+         * Pi. /dev/input's mtime changes when a device appears or disappears, so
+         * one stat() per second replaces the scan in the common case. */
+        struct stat st;
+        const long mtime = (stat("/dev/input", &st) == 0)
+            ? (long)st.st_mtime : 0;
+        if (mtime != s_sdl.evdev_dir_mtime || !s_sdl.evdev_keyboard_count) {
+            s_sdl.evdev_dir_mtime = mtime;
+            evdev_open_keyboards();
+        }
         s_sdl.evdev_rescan_ns = now + UINT64_C(1000000000);
     }
     for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i) {
@@ -3425,7 +3449,10 @@ static void evdev_poll_keyboards(void)
         if (bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             close(s_sdl.evdev_keyboards[i]);
             s_sdl.evdev_keyboards[i] =
-                s_sdl.evdev_keyboards[--s_sdl.evdev_keyboard_count];
+                s_sdl.evdev_keyboards[s_sdl.evdev_keyboard_count - 1];
+            s_sdl.evdev_indices[i] =
+                s_sdl.evdev_indices[s_sdl.evdev_keyboard_count - 1];
+            --s_sdl.evdev_keyboard_count;
             --i;
             s_sdl.evdev_rescan_ns = 0;
         }
