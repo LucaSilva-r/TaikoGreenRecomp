@@ -4,9 +4,16 @@
 #include <ps3emu/host_sdl.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 
 int main(void)
 {
+    /* Pin the prebuffer so the queue ceiling below is a fixed number rather
+     * than tracking the shipping default, which is chosen for device jitter
+     * margin, not for this test. What is under test is that blocks are paced
+     * by device consumption instead of accepted at producer speed. */
+    setenv("TAIKO_AUDIO_PREBUFFER_BLOCKS", "4", 1);
+
     if (ps3_host_sdl_init(PS3_HOST_SDL_AUDIO) != 0) return 77;
     if (audio_sink_init() != AUDIO_SINK_INIT_OK) {
         audio_sink_shutdown();
