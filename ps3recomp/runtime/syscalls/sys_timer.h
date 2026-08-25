@@ -35,6 +35,12 @@ extern "C" {
 uint64_t ppu_timebase_now(void);
 uint64_t ppu_timebase_usec_now(void);
 
+/* TAIKO_TIME_API_TRACE=1: count guest reads of each host clock and print the
+ * per-second rates. Gameplay reads its chart clock every simulation frame, so
+ * whichever counter tracks the frame rate is the clock the chart is built on.
+ * No-op unless the environment variable is set. */
+void ppu_time_api_hit(const char* name);
+
 #ifdef _WIN32
 /* Sub-millisecond timed-wait support for the lv2 sync primitives.
  * SleepConditionVariableCS / WaitForSingleObject floor a timed wait to 1 ms,

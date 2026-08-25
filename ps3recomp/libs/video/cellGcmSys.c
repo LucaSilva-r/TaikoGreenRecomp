@@ -9,6 +9,7 @@
  */
 
 #include "cellGcmSys.h"
+#include "../../runtime/syscalls/sys_timer.h"  /* ppu_time_api_hit */
 #include "../../runtime/ppu/ppu_memory.h"   /* vm_write32 (translate + byte-swap, OOB-safe) */
 #include "rsx_commands.h"                    /* rsx_state, rsx_process_command_buffer */
 
@@ -1270,6 +1271,7 @@ void cellGcmSetUserHandler(CellGcmUserHandler handler)
 /* NID: 0x21AC3697 */
 u64 cellGcmGetLastFlipTime(void)
 {
+    ppu_time_api_hit("gcmLastFlipTime");
     return s_last_flip_time;
 }
 
@@ -1561,6 +1563,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
 /* NID: 0x97FC4B73 */
 u64 cellGcmGetTimeStamp(u32 index)
 {
+    ppu_time_api_hit("gcmTimeStamp");
     if (index >= CELL_GCM_MAX_REPORT_COUNT)
         return 0;
 
@@ -1870,6 +1873,7 @@ s32 cellGcmUnreserveIoMapSize(u32 size)
 /* Return the current VBlank counter. */
 u32 cellGcmGetVBlankCount(void)
 {
+    ppu_time_api_hit("gcmVBlankCount");
     /* The 60 Hz frame driver owns advancement. Queries must be pure reads;
      * incrementing here makes a polling guest manufacture fake vblanks. */
     return s_vblank_count;

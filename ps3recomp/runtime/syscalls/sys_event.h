@@ -149,6 +149,7 @@ void sys_event_init(lv2_syscall_table* tbl);
  * that need to notify PPU code of completion). Pushes an event into
  * the queue identified by queue_id. Returns 0 on success, -1 if the
  * queue is unknown/inactive or full. */
+int sys_event_queue_depth_by_id(uint32_t queue_id);
 int sys_event_queue_push_by_id(uint32_t queue_id,
                                uint64_t source, uint64_t data1,
                                uint64_t data2,  uint64_t data3);

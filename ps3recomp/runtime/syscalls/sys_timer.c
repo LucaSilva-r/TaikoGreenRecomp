@@ -5,7 +5,10 @@
 #include "sys_timer.h"
 #include "sys_event.h"
 #include "../memory/vm.h"
+#include <ps3emu/host_platform.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* ---------------------------------------------------------------------------
  * Globals
@@ -53,8 +56,50 @@ int lv2_deadline_passed(int64_t deadline)
  * polled. Overflow-safe split multiply (rem < qpf, so
  * rem * 80e6 < ~8e14 << 2^63).
  * -----------------------------------------------------------------------*/
+/* Which host clock does the guest actually poll, and how often? Enabled by
+ * TAIKO_TIME_API_TRACE=1; the table is tiny and fixed, names are string
+ * literals so pointer comparison suffices. */
+void ppu_time_api_hit(const char* name)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char* e = getenv("TAIKO_TIME_API_TRACE");
+        enabled = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
+    if (!enabled) return;
+
+    enum { MAX_NAMES = 12 };
+    static const char* names[MAX_NAMES];
+    static unsigned long long counts[MAX_NAMES];
+    static unsigned used;
+    static uint64_t next_report;
+
+    unsigned i;
+    for (i = 0; i < used; ++i)
+        if (names[i] == name) break;
+    if (i == used) {
+        if (used == MAX_NAMES) return;
+        names[used] = name;
+        used++;
+    }
+    counts[i]++;
+
+    const uint64_t now = ps3_host_monotonic_ns();
+    if (next_report == 0) { next_report = now + 1000000000ull; return; }
+    if (now < next_report) return;
+    next_report = now + 1000000000ull;
+
+    fprintf(stderr, "[timeapi]");
+    for (i = 0; i < used; ++i) {
+        fprintf(stderr, " %s=%llu", names[i], counts[i]);
+        counts[i] = 0;
+    }
+    fprintf(stderr, "\n");
+}
+
 uint64_t ppu_timebase_now(void)
 {
+    ppu_time_api_hit("mftb");
 #ifdef _WIN32
     static LONGLONG t0 = 0;
     ensure_qpc_init();

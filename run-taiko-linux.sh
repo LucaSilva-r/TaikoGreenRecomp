@@ -24,7 +24,6 @@ export TAIKO_OFFLINE_COMPLETE="${TAIKO_OFFLINE_COMPLETE:-1}"
 export TAIKO_FS_YIELD="${TAIKO_FS_YIELD:-0}"
 export TAIKO_AUDIO_DECODE="${TAIKO_AUDIO_DECODE:-1}"
 export TAIKO_AUDIO_SPU="${TAIKO_AUDIO_SPU:-1}"
-export TAIKO_AUDIO_OFFSET_MS=60
 
 command=("${repo_dir}/build-linux/taiko_boot"
     "${repo_dir}/game/EBOOT.elf" "$@")

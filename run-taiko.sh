@@ -11,7 +11,6 @@ if [[ ! -f "${repo_dir}/build/dxcompiler.dll" ]]; then
     exit 2
 fi
 
-export TAIKO_AUDIO_OFFSET_MS=60
 export PS3_VFS_ROOT="${PS3_VFS_ROOT:-${repo_dir}/game/vfs}"
 export PS3_TOC_SET="${PS3_TOC_SET:-0x1027c58,0x1037a88,0x1047a38}"
 export FLOW_NOSPILL="${FLOW_NOSPILL:-1}"

@@ -12,6 +12,7 @@
  */
 #include "ppu_recomp.h"     /* ppu_context */
 #include "ps3emu/nid.h"     /* ps3_compute_nid */
+extern "C" void ppu_time_api_hit(const char* name);
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,6 +97,7 @@ static void sys_ppu_thread_once(ppu_context* ctx)
  * overflowing ticks * 1,000,000 during long runs. */
 static void sys_time_get_system_time(ppu_context* ctx)
 {
+    ppu_time_api_hit("sysTimeGetSystemTime");
     ctx->gpr[3] = ppu_timebase_usec_now();
 }
 

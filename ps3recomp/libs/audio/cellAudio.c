@@ -27,6 +27,7 @@ extern int      sys_event_queue_push_by_id(uint32_t queue_id,
                                             uint64_t source, uint64_t data1,
                                             uint64_t data2,  uint64_t data3);
 extern uint32_t sys_event_find_queue_by_key(uint64_t key);
+extern int      sys_event_queue_depth_by_id(uint32_t queue_id);
 extern uint64_t ppu_timebase_usec_now(void);
 
 /* Portable threading */
@@ -118,6 +119,11 @@ static int s_null_audio_clock = 0;
 static u32 s_read_index_lookahead = 2;
 static int s_sink_initialized = 0;
 static atomic_ullong s_notify_drops;
+/* Notifications pushed while the previous one was still unserviced. Each of
+ * those means the guest will drain a burst against a single readIndexAddr
+ * value and overwrite blocks it was told to fill. */
+static atomic_ullong s_notify_backlog_events;
+static atomic_int    s_notify_backlog_max;
 /* 0 = live/not started, 1 = shutdown owner active, 2 = stopped. */
 static atomic_int s_host_output_shutdown = 0;
 
@@ -139,10 +145,14 @@ static u64 audio_guest_block_hash(u32 ea, u32 words, int* nonzero)
  * a guest port block. Green's bnusCore producer copies every word of the next
  * 0x2000-byte block, so all six tags changing proves that the event associated
  * with readIndexAddr was handled before that mutable index advances again.
- * Tagging every consumed block therefore does two things: a block the guest
- * failed to refill in time plays as silence instead of repeating the previous
- * revolution, and its surviving tags are a direct, non-blocking count of missed
- * producer deadlines ([cellAudio-sink] UNFILLED). */
+ * Surviving tags are therefore a direct, non-blocking count of missed producer
+ * deadlines ([cellAudio-sink] UNFILLED).
+ *
+ * This is DIAGNOSTIC ONLY and off unless TAIKO_AUDIO_RING_TRACE=1. Detection
+ * requires zeroing the retired block, which converts a missed refill from a
+ * repeat of the previous revolution into digital silence -- two clicks instead
+ * of a soft glitch. That is the right trade when measuring and the wrong one
+ * when playing, so the default path leaves guest audio untouched. */
 #define AUDIO_WRITE_TAG_COUNT 6u
 #define AUDIO_WRITE_TAG       0x80000000u
 
@@ -190,13 +200,71 @@ static uint32_t s_audio_dump_frames = 0;
 static uint32_t s_audio_dump_limit = 0;
 static int s_audio_dump_state = 0; /* 0 armed, 1 writing, 2 done */
 static atomic_int s_audio_gameplay_dump_started;
+/* Host time at which the title's gameplay song became decodable, and whether
+ * the first audible block after that has been reported. The gap between the
+ * two is this stack's audio start latency: everything between the guest being
+ * able to fetch PCM and that PCM leaving for the device. The chart runs on a
+ * free-running wall clock with no feedback from audio, so this offset is
+ * applied once at song start and never corrected. */
+static atomic_ullong s_gameplay_arm_ns;
+static atomic_int s_gameplay_audible_reported;
+/* Blocks submitted since the gameplay capture armed. The WAV dump starts at
+ * the same instant, so this is the exact position in that file: every log
+ * event can be placed on the waveform rather than merely correlated with it. */
+static atomic_ullong s_blocks_since_arm;
+
+/* Seconds into the gameplay WAV capture, or -1 while nothing is being written.
+ * The dump does not open until the first non-silent block, so this must count
+ * frames actually in the file -- counting from the arm instant would place
+ * every event earlier than its true position on the waveform. */
+static double audio_capture_seconds(void)
+{
+    if (s_audio_dump_state != 1) return -1.0;
+    return (double)s_audio_dump_frames / (double)CELL_AUDIO_SAMPLE_RATE;
+}
+
 
 void cellAudioGameplayDumpStart(void)
 {
-    if (!getenv("TAIKO_AUDIO_GAMEPLAY_DUMP")) return;
     if (!atomic_exchange_explicit(&s_audio_gameplay_dump_started, 1,
-                                  memory_order_release))
-        fprintf(stderr, "[cellAudio-dump] gameplay capture armed\n");
+                                  memory_order_release)) {
+        atomic_store_explicit(&s_gameplay_arm_ns, ps3_host_monotonic_ns(),
+                              memory_order_release);
+        atomic_store_explicit(&s_gameplay_audible_reported, 0,
+                              memory_order_release);
+        atomic_store_explicit(&s_blocks_since_arm, 0, memory_order_release);
+        fprintf(stderr, "[cellAudio-start] gameplay audio armed\n");
+    }
+}
+
+/* Report the first non-silent block submitted after arming. */
+static void audio_report_first_audible(const float* samples, uint32_t frames)
+{
+    if (atomic_load_explicit(&s_gameplay_audible_reported,
+                             memory_order_acquire)) return;
+    const unsigned long long arm =
+        atomic_load_explicit(&s_gameplay_arm_ns, memory_order_acquire);
+    if (!arm) return;
+
+    float peak = 0.0f;
+    for (uint32_t i = 0; i < frames * 2u; ++i) {
+        const float a = fabsf(samples[i]);
+        if (a > peak) peak = a;
+    }
+    if (peak < 0.0005f) return;
+
+    atomic_store_explicit(&s_gameplay_audible_reported, 1,
+                          memory_order_release);
+    const uint32_t queued = s_null_audio_clock ? 0 : audio_sink_queued_frames();
+    const uint32_t device = s_null_audio_clock
+        ? 0 : audio_sink_device_buffer_frames();
+    fprintf(stderr,
+            "[cellAudio-start] first audible block %.2f ms after arm "
+            "(peak=%g queued=%u frames device=%u frames, +%.2f ms still to "
+            "play out)\n",
+            (double)(ps3_host_monotonic_ns() - arm) / 1000000.0, peak,
+            queued, device,
+            1000.0 * (double)(queued + device) / CELL_AUDIO_SAMPLE_RATE);
 }
 
 static void audio_dump_u16(uint16_t value)
@@ -364,18 +432,19 @@ static void audio_mix_one_block(void)
         /* Only meaningful once every block has been tagged at least once,
          * and only for a port the guest actually feeds: Green opens two and
          * fills one, and an untouched port is idle, not a missed deadline. */
-        if (port->read_index >= nblock) {
+        if (producer_trace && port->read_index >= nblock) {
             if (audio_guest_block_written(port, block_idx)) {
                 port->ever_filled = 1;
             } else if (port->ever_filled) {
                 port->unfilled_blocks++;
-                if (port->unfilled_blocks <= 16 ||
-                    (port->unfilled_blocks & 63u) == 0)
+                if (port->unfilled_blocks <= 512 ||
+                    (port->unfilled_blocks & 15u) == 0)
                     fprintf(stderr,
-                            "[cellAudio-producer] UNFILLED port=%d slot=%u read=%llu count=%u\n",
+                            "[cellAudio-producer] UNFILLED port=%d slot=%u "
+                            "read=%llu count=%u capture_t=%.3f\n",
                             p, block_idx,
                             (unsigned long long)port->read_index,
-                            port->unfilled_blocks);
+                            port->unfilled_blocks, audio_capture_seconds());
             }
         }
 
@@ -437,10 +506,11 @@ static void audio_mix_one_block(void)
             port->consumed_valid[block_idx] = 1;
         }
 
-        /* Retire this slot. It is not handed back to the guest until
-         * s_read_index_lookahead revolutions from now, so the tags survive
-         * until then and prove whether the guest actually refilled it. */
-        audio_tag_consumed_block(port, block_idx);
+        /* Retire this slot for the detector. It is not handed back to the
+         * guest until s_read_index_lookahead revolutions from now, so the tags
+         * survive until then and prove whether the guest refilled it. */
+        if (producer_trace)
+            audio_tag_consumed_block(port, block_idx);
 
         /* Advance the host-side counter, but publish the current RING POSITION
          * to the guest.  CellAudio's readIndexAddr is not a monotonically
@@ -512,6 +582,19 @@ static void audio_notify_event_queues(void)
     for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
         if (!s_notify_queues[i].in_use) continue;
         uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
+        if (qid) {
+            const int depth = sys_event_queue_depth_by_id(qid);
+            if (depth > 0) {
+                atomic_fetch_add_explicit(&s_notify_backlog_events, 1,
+                                          memory_order_relaxed);
+                int previous = atomic_load_explicit(&s_notify_backlog_max,
+                                                    memory_order_relaxed);
+                while (depth > previous &&
+                       !atomic_compare_exchange_weak_explicit(
+                           &s_notify_backlog_max, &previous, depth,
+                           memory_order_relaxed, memory_order_relaxed)) { }
+            }
+        }
         if (qid && sys_event_queue_push_by_id(
                 qid, s_notify_queues[i].key,
                 0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0) != 0) {
@@ -552,7 +635,8 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
             "device=%u frames (%.2f ms) visible_bound=%.2f ms "
             "total=%llu failed=%llu notify_drop=%llu "
             "sink_starve=%llu/%llu_frames "
-            "RACE=%u STALE=%u UNFILLED=%u\n",
+            "RACE=%u STALE=%u UNFILLED=%u "
+            "notify_backlog=%llu max_depth=%d\n",
             audio_sink_name(), s_null_audio_clock ? "null" : "device",
             (double)*interval_blocks / seconds, queued,
             (double)queued / CELL_AUDIO_BLOCK_SAMPLES,
@@ -564,7 +648,11 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
             atomic_load_explicit(&s_notify_drops, memory_order_relaxed),
             (unsigned long long)audio_sink_starvation_events(),
             (unsigned long long)audio_sink_starvation_frames(),
-            races, stale, unfilled);
+            races, stale, unfilled,
+            atomic_load_explicit(&s_notify_backlog_events,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&s_notify_backlog_max,
+                                 memory_order_relaxed));
     *interval_start = now;
     *interval_blocks = 0;
 }
@@ -608,8 +696,10 @@ static void audio_mix_thread_run(void)
             next_null_period = ps3_host_monotonic_ns();
         } else {
             audio_dump_submitted(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
+            audio_report_first_audible(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
         }
         ++total_blocks;
+        atomic_fetch_add_explicit(&s_blocks_since_arm, 1, memory_order_relaxed);
         audio_notify_event_queues();
         audio_trace_sink(&trace_start, &trace_blocks, total_blocks, failed_blocks);
 
@@ -749,6 +839,9 @@ s32 cellAudioInit(void)
     s_audio_dump_state = 0;
     atomic_store_explicit(&s_audio_gameplay_dump_started, 0,
                           memory_order_relaxed);
+    atomic_store_explicit(&s_gameplay_arm_ns, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_gameplay_audible_reported, 0,
+                          memory_order_relaxed);
     s_null_audio_clock = 0;
     s_read_index_lookahead = 2;
     { const char* text = getenv("TAIKO_AUDIO_LOOKAHEAD_BLOCKS");
@@ -761,6 +854,8 @@ s32 cellAudioInit(void)
             1000.0 * (double)(s_read_index_lookahead - 1) *
                 CELL_AUDIO_BLOCK_SAMPLES / CELL_AUDIO_SAMPLE_RATE);
     atomic_store_explicit(&s_notify_drops, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_notify_backlog_events, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_notify_backlog_max, 0, memory_order_relaxed);
     atomic_store_explicit(&s_host_output_shutdown, 0, memory_order_release);
     int sink_result = audio_sink_init();
     if (sink_result == AUDIO_SINK_INIT_OK) {

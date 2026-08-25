@@ -773,6 +773,27 @@ int sys_event_queue_push_by_id(uint32_t queue_id,
     return event_queue_push(q, &evt);
 }
 
+/* How many events are already waiting in a queue. cellAudio uses this to tell
+ * a guest consumer that is keeping up from one that is being descheduled: a
+ * non-zero depth at notify time means the previous period's notification has
+ * not been serviced yet, and the guest will drain the backlog in a burst. */
+int sys_event_queue_depth_by_id(uint32_t queue_id)
+{
+    if (queue_id == 0 || queue_id > SYS_EVENT_QUEUE_MAX) return -1;
+    sys_event_queue_info* q = &g_sys_event_queues[queue_id - 1];
+    if (!q->active) return -1;
+#ifdef _WIN32
+    EnterCriticalSection(&q->lock);
+    const int count = (int)q->count;
+    LeaveCriticalSection(&q->lock);
+#else
+    pthread_mutex_lock(&q->lock);
+    const int count = (int)q->count;
+    pthread_mutex_unlock(&q->lock);
+#endif
+    return count;
+}
+
 int sys_event_queue_receive_by_id(uint32_t queue_id, sys_event_t* event)
 {
     if (!event || queue_id == 0 || queue_id > SYS_EVENT_QUEUE_MAX) return -1;
