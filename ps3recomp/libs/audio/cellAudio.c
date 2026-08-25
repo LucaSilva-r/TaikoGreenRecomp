@@ -527,8 +527,13 @@ static void audio_mix_one_block(void)
          * made every game-produced mix land far beyond the audio port. */
         port->read_index++;
         port->timestamp_usec = ppu_timebase_usec_now();
+        /* Bound: the guest writes `lookahead` periods ahead of the block being
+         * played, so the ring must still hold a block we have not reached yet.
+         * nblock-2 leaves one spare slot; nblock/2 was an arbitrary early
+         * guess and caps an 8-block port at 21 ms of producer slack. */
         u32 lookahead = s_read_index_lookahead;
-        if (lookahead > nblock / 2u) lookahead = nblock / 2u;
+        const u32 lookahead_max = nblock > 3u ? nblock - 2u : 1u;
+        if (lookahead > lookahead_max) lookahead = lookahead_max;
         if (lookahead < 1u) lookahead = 1u;
         const u32 next_block =
             (u32)((port->read_index + lookahead - 1u) % nblock);
@@ -632,6 +637,15 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
         stale += s_ports[p].stale_blocks;
         unfilled += s_ports[p].unfilled_blocks;
     }
+    /* RACE/STALE/UNFILLED all require TAIKO_AUDIO_RING_TRACE. Printing 0 when
+     * the detector is off reads as "no misses" and is how a blind trace got
+     * mistaken for a clean one; say "off" instead. */
+    char unfilled_text[24];
+    if (getenv("TAIKO_AUDIO_RING_TRACE"))
+        snprintf(unfilled_text, sizeof(unfilled_text), "%u", unfilled);
+    else
+        snprintf(unfilled_text, sizeof(unfilled_text), "off");
+
     double seconds = (double)(now - *interval_start) / 1000000000.0;
     uint32_t queued = s_null_audio_clock ? 0 : audio_sink_queued_frames();
     uint32_t device = s_null_audio_clock ? 0 : audio_sink_device_buffer_frames();
@@ -641,7 +655,7 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
             "device=%u frames (%.2f ms) visible_bound=%.2f ms "
             "total=%llu failed=%llu notify_drop=%llu "
             "sink_starve=%llu/%llu_frames "
-            "RACE=%u STALE=%u UNFILLED=%u "
+            "RACE=%u STALE=%u UNFILLED=%s "
             "notify_backlog=%llu max_depth=%d\n",
             audio_sink_name(), s_null_audio_clock ? "null" : "device",
             (double)*interval_blocks / seconds, queued,
@@ -654,7 +668,7 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
             atomic_load_explicit(&s_notify_drops, memory_order_relaxed),
             (unsigned long long)audio_sink_starvation_events(),
             (unsigned long long)audio_sink_starvation_frames(),
-            races, stale, unfilled,
+            races, stale, unfilled_text,
             atomic_load_explicit(&s_notify_backlog_events,
                                  memory_order_relaxed),
             atomic_load_explicit(&s_notify_backlog_max,
@@ -853,7 +867,7 @@ s32 cellAudioInit(void)
     { const char* text = getenv("TAIKO_AUDIO_LOOKAHEAD_BLOCKS");
       if (text && *text) {
           const unsigned long parsed = strtoul(text, NULL, 0);
-          if (parsed >= 1 && parsed <= 8) s_read_index_lookahead = (u32)parsed;
+          if (parsed >= 1 && parsed <= 30) s_read_index_lookahead = (u32)parsed;
       } }
     fprintf(stderr, "[cellAudio] guest write lookahead=%u blocks (%.2f ms)\n",
             s_read_index_lookahead,

@@ -179,6 +179,26 @@ static inline void* ps3_GetModuleHandleA(const char*)
  * null and skip the pump. */
 extern "C" __attribute__((weak)) void ppu_gcm_pump(void);
 
+/* Threads that must not run the frame callbacks.
+ *
+ * ppu_gcm_pump delivers Green's vblank/flip handlers on whichever guest thread
+ * next reaches an HLE boundary. The audio threads reach one constantly --
+ * cellAtracDecode, cellAudio*, sys_event_queue_receive -- so they were running
+ * the renderer's per-frame guest callback. That couples audio to render cost
+ * from the inside: when a frame is expensive, the thread that must refill a
+ * cellAudio block within 5.33 ms is the one executing it, and it misses.
+ *
+ * Green marks bnusCoreUpdateThread, bnusCoreDecoderServerThread and
+ * bnusCoreDecoderAT3PThread as lv2 priority 0 and everything else 499 or worse,
+ * which is the title telling us which threads carry a hard deadline. Skip the
+ * pump on those; every other guest thread still delivers ticks, so the handlers
+ * keep running at the same rate.
+ *
+ * C++ thread_local on purpose: MinGW silently ignores __declspec(thread). */
+static thread_local int t_no_gcm_pump = 0;
+
+extern "C" void ppu_set_no_gcm_pump(int on) { t_no_gcm_pump = on ? 1 : 0; }
+
 extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
 {
     HleProfileGuard _hle_profile(nid, ctx);
@@ -186,7 +206,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
      * guest thread.  The ticker no longer calls guest handlers itself, so
      * handler code is serialized with normal guest execution instead of racing
      * it from a host thread. */
-    if (ppu_gcm_pump) ppu_gcm_pump();
+    if (ppu_gcm_pump && !t_no_gcm_pump) ppu_gcm_pump();
     /* Preserve the caller TOC (r2) across the HLE call. ELFv1 makes r2 caller-saved
      * across a cross-module call: the glink stub does `std r2,40(r1)` before jumping and
      * the caller does `ld r2,40(r1)` after. Our HLE import stubs (`ps3_hle_call(nid);
