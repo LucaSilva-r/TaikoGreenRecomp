@@ -1078,38 +1078,42 @@ path only for future movie-decoder work.
 
 ### Remaining live issues
 
-- **Gameplay audio drift is repaired** (2026-08-25; live validated). The song
-  jumped forward in discrete steps and finished seconds before the chart. It was
-  neither an incorrect 48 kHz sink rate nor an ATRAC rate error: the fault was
-  that host cellAudio released guest notifications in bursts.
+- **Gameplay audio is repaired** (2026-08-25; live validated). Three faults,
+  all permanent losses because nothing resyncs audio to the chart. Full detail
+  in AGENTS.md; the Pi-specific parts:
 
-  The Pi's SDL/ALSA device reports `device=1024 frames` -- exactly four
-  cellAudio blocks -- and pulls all four at once. With the mix thread paced only
-  by queue depth, each pull released four notifications back to back.
-  `bnusAudioMixerLoop` re-reads the single mutable `readIndexAddr` per
-  notification, so it copied its 0x2000-byte mix into the same block several
-  times and destroyed the song audio for the rest, after their ATRAC source had
-  already been consumed. Earlier `TAIKO_AUDIO_HANDOFF_MS` tuning only widened
-  the burst spacing; at 5 ms it also cost 20 ms to refill four blocks against
-  roughly 16 ms of queued audio, which is an underrun source in its own right.
+  The device reports `device=1024 frames` -- four cellAudio blocks -- and pulls
+  all four at once, so queue-depth pacing released four notifications back to
+  back and the guest copied its mix into the same block repeatedly. Fixed by
+  absolute block-period pacing.
 
-  cellAudio now paces notifications on an absolute 5.333 ms block-period
-  deadline with a +/-12.5% clock pull for drift, publishes `readIndexAddr` two
-  blocks ahead of playback (`TAIKO_AUDIO_LOOKAHEAD_BLOCKS`), and prebuffers six
-  blocks instead of four. `TAIKO_AUDIO_HANDOFF_MS` is gone.
+  The Pi then still lost 0.6--0.9% of blocks in attract, in *every* lookahead
+  configuration (0.91/0.67/0.63% at 2/4/6). That insensitivity was the clue:
+  more producer slack cannot help a producer that is already ahead. The block
+  map at a miss showed exactly that -- consuming block 5 with blocks 6, 7 and 0
+  already written. The guest had read `readIndexAddr` after a later update,
+  written that block, and orphaned the notified one. Publishing the index from
+  `sys_event_queue_receive` instead took Pi attract to `UNFILLED=0`.
 
-  Full `SONG_MIKUGV` after the fix: source consumed at a flat 44100 Hz, all
-  5,642,240 frames (127.942 s) requested over 129.874 s of wall clock with a
-  constant 1.93 s prefill lead, ring consumer advancing exactly 1 per decode
-  over 1623 transitions, `sink_starve=0`, `RACE=0`, `STALE=0`, port-0
-  `UNFILLED=0`, 60.00 FPS throughout, no audible skips. A second song played
-  through in sync as well.
+  Thread priority was tried and **reverted**: on four cores, SCHED_FIFO on the
+  audio threads (including 129 short-lived AT3P decoder threads) plus nice on
+  the renderer collapsed rendering to 2.5 FPS. It was validated on a 16-core
+  desktop and deployed here, where `LimitRTPRIO` made it worse than anywhere
+  else. Do not reintroduce it without measuring on the target core count.
 
-  Two traps worth keeping. `UNFILLED` must be read per port: Green opens two
-  8ch/8-block ports and only ever fills one, so the aggregate is dominated by
-  the idle one. And do not convert the block tagging into a producer handshake
-  -- blocking the device-paced mix thread on the guest turns a late block into a
-  real device underrun.
+  Remaining: heavy scenes (Song Select, loading) still disturb audio; gameplay
+  is clean. The residual constant offset is output latency and
+  `TAIKO_AUDIO_OFFSET_MS` compensates it, with a Pi-specific value -- its buffer
+  depths differ from the desktop's (37 ms visible bound against 48 ms).
+
+- **ALSA must be pinned to the HDMI card by name.** vc4 card numbering depends
+  on module load order: a USB audio device takes card 0, and once it is
+  unplugged the default resolves to a card that no longer exists. The game
+  reports `Couldn't open audio device: No such file or directory` and silently
+  falls back to a null clock, which looks like "audio stopped working" with the
+  video still fine. `/etc/asound.conf` binds `default` to `hw:vc4hdmi0,0` by
+  name so renumbering cannot break it; that also means USB audio is never
+  selected, which is correct for the appliance.
 
 - Song Select remains fill-bound after dense constant uploads and the exact
   character-filter changes. Its remaining display work is spread across
