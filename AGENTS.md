@@ -480,11 +480,40 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   blind counter reading zero was once mistaken for a clean run. Read it per
   port: Green opens two 8ch/8-block ports and only ever fills one.
 
-  **Latent, not fixed:** the raw SPU mixer can retire an ATRAC ring slot twice,
-  discarding 46 ms of song. Signature under `TAIKO_AUDIO_RING_TRACE=1` is a
-  per-slot counter jumping to 2048 from well short of it while the consumer
-  advances by two; the resetter is SPU-side (`pc=0x00420`), so it is not
-  producer latency. Only the window it needs is closed.
+  **Open: the SPU mixer retires an ATRAC ring slot twice**, discarding 46 ms of
+  song each time. Measured on the Pi at about two events per gameplay song, a
+  permanent ~90 ms drift, and confirmed by aligning the sink capture against an
+  FFmpeg decode: the two `[audio-ring-spu-anomaly]` events at consumer slots
+  1815 and 2401 land exactly on the two waveform steps at 84 s and 111 s.
+
+  Signature under `TAIKO_AUDIO_RING_TRACE=1`: a per-slot counter jumping to 2048
+  from ~1924--1949 while the consumer advances by two, at a normal 42.6 ms slot
+  boundary. The remainder is under one 235-sample pass, so a pass that spans a
+  slot boundary consumes the tail, retires the slot, needs the rest of its step
+  from the next slot, and if that slot's counter has not been reset yet it reads
+  as exhausted and is retired unplayed.
+
+  The relevant code is `func_00000420` (counter += step, signed `cgt` against
+  the limit, store, branch to `0x568` when exhausted) and `func_00000568`
+  (consumer += 1, then signal the PPU with selector `0x7651` via
+  `func_0000F908`). The counters are maintained entirely SPU-side -- every write
+  comes from `pc=0x00420` -- so the PPU only publishes `produced`.
+
+  Two hypotheses already **disproved**, do not repeat:
+  - *A lifter register bug clobbering the step.* `func_00000420` does overwrite
+    `r82` with the `shufb` result, but the raw instruction at LS `0x45C` is
+    `0xBA420309`: op=0xB shufb, RT=82, RA=6, RB=8, RC=9. The lifter is faithful;
+    the guest genuinely uses `r82` as scratch there.
+  - *Thread priority.* Raising the lv2-priority-0 threads to `SCHED_FIFO`
+    stalled audio outright through priority inversion -- they block on the fair
+    lwmutex, the event queues and the SPU `'STAT'`/`'END '` round trip, all held
+    by ordinary-priority threads. Adding `nice` on the renderer instead
+    collapsed the Pi to 2.5 FPS. Scheduling is not a usable lever here.
+
+  Next step is the SPU instruction tracer (lift with `--trace`, then
+  `SPU_TRACE_FILE`/`SPU_TRACE_TRIG`/`SPU_TRACE_LIMIT`) around a double retire;
+  static reading of the lifted control flow between `0x420`, `0x468`, `0x568`
+  and `0x5A4` has not been conclusive.
 
   Measurement rig, which is what made these findable:
   `TAIKO_AUDIO_GAMEPLAY_DUMP` writes the exact PCM handed to the device from
