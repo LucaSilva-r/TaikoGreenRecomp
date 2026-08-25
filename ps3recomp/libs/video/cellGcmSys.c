@@ -584,9 +584,11 @@ void cellGcmTickFlip(void)
  *
  * Re-entrancy: ppu_guest_call uses a single per-thread scratch stack, so this
  * must not fire while already inside a guest callback -- ppu_in_guest_callback()
- * reports that.  Pending counts are collapsed rather than replayed: a backlog
- * means the guest was busy, and delivering N stale vblanks in a row is worse
- * than delivering the current one. */
+ * reports that. Pending callbacks must retain their count. Green's registered
+ * vblank and flip handlers each post a binary guest semaphore, so invoke at
+ * most one of each per HLE boundary and carry any remainder forward. Calling
+ * a whole backlog at once would merely overflow that semaphore; discarding the
+ * remainder permanently removes simulation frames while cellAudio continues. */
 void ppu_gcm_pump(void)
 {
     if (!g_ps3_guest_caller) return;
@@ -601,26 +603,42 @@ void ppu_gcm_pump(void)
                      trace = (e && e[0] && e[0] != '0') ? 1 : 0; }
 
     const int vpend = __atomic_exchange_n(&s_vblank_handler_pending, 0, __ATOMIC_ACQUIRE);
-    if (trace) {
-        static unsigned long long drains, delivered, backlog_max;
-        if (vpend) { ++drains; delivered += (unsigned)vpend;
-                     if ((unsigned long long)vpend > backlog_max) backlog_max = vpend;
-                     if ((drains % 300) == 0)
-                         fprintf(stderr, "[VBLANK] drains=%llu delivered=%llu "
-                                 "avg_backlog=%.2f max_backlog=%llu\n",
-                                 drains, delivered, (double)delivered / (double)drains,
-                                 backlog_max); }
+    if (trace && s_vblank_handler_opd && vpend) {
+        static unsigned long long callbacks, tick_base, backlog_max;
+        if (!callbacks)
+            tick_base = (u32)(s_vblank_count - (u32)vpend);
+        ++callbacks;
+        if ((unsigned long long)vpend > backlog_max) backlog_max = vpend;
+        if ((callbacks % 300) == 0) {
+            const unsigned long long physical =
+                (u32)(s_vblank_count - (u32)tick_base);
+            fprintf(stderr, "[VBLANK] callbacks=%llu physical=%llu lag=%lld "
+                    "pending=%d max_pending=%llu\n",
+                    callbacks, physical,
+                    (long long)physical - (long long)callbacks,
+                    vpend, backlog_max);
+        }
     }
     if (vpend != 0) {
         ydkj_restore_handler_opd(s_vblank_handler_opd, s_vblank_handler_code);
-        if (s_vblank_handler_opd)
+        if (s_vblank_handler_opd) {
             g_ps3_guest_caller(s_vblank_handler_opd,
                                (uint64_t)s_vblank_count, 0, 0, 0);
+            if (vpend > 1)
+                __atomic_fetch_add(&s_vblank_handler_pending, vpend - 1,
+                                   __ATOMIC_RELEASE);
+        }
     }
-    if (__atomic_exchange_n(&s_flip_handler_pending, 0, __ATOMIC_ACQUIRE) != 0) {
+    const int fpend = __atomic_exchange_n(&s_flip_handler_pending, 0,
+                                          __ATOMIC_ACQUIRE);
+    if (fpend != 0) {
         ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
-        if (s_flip_handler_opd)
+        if (s_flip_handler_opd) {
             g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0);
+            if (fpend > 1)
+                __atomic_fetch_add(&s_flip_handler_pending, fpend - 1,
+                                   __ATOMIC_RELEASE);
+        }
     }
 }
 

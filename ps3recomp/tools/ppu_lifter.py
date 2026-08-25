@@ -284,7 +284,8 @@ static inline double ppu_frsp(double b)
 }
 
 /* The guest timebase (mftb/mftbu): one global monotonic clock scaled to the
- * PS3's 79.8 MHz, provided by the runtime (runtime/syscalls/sys_timer.c). */
+ * guest-compatible 80 MHz, provided by the runtime
+ * (runtime/syscalls/sys_timer.c). */
 #ifdef __cplusplus
 extern "C" uint64_t ppu_timebase_now(void);
 #else
@@ -2139,7 +2140,7 @@ class PPULifter:
         # advanced 16667 ticks PER READ -- not time: every site had a private
         # counter that only moved when polled, so all guest elapsed-time math
         # (media pacers, throttles, profilers, timeout loops) computed garbage
-        # from it. Real semantics: one global monotonic timebase at 79.8 MHz
+        # from it. Real semantics: one global monotonic timebase at 80 MHz
         # (runtime ppu_timebase_now, consistent with
         # sys_time_get_timebase_frequency).
         if mn == "mftb":

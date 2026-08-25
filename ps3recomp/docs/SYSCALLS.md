@@ -362,10 +362,13 @@ A 64-bit bitmask that threads can wait on. Supports AND/OR wait modes:
 
 ### Time Model
 
-PS3 time is measured in **timebase ticks** at 79,800,000 Hz (79.8 MHz). This is the Cell processor's timebase frequency.
+The runtime exposes timebase ticks at **80,000,000 Hz (80 MHz)**, matching
+RPCS3's guest-visible compatibility clock. The physical Cell clock is nominally
+79.8 MHz, but Green reduces the reported frequency to an integer
+ticks-per-microsecond divisor and therefore requires the rounded value.
 
 ```c
-#define PS3_TIMEBASE_FREQUENCY  79800000ULL
+#define PS3_TIMEBASE_FREQUENCY  80000000ULL
 ```
 
 **Platform time sources:**

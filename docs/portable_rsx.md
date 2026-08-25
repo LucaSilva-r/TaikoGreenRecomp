@@ -77,13 +77,34 @@ Wine launcher selects Vulkan directly. Set `TAIKO_GPU_DRIVER=vulkan` or
 SDL is initialized once on the main thread for the union of video, gamepad,
 and audio subsystems. Shutdown stops cellAudio and releases input/render
 resources before the process-wide SDL shutdown. The SDL3 sink accepts only
-complete 256-frame, 48 kHz stereo-float blocks. It prebuffers four blocks,
-resumes playback, and then targets three to four queued blocks using the device
-stream's input queue. A short post-notify handoff delay is retained so the guest
-producer can refill its ring slot before the next consumption; removing that
-delay produces correct average rate but repeated blocks and robotic audio. A
-failed or stalled device enters an explicit absolute-deadline null clock instead
-of running the guest mixer at producer speed.
+complete 256-frame, 48 kHz stereo-float blocks. It prebuffers six blocks and
+then holds the device stream's input queue near that level.
+
+Guest notifications are released on an absolute 5.333 ms block-period deadline,
+not on queue depth alone. A host device typically pulls a whole period at once
+(four blocks on the Pi's ALSA path), and pure queue backpressure hands the guest
+those four notifications back to back. cellAudio's contract identifies the
+target block through a single mutable `readIndexAddr` that the guest re-reads
+per notification, so a burst makes it copy its mix into the same block several
+times and silently destroy the rest -- audible as a song jumping forward while
+the rest of the game keeps real time. The pacing loop pulls its period by
++/-12.5% to walk the queue back after a starvation dip without ever bursting;
+`audio_sink_wait_for_block` remains the hard ceiling and the long-term clock.
+
+`TAIKO_AUDIO_LOOKAHEAD_BLOCKS` (default 2) publishes `readIndexAddr` that many
+blocks ahead of the block being played, so the producer has that many periods to
+complete its event -> SPU mix -> copy round trip instead of the single period the
+PS3 contract allows. `1` restores stock behaviour. Each block is 5.33 ms of
+added output latency; `TAIKO_AUDIO_OFFSET_MS` compensates the song against it.
+
+Consumed blocks are zeroed and tagged, so a block the guest fails to refill in
+time plays as silence rather than repeating the previous ring revolution, and
+the surviving tags are a non-blocking count of missed producer deadlines
+(`UNFILLED`). Do not turn that into a handshake: blocking the device-paced mix
+thread on the guest producer converts a late block into a real device underrun.
+
+A failed or stalled device enters an explicit absolute-deadline null clock
+instead of running the guest mixer at producer speed.
 
 Use these backend-neutral diagnostics for paired WASAPI/SDL3 captures:
 
@@ -96,7 +117,8 @@ RSX_PROFILE=1 ./run-taiko.sh
 ```
 
 `[cellAudio-sink]` reports block rate, queued frames/blocks, complete submission
-failures, and cumulative RACE/STALE counts once per second. The WAV contains the
+failures, dropped guest notifications, SDL device-facing starvation, and
+cumulative RACE/STALE/UNFILLED counts once per second. The WAV contains the
 exact complete blocks accepted by the selected sink, so it can be compared
 directly across `sdl3` and `wasapi`. Validate attract BGM, selection previews, a
 full song, Don-chan voice/VAG effects, transitions, shutdown during playback,

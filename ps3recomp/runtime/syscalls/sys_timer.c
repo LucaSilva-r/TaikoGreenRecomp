@@ -44,13 +44,14 @@ int lv2_deadline_passed(int64_t deadline)
 /* ---------------------------------------------------------------------------
  * PPU timebase (mftb/mftbu) -- THE guest clock.
  *
- * One global monotonic counter scaled to the PS3 timebase (79.8 MHz),
+ * One global monotonic counter scaled to the guest-compatible 80 MHz
+ * timebase,
  * anchored at first use. The old lifter emission was a per-call-site
  * static that advanced 16667 ticks PER READ -- not a clock at all: every
  * guest timing loop (media pacers, throttles, profilers) computed garbage
  * from it, and each call site had a PRIVATE counter that only moved when
  * polled. Overflow-safe split multiply (rem < qpf, so
- * rem * 79.8e6 < ~8e14 << 2^63).
+ * rem * 80e6 < ~8e14 << 2^63).
  * -----------------------------------------------------------------------*/
 uint64_t ppu_timebase_now(void)
 {

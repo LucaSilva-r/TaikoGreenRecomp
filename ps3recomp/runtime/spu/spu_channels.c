@@ -54,6 +54,12 @@ void (*g_spu_out_mbox_hook)(uint32_t group_id, uint32_t spu_id,
  * existing stop-and-signal behaviour. */
 int (*g_spu_stop_hook)(spu_context* ctx, uint32_t stop_code) = 0;
 
+/* Set by Taiko's ATRAC shim while ring tracing is enabled.  Keeping the
+ * watched EA in the generic SPU runtime lets both lifted PPU stores and raw
+ * SPU DMA writes report the same dynamically allocated ring without baking a
+ * title address into either path. */
+uint32_t g_taiko_audio_ring_trace_ea = 0;
+
 void spu_halt(spu_context* ctx)
 {
     (void)ctx;

@@ -115,6 +115,9 @@ s32 cellAudioUnsetPersonalDevice(s32 iPersonalStream);
 typedef void (*CellAudioExternalMixer)(float* stereo, u32 frames);
 void cellAudioSetExternalMixer(CellAudioExternalMixer mixer);
 
+/* Arm the optional sink-side WAV capture at the start of title gameplay. */
+void cellAudioGameplayDumpStart(void);
+
 /* Executable-level shutdown hook. It stops the device-driven clock before
  * renderer/input resources and the process-wide SDL lifecycle are torn down. */
 void cellAudioHostShutdown(void);

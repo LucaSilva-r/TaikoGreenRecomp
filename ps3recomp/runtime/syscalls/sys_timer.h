@@ -25,8 +25,10 @@
 extern "C" {
 #endif
 
-/* PS3 timebase frequency */
-#define PS3_TIMEBASE_FREQ  79800000ULL
+/* Guest-visible timebase frequency. RPCS3 deliberately rounds the nominal
+ * 79.8 MHz Cell clock to 80 MHz; Green relies on that value when reducing the
+ * frequency to an integer ticks-per-microsecond divisor. */
+#define PS3_TIMEBASE_FREQ  80000000ULL
 
 /* The guest mftb/mftbu clock: one global monotonic counter, host time scaled
  * to the PS3 timebase. Called from every lifted mftb site (ppu_lifter.py). */

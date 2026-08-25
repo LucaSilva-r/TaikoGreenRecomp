@@ -83,6 +83,8 @@ typedef struct {
     u8                   consumed_valid[CELL_AUDIO_BLOCK_32];
     u32                  stale_blocks;
     u32                  raced_blocks;
+    u32                  unfilled_blocks;
+    u8                   ever_filled;
     /* For address reporting to guest */
     u64                  port_addr;      /* guest-visible buffer address */
     u64                  read_idx_addr;  /* guest-visible read index address */
@@ -108,7 +110,14 @@ static mutex_t       s_audio_mutex;
 static float s_mix_buffer[CELL_AUDIO_BLOCK_SAMPLES * 2];
 static CellAudioExternalMixer s_external_mixer = NULL;
 static int s_null_audio_clock = 0;
+/* How many blocks ahead of the block being played the guest is told to write.
+ * cellAudio's contract publishes the block that is about to be consumed, which
+ * leaves the producer exactly one 5.33 ms period; that is fine on a PS3 and far
+ * too tight for a loaded Pi. The port ring has 8-32 blocks, so spending a few
+ * of them as slack costs only output latency. */
+static u32 s_read_index_lookahead = 2;
 static int s_sink_initialized = 0;
+static atomic_ullong s_notify_drops;
 /* 0 = live/not started, 1 = shutdown owner active, 2 = stopped. */
 static atomic_int s_host_output_shutdown = 0;
 
@@ -126,6 +135,50 @@ static u64 audio_guest_block_hash(u32 ea, u32 words, int* nonzero)
     return hash;
 }
 
+/* RPCS3 tags six evenly distributed words with negative zero after consuming
+ * a guest port block. Green's bnusCore producer copies every word of the next
+ * 0x2000-byte block, so all six tags changing proves that the event associated
+ * with readIndexAddr was handled before that mutable index advances again.
+ * Tagging every consumed block therefore does two things: a block the guest
+ * failed to refill in time plays as silence instead of repeating the previous
+ * revolution, and its surviving tags are a direct, non-blocking count of missed
+ * producer deadlines ([cellAudio-sink] UNFILLED). */
+#define AUDIO_WRITE_TAG_COUNT 6u
+#define AUDIO_WRITE_TAG       0x80000000u
+
+static void audio_tag_consumed_block(const AudioPortSlot* port, u32 block_idx)
+{
+    const u32 nch = (u32)port->param.nChannel;
+    const u32 words = CELL_AUDIO_BLOCK_SAMPLES * nch;
+    const u32 last = words - 1u;
+    const u32 delta = last / (AUDIO_WRITE_TAG_COUNT - 1u);
+    u32 pos = last % (AUDIO_WRITE_TAG_COUNT - 1u);
+    const u32 ea = (u32)port->port_addr + block_idx * words * 4u;
+
+    /* Match cellAudio's consumed-buffer reset. This also makes a missed guest
+     * fill become silence rather than replaying unrelated PCM from one ring
+     * revolution ago. */
+    memset(vm_base + ea, 0, words * 4u);
+    for (u32 i = 0; i < AUDIO_WRITE_TAG_COUNT; ++i, pos += delta)
+        vm_write32(ea + pos * 4u, AUDIO_WRITE_TAG);
+}
+
+static int audio_guest_block_written(const AudioPortSlot* port, u32 block_idx)
+{
+    const u32 nch = (u32)port->param.nChannel;
+    const u32 words = CELL_AUDIO_BLOCK_SAMPLES * nch;
+    const u32 last = words - 1u;
+    const u32 delta = last / (AUDIO_WRITE_TAG_COUNT - 1u);
+    u32 pos = last % (AUDIO_WRITE_TAG_COUNT - 1u);
+    const u32 ea = (u32)port->port_addr + block_idx * words * 4u;
+
+    for (u32 i = 0; i < AUDIO_WRITE_TAG_COUNT; ++i, pos += delta) {
+        if (vm_read32(ea + pos * 4u) == AUDIO_WRITE_TAG)
+            return 0;
+    }
+    return 1;
+}
+
 void cellAudioSetExternalMixer(CellAudioExternalMixer mixer)
 {
     s_external_mixer = mixer;
@@ -136,6 +189,15 @@ static FILE* s_audio_dump = NULL;
 static uint32_t s_audio_dump_frames = 0;
 static uint32_t s_audio_dump_limit = 0;
 static int s_audio_dump_state = 0; /* 0 armed, 1 writing, 2 done */
+static atomic_int s_audio_gameplay_dump_started;
+
+void cellAudioGameplayDumpStart(void)
+{
+    if (!getenv("TAIKO_AUDIO_GAMEPLAY_DUMP")) return;
+    if (!atomic_exchange_explicit(&s_audio_gameplay_dump_started, 1,
+                                  memory_order_release))
+        fprintf(stderr, "[cellAudio-dump] gameplay capture armed\n");
+}
 
 static void audio_dump_u16(uint16_t value)
 {
@@ -184,6 +246,13 @@ static void audio_dump_begin(const char* path)
 static void audio_dump_submitted(const float* samples, uint32_t frames)
 {
     const char* path = getenv("TAIKO_AUDIO_DUMP");
+    if (!path || !*path) {
+        path = getenv("TAIKO_AUDIO_GAMEPLAY_DUMP");
+        if (!path || !*path ||
+            !atomic_load_explicit(&s_audio_gameplay_dump_started,
+                                  memory_order_acquire))
+            return;
+    }
     if (!path || !*path || s_audio_dump_state == 2) return;
 
     if (s_audio_dump_limit == 0) {
@@ -292,6 +361,24 @@ static void audio_mix_one_block(void)
           }
         }
 
+        /* Only meaningful once every block has been tagged at least once,
+         * and only for a port the guest actually feeds: Green opens two and
+         * fills one, and an untouched port is idle, not a missed deadline. */
+        if (port->read_index >= nblock) {
+            if (audio_guest_block_written(port, block_idx)) {
+                port->ever_filled = 1;
+            } else if (port->ever_filled) {
+                port->unfilled_blocks++;
+                if (port->unfilled_blocks <= 16 ||
+                    (port->unfilled_blocks & 63u) == 0)
+                    fprintf(stderr,
+                            "[cellAudio-producer] UNFILLED port=%d slot=%u read=%llu count=%u\n",
+                            p, block_idx,
+                            (unsigned long long)port->read_index,
+                            port->unfilled_blocks);
+            }
+        }
+
         for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES; s++) {
             float left, right;
             if (nch >= 2) {
@@ -350,6 +437,11 @@ static void audio_mix_one_block(void)
             port->consumed_valid[block_idx] = 1;
         }
 
+        /* Retire this slot. It is not handed back to the guest until
+         * s_read_index_lookahead revolutions from now, so the tags survive
+         * until then and prove whether the guest actually refilled it. */
+        audio_tag_consumed_block(port, block_idx);
+
         /* Advance the host-side counter, but publish the current RING POSITION
          * to the guest.  CellAudio's readIndexAddr is not a monotonically
          * increasing block count: RPCS3 (matching the PS3 contract) stores
@@ -359,8 +451,13 @@ static void audio_mix_one_block(void)
          * made every game-produced mix land far beyond the audio port. */
         port->read_index++;
         port->timestamp_usec = ppu_timebase_usec_now();
+        u32 lookahead = s_read_index_lookahead;
+        if (lookahead > nblock / 2u) lookahead = nblock / 2u;
+        if (lookahead < 1u) lookahead = 1u;
+        const u32 next_block =
+            (u32)((port->read_index + lookahead - 1u) % nblock);
         if (port->read_idx_addr)
-            vm_write64((u32)port->read_idx_addr, port->read_index % nblock);
+            vm_write64((u32)port->read_idx_addr, next_block);
     }
 
     mutex_unlock(&s_audio_mutex);
@@ -415,9 +512,17 @@ static void audio_notify_event_queues(void)
     for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++) {
         if (!s_notify_queues[i].in_use) continue;
         uint32_t qid = sys_event_find_queue_by_key(s_notify_queues[i].key);
-        if (qid)
-            sys_event_queue_push_by_id(qid, s_notify_queues[i].key,
-                                       0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0);
+        if (qid && sys_event_queue_push_by_id(
+                qid, s_notify_queues[i].key,
+                0 /*CELL_AUDIO_EVENT_MIX*/, 0, 0) != 0) {
+            const unsigned long long drops = atomic_fetch_add_explicit(
+                &s_notify_drops, 1, memory_order_relaxed) + 1;
+            if (drops <= 16 || (drops & 63u) == 0)
+                fprintf(stderr,
+                        "[cellAudio-notify] DROP q=%u key=%016llX count=%llu\n",
+                        qid, (unsigned long long)s_notify_queues[i].key,
+                        drops);
+        }
     }
 }
 
@@ -432,10 +537,11 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
     ++*interval_blocks;
     if (now - *interval_start < 1000000000u) return;
 
-    uint32_t races = 0, stale = 0;
+    uint32_t races = 0, stale = 0, unfilled = 0;
     for (int p = 0; p < CELL_AUDIO_PORT_MAX; ++p) {
         races += s_ports[p].raced_blocks;
         stale += s_ports[p].stale_blocks;
+        unfilled += s_ports[p].unfilled_blocks;
     }
     double seconds = (double)(now - *interval_start) / 1000000000.0;
     uint32_t queued = s_null_audio_clock ? 0 : audio_sink_queued_frames();
@@ -444,8 +550,9 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
             "[cellAudio-sink] backend=%s clock=%s rate=%.2f blocks/s "
             "queued=%u frames (%.2f blocks/%.2f ms) "
             "device=%u frames (%.2f ms) visible_bound=%.2f ms "
-            "total=%llu failed=%llu "
-            "RACE=%u STALE=%u\n",
+            "total=%llu failed=%llu notify_drop=%llu "
+            "sink_starve=%llu/%llu_frames "
+            "RACE=%u STALE=%u UNFILLED=%u\n",
             audio_sink_name(), s_null_audio_clock ? "null" : "device",
             (double)*interval_blocks / seconds, queued,
             (double)queued / CELL_AUDIO_BLOCK_SAMPLES,
@@ -453,7 +560,11 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
             device, 1000.0 * device / CELL_AUDIO_SAMPLE_RATE,
             1000.0 * (queued + device) / CELL_AUDIO_SAMPLE_RATE,
             (unsigned long long)total_blocks,
-            (unsigned long long)failed_blocks, races, stale);
+            (unsigned long long)failed_blocks,
+            atomic_load_explicit(&s_notify_drops, memory_order_relaxed),
+            (unsigned long long)audio_sink_starvation_events(),
+            (unsigned long long)audio_sink_starvation_frames(),
+            races, stale, unfilled);
     *interval_start = now;
     *interval_blocks = 0;
 }
@@ -469,6 +580,7 @@ static void audio_mix_thread_run(void)
     uint64_t next_null_period = ps3_host_monotonic_ns();
     uint64_t trace_start = 0, total_blocks = 0, failed_blocks = 0;
     uint32_t trace_blocks = 0;
+    uint64_t next_period = ps3_host_monotonic_ns();
 
     while (s_mix_thread_running) {
         if (!s_null_audio_clock &&
@@ -507,13 +619,35 @@ static void audio_mix_thread_run(void)
             next_null_period += period_ns;
             ps3_host_sleep_until_ns(next_null_period);
         } else {
-            /* Preserve the proven guest-producer handoff from the WASAPI
-             * implementation.  Queue backpressure supplies the long-term
-             * device clock, but without this short post-notify window the host
-             * can consume another ring slot before bnusCore gets scheduled to
-             * refill it.  Average block rate still looks correct while the
-             * repeated slots sound severely robotic. */
-            ps3_host_sleep_ms(2);
+            /* Release exactly one notification per 48 kHz block period.
+             * The device pulls a whole ALSA period (four blocks here) at once,
+             * so pure queue backpressure hands the guest four notifications
+             * back to back. bnusCore reads readIndexAddr once per
+             * notification, mixes, and copies 0x2000 bytes to that block --
+             * given four in a burst it copies into the same block several
+             * times, and the song audio for the other blocks is destroyed.
+             * That is the drift: every burst silently discards a few
+             * milliseconds of song while the beatmap keeps real time.
+             * Absolute deadlines so scheduler latency cannot accumulate; if
+             * the device queue really is short, skip the wait and let queue
+             * backpressure take the clock back. */
+            const uint32_t queued = audio_sink_queued_frames();
+            uint64_t period = period_ns;
+            /* Pacing alone cannot restore the queue after a starvation dip,
+             * and skipping the wait outright would reintroduce the burst.
+             * Pull the period by 12.5% instead: notifications stay at least
+             * 4.6 ms apart while the level walks back into the deadband.
+             * audio_sink_wait_for_block remains the hard ceiling. */
+            if (queued < 2u * CELL_AUDIO_BLOCK_SAMPLES)
+                period -= period_ns / 8u;
+            else if (queued > 6u * CELL_AUDIO_BLOCK_SAMPLES)
+                period += period_ns / 8u;
+            next_period += period;
+            const uint64_t now = ps3_host_monotonic_ns();
+            if (next_period > now)
+                ps3_host_sleep_until_ns(next_period);
+            else
+                next_period = now;
         }
     }
 
@@ -613,7 +747,20 @@ s32 cellAudioInit(void)
     s_audio_dump_frames = 0;
     s_audio_dump_limit = 0;
     s_audio_dump_state = 0;
+    atomic_store_explicit(&s_audio_gameplay_dump_started, 0,
+                          memory_order_relaxed);
     s_null_audio_clock = 0;
+    s_read_index_lookahead = 2;
+    { const char* text = getenv("TAIKO_AUDIO_LOOKAHEAD_BLOCKS");
+      if (text && *text) {
+          const unsigned long parsed = strtoul(text, NULL, 0);
+          if (parsed >= 1 && parsed <= 8) s_read_index_lookahead = (u32)parsed;
+      } }
+    fprintf(stderr, "[cellAudio] guest write lookahead=%u blocks (%.2f ms)\n",
+            s_read_index_lookahead,
+            1000.0 * (double)(s_read_index_lookahead - 1) *
+                CELL_AUDIO_BLOCK_SAMPLES / CELL_AUDIO_SAMPLE_RATE);
+    atomic_store_explicit(&s_notify_drops, 0, memory_order_relaxed);
     atomic_store_explicit(&s_host_output_shutdown, 0, memory_order_release);
     int sink_result = audio_sink_init();
     if (sink_result == AUDIO_SINK_INIT_OK) {
@@ -717,6 +864,8 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
     memset(port->consumed_valid, 0, sizeof(port->consumed_valid));
     port->stale_blocks = 0;
     port->raced_blocks = 0;
+    port->unfilled_blocks = 0;
+    port->ever_filled = 0;
 
     /* Place the audio buffer in GUEST memory so portAddr/readIndexAddr are
      * real guest addresses (the game's mixer -- FMOD here -- writes PCM there

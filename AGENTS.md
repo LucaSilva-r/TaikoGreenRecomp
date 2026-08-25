@@ -413,22 +413,79 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   increment/decrement/invert/wrap operations into its depth-stencil pipeline
   and sets the per-draw reference. Replaying the captured frame restores the
   clean rainbow arch while preserving the life meter and scene beneath it.
-- **Gameplay chart/audio synchronization improved; live delay remains**
-  (updated 2026-08-23). Correcting the call-driven `sys_time_get_system_time`
-  stub to use the shared monotonic 79.8 MHz PPU timebase was necessary but did
-  not change the gameplay rubber-banding. The actual bnusCore synchronization
-  path at `lr=0x00290888` calls `cellAudioGetPortBlockTag`, then
-  `cellAudioGetPortTimestamp`. Both NIDs were unregistered: generic HLE returned
-  fake success without writing either 64-bit out-parameter, so bnusCore used
-  stale stack data as its audio clock. They now implement the RPCS3/PS3 contract
-  using a monotonically increasing consumed-block tag and its corresponding
-  guest-system timestamp, including `CELL_AUDIO_ERROR_TAG_NOT_FOUND` for future
-  tags. `cellGcmGetVBlankCount` was also changed from a query-driven increment
-  to a pure read; only the 60 Hz frame driver advances it. Live Pi gameplay is
-  now smooth enough to reveal a noticeable audio-to-beatmap delay. Do not mark
-  this closed: profile `TAIKO_AUDIO_LATENCY_TRACE`, `TAIKO_AUDIO_SINK_TRACE`,
-  and `TAIKO_AUDIO_RING_TRACE` together and separate guest clock error from
-  queued host-audio latency.
+- **Gameplay chart/audio synchronization is repaired** (2026-08-25; live
+  validated on the Pi). The song used to jump forward in discrete steps and
+  finish seconds before the chart. Root cause was in host cellAudio, not in the
+  chart clock and not in ATRAC.
+
+  `bnusAudioMixerLoop` (`func_0037958C`) services one cellAudio notification at
+  a time: receive event -> `'STAT'` to the raw SPU mixer -> wait `'END '` ->
+  `memcpy(portAddr + (*readIndexAddr) * 0x2000, mixbuf, 0x2000)`. The
+  destination comes from a single **mutable** `readIndexAddr` re-read per
+  notification. The host mix thread was paced only by SDL queue depth, and a
+  host device pulls a whole period at once -- measured `device=1024 frames`,
+  exactly four cellAudio blocks, on the Pi's ALSA path. Queue depth therefore
+  dropped by four blocks at a time and the thread released four notifications
+  back to back, spaced only by the old `TAIKO_AUDIO_HANDOFF_MS` sleep. bnusCore
+  serviced them faster than the index was republished, read the same value for
+  several, and copied its mix into the same block repeatedly. The other blocks'
+  ATRAC source had already been consumed and was destroyed. Every burst
+  discarded a few milliseconds of song while the beatmap kept real time.
+
+  Notifications are now released on an absolute 5.333 ms block-period deadline
+  with a +/-12.5% clock pull that restores the queue after a starvation dip
+  without ever bursting again; `audio_sink_wait_for_block` remains the hard
+  ceiling and the long-term device clock. `TAIKO_AUDIO_LOOKAHEAD_BLOCKS`
+  (default 2) publishes `readIndexAddr` that many blocks ahead of playback, so
+  the producer gets that many periods for its round trip instead of the single
+  period the PS3 contract allows; `1` restores stock behaviour. The SDL sink
+  prebuffers six blocks rather than four, because four was exactly one ALSA
+  period and left zero jitter margin.
+
+  Consumed blocks are zeroed and tagged. A block the guest misses now plays as
+  silence instead of repeating the previous revolution, and the surviving tags
+  count missed producer deadlines (`UNFILLED`). **Do not turn that into a
+  handshake** -- an earlier attempt blocked the device-paced mix thread waiting
+  for the guest and manufactured real device underruns. Green opens two 8ch/
+  8-block ports and only ever fills one, so `UNFILLED` is gated on a port having
+  produced at least one block; read it per port, not in aggregate.
+
+  Measured after the fix, full `SONG_MIKUGV`: source consumed at a flat
+  44100 Hz (per-200-call segments 0.9949--1.0049 of nominal), all 5,642,240
+  frames = 127.942 s of content requested over 129.874 s of wall clock with a
+  *constant* 1.93 s prefill lead, ring consumer advancing exactly 1 per decode
+  across 1623 transitions, `sink_starve=0`, `RACE=0`, `STALE=0`, port-0
+  `UNFILLED=0`, and 60.00 FPS throughout. Two songs played through in sync with
+  no skips.
+
+  Do not infer playback rate from `cellAtracDecode` request cadence over a short
+  window: bnusCore buffers source PCM ahead, so the first checkpoint always
+  shows a slow apparent rate that is really the constant prefill lead. Take
+  segment-to-segment rates instead. A trial 128/125 PCM stretch made
+  `SONG_MIKUH8` audibly low-pitched and finish after the chart; it was removed.
+
+  The guest-visible PPU timebase was also corrected in the same investigation.
+  The runtime exposed the nominal Cell value of 79.8 MHz while RPCS3
+  deliberately exposes 80 MHz. Green's `func_00522AD8` reduces the reported
+  frequency to an integer ticks-per-microsecond divisor: 79.8 MHz becomes 79 and
+  its elapsed-time clock advances at 79.8/79 = 1.0101 times real time, while at
+  80 MHz the divisor is 80 and the conversion is exact. `mftb`,
+  `sys_time_get_system_time` and `sys_time_get_timebase_frequency` now all use
+  80 MHz. `ppu_gcm_pump` also preserves callback debt and feeds Green's binary
+  vblank semaphore at most once per HLE boundary. Neither of these repaired the
+  drift on its own; both are correct and were live in the validated build.
+
+  `TAIKO_AUDIO_LATENCY_TRACE`, `TAIKO_AUDIO_SINK_TRACE`, `TAIKO_AUDIO_RING_TRACE`
+  and `TAIKO_AUDIO_GAMEPLAY_DUMP` (exact sink PCM to WAV, armed at gameplay
+  SetData) provide the combined evidence.
+
+  Do not describe guest `lr=0x00290888` as bnusCore gameplay synchronization.
+  Decompilation proved it is the cellSail movie sound-adapter path
+  (`cellSailSoundAdapterGetFrame` -> `cellAudioAdd*Data` ->
+  `cellAudioGetPortBlockTag`/`cellAudioGetPortTimestamp` ->
+  `cellSailSoundAdapterUpdateAvSync`), and raw-SPU gameplay audio does not call
+  it. The block-tag/timestamp HLE remains correct for future movie playback.
+  `cellGcmGetVBlankCount` is a pure read advanced only by the frame driver.
 - ~~Thread 5 spins on SPU event queue 5.~~ **Fixed 2026-08-12** — that was the
   audio mixer's `'END '` wait never being satisfied. Audio now works; see
   "Audio mixer" below.

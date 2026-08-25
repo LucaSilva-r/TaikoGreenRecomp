@@ -91,7 +91,7 @@ static void sys_ppu_thread_once(ppu_context* ctx)
  * synchronization then pulled the gameplay clock back, producing a repeating
  * fast-forward/snap-back cycle.
  *
- * Derive this API from the same 79.8 MHz clock used by lifted mftb/mftbu so all
+ * Derive this API from the same 80 MHz clock used by lifted mftb/mftbu so all
  * guest clocks remain in one monotonic domain.  Split the conversion to avoid
  * overflowing ticks * 1,000,000 during long runs. */
 static void sys_time_get_system_time(ppu_context* ctx)

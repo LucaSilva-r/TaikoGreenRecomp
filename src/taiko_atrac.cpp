@@ -53,6 +53,8 @@ extern "C" {
 #include <ps3emu/host_platform.h>
 
 extern "C" void ps3_frame_boot_fast_finish(void);
+extern "C" void cellAudioGameplayDumpStart(void);
+extern "C" uint32_t g_taiko_audio_ring_trace_ea;
 
 extern "C" void ps3_hle_register_ctx(uint32_t nid, const char* name,
                                       void (*handler)(ppu_context*));
@@ -113,6 +115,10 @@ struct DecoderState {
     uint64_t stream_read_position = 0;
     uint64_t ready_host_ns = 0;
     uint64_t decode_work_ns = 0;
+    uint64_t first_decode_host_ns = 0;
+    size_t first_decode_cursor = 0;
+    uint32_t decode_calls = 0;
+    bool end_trace_written = false;
     bool first_decode_seen = false;
     bool pcm_cache_hit = false;
 };
@@ -671,6 +677,9 @@ void set_data_and_get_mem_size(ppu_context* ctx)
                                              source, failure);
         if (ready && is_gameplay_song(source, bytes)) {
             state.gameplay_song = true;
+        }
+        if (ready && state.gameplay_song) {
+            cellAudioGameplayDumpStart();
             const uint64_t offset_frames =
                 static_cast<uint64_t>(gameplay_audio_offset_ms()) *
                 state.sample_rate / 1000u;
@@ -834,10 +843,13 @@ void decode(ppu_context* ctx)
      * identifies the observed Taiko decoder owner. */
     const char* audio_spu = std::getenv("TAIKO_AUDIO_SPU");
     const bool has_spu_consumer = audio_spu && audio_spu[0] != '0';
+    uint32_t ring = 0;
+    uint32_t consumer = 0;
     uint32_t produced = 3;
     if (handle >= 8 && vm_read32(handle - 8) == 0x00F9F520u) {
-        const uint32_t ring = vm_read32(handle - 4);
+        ring = vm_read32(handle - 4);
         if (ring && ring < 0xF0000000u) {
+            consumer = vm_read32(ring);
             produced = vm_read32(ring + 0x18);
             if (!has_spu_consumer)
                 vm_write32(ring, produced + 1);
@@ -871,6 +883,8 @@ void decode(ppu_context* ctx)
             if (!state.first_decode_seen) {
                 state.first_decode_seen = true;
                 const uint64_t now_ns = ps3_host_monotonic_ns();
+                state.first_decode_host_ns = now_ns;
+                state.first_decode_cursor = state.decode_cursor;
                 if (std::getenv("TAIKO_AUDIO_LATENCY_TRACE"))
                     std::fprintf(stderr,
                         "[taiko_atrac-latency] first-decode handle=%08X "
@@ -882,6 +896,7 @@ void decode(ppu_context* ctx)
                         static_cast<double>(state.decode_work_ns) / 1000000.0,
                         state.decode_cursor);
             }
+            state.decode_calls++;
             loop_data = state.has_loop;
             const size_t total_frames = state.pcm->size() / kChannels;
             streaming = false;
@@ -912,9 +927,50 @@ void decode(ppu_context* ctx)
                      i < kMaxSamples * kChannels; i++)
                     vm_write32(pcm + i * 4u, 0);
             }
+            const size_t cursor_before = state.decode_cursor;
             state.decode_cursor += decoded_samples;
             end_of_stream = !can_loop && state.decode_cursor >= total_frames;
             decoded = true;
+            if (state.gameplay_song &&
+                std::getenv("TAIKO_AUDIO_RING_TRACE")) {
+                __atomic_store_n(&g_taiko_audio_ring_trace_ea, ring,
+                                 __ATOMIC_RELAXED);
+                const uint32_t slot = produced % 3u;
+                std::fprintf(stderr,
+                    "[taiko_atrac-ring] t=%llu call=%u handle=%08X "
+                    "ring=%08X consumer=%u produced=%u depth=%u slot=%u "
+                    "pcm=%08X source=%zu samples=%u\n",
+                    static_cast<unsigned long long>(ps3_host_monotonic_ns()),
+                    state.decode_calls, handle, ring, consumer, produced,
+                    produced - consumer, slot, pcm, cursor_before,
+                    decoded_samples);
+            }
+            if (state.gameplay_song &&
+                std::getenv("TAIKO_AUDIO_LATENCY_TRACE")) {
+                const uint64_t now_ns = ps3_host_monotonic_ns();
+                const uint64_t elapsed_ns = state.first_decode_host_ns &&
+                    now_ns >= state.first_decode_host_ns
+                    ? now_ns - state.first_decode_host_ns : 0;
+                const size_t source_frames = state.decode_cursor -
+                    std::min(state.first_decode_cursor, state.decode_cursor);
+                if ((state.decode_calls & 255u) == 0 ||
+                    (end_of_stream && !state.end_trace_written)) {
+                    const double elapsed_s =
+                        static_cast<double>(elapsed_ns) / 1000000000.0;
+                    std::fprintf(stderr,
+                        "[taiko_atrac-clock] handle=%08X calls=%u "
+                        "source=%zu/%zu elapsed=%.3fs effective=%.2fHz "
+                        "nominal=%.3fs eos=%u\n",
+                        handle, state.decode_calls, source_frames,
+                        total_frames - state.first_decode_cursor, elapsed_s,
+                        elapsed_s > 0.0 ? source_frames / elapsed_s : 0.0,
+                        static_cast<double>(source_frames) /
+                            std::max(state.sample_rate, 1u),
+                        end_of_stream ? 1u : 0u);
+                    if (end_of_stream)
+                        state.end_trace_written = true;
+                }
+            }
             if (std::getenv("TAIKO_AUDIO_TRACE")) {
                 static unsigned blocks = 0;
                 float peak = 0.0f;

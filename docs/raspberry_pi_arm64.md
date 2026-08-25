@@ -1078,16 +1078,39 @@ path only for future movie-decoder work.
 
 ### Remaining live issues
 
-- Gameplay has a noticeable audio-to-beatmap delay even though rendering and
-  input are now smooth. The 2026-08-23 trace held the required 187.5 blocks/s
-  through the 40--46 FPS screens, and vblank drains accumulated no new backlog,
-  so the song was not playing fast and collapsed visual ticks do not explain
-  that run. The implemented `cellAudioGetPortBlockTag`/`GetPortTimestamp`
-  diagnostics were never called during the play, which is now the clock-path
-  question to resolve. A follow-up run should combine
-  `TAIKO_AUDIO_LATENCY_TRACE=1`, `TAIKO_AUDIO_SINK_TRACE=1`, and
-  `TAIKO_AUDIO_RING_TRACE=1`, then compare the guest block timestamp, host
-  queued audio, and visible chart timing at song start and after a minute.
+- **Gameplay audio drift is repaired** (2026-08-25; live validated). The song
+  jumped forward in discrete steps and finished seconds before the chart. It was
+  neither an incorrect 48 kHz sink rate nor an ATRAC rate error: the fault was
+  that host cellAudio released guest notifications in bursts.
+
+  The Pi's SDL/ALSA device reports `device=1024 frames` -- exactly four
+  cellAudio blocks -- and pulls all four at once. With the mix thread paced only
+  by queue depth, each pull released four notifications back to back.
+  `bnusAudioMixerLoop` re-reads the single mutable `readIndexAddr` per
+  notification, so it copied its 0x2000-byte mix into the same block several
+  times and destroyed the song audio for the rest, after their ATRAC source had
+  already been consumed. Earlier `TAIKO_AUDIO_HANDOFF_MS` tuning only widened
+  the burst spacing; at 5 ms it also cost 20 ms to refill four blocks against
+  roughly 16 ms of queued audio, which is an underrun source in its own right.
+
+  cellAudio now paces notifications on an absolute 5.333 ms block-period
+  deadline with a +/-12.5% clock pull for drift, publishes `readIndexAddr` two
+  blocks ahead of playback (`TAIKO_AUDIO_LOOKAHEAD_BLOCKS`), and prebuffers six
+  blocks instead of four. `TAIKO_AUDIO_HANDOFF_MS` is gone.
+
+  Full `SONG_MIKUGV` after the fix: source consumed at a flat 44100 Hz, all
+  5,642,240 frames (127.942 s) requested over 129.874 s of wall clock with a
+  constant 1.93 s prefill lead, ring consumer advancing exactly 1 per decode
+  over 1623 transitions, `sink_starve=0`, `RACE=0`, `STALE=0`, port-0
+  `UNFILLED=0`, 60.00 FPS throughout, no audible skips. A second song played
+  through in sync as well.
+
+  Two traps worth keeping. `UNFILLED` must be read per port: Green opens two
+  8ch/8-block ports and only ever fills one, so the aggregate is dominated by
+  the idle one. And do not convert the block tagging into a producer handshake
+  -- blocking the device-paced mix thread on the guest turns a late block into a
+  real device underrun.
+
 - Song Select remains fill-bound after dense constant uploads and the exact
   character-filter changes. Its remaining display work is spread across
   hundreds of blended sprite quads; draw-call batching was slower, and the

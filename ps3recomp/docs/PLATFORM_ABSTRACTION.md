@@ -206,7 +206,7 @@ host_addr.sin_addr.s_addr = ps3_addr->sin_addr; // Already in network byte order
 |-----------|---------|-------|
 | **Get current time** | `QueryPerformanceCounter(&li)` | `clock_gettime(CLOCK_MONOTONIC, &ts)` |
 | **Get frequency** | `QueryPerformanceFrequency(&li)` | Fixed: 1,000,000,000 (nanoseconds) |
-| **Convert to PS3 ticks** | `ticks = li.QuadPart * 79800000 / freq` | `ticks = ts.tv_sec * 79800000 + ts.tv_nsec * 79800000 / 1000000000` |
+| **Convert to PS3 ticks** | `ticks = li.QuadPart * 80000000 / freq` | `ticks = ts.tv_sec * 80000000 + ts.tv_nsec * 80000000 / 1000000000` |
 
 ### Wall Clock Time
 

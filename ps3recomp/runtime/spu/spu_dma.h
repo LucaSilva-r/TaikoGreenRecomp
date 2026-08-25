@@ -30,6 +30,7 @@ extern "C" {
 #endif
 
 extern uint8_t* vm_base;
+extern uint32_t g_taiko_audio_ring_trace_ea;
 #ifdef _WIN32
 extern int vm_range_is_accessible(uint32_t addr, uint32_t size);
 #endif
@@ -198,6 +199,55 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
     uint8_t* ls_ptr = &spu->ls[lsa];
     uint8_t* ea_ptr = vm_base + (uint32_t)ea; /* PS3 uses 32-bit effective addresses for SPU DMA */
 
+    /* A gameplay ATRAC ring counter occasionally advances by three while the
+     * mixer fetches only one PCM tail.  Catch any raw-SPU DMA that overlaps the
+     * live ring and show the counter bytes before the memcpy changes them. */
+    if (spu->image_id == 5 && mfc_is_put(cmd)) {
+        const uint32_t ring = __atomic_load_n(
+            &g_taiko_audio_ring_trace_ea, __ATOMIC_RELAXED);
+        const uint32_t e = (uint32_t)ea;
+        if (ring && e < ring + 0x40u && (uint64_t)e + size > ring) {
+            uint32_t old_consumer = 0, new_consumer = 0;
+            if (e <= ring && (uint64_t)e + size >= (uint64_t)ring + 4u) {
+                const uint32_t o = ring - e;
+                old_consumer = ((uint32_t)ea_ptr[o] << 24) |
+                    ((uint32_t)ea_ptr[o + 1] << 16) |
+                    ((uint32_t)ea_ptr[o + 2] << 8) | ea_ptr[o + 3];
+                new_consumer = ((uint32_t)ls_ptr[o] << 24) |
+                    ((uint32_t)ls_ptr[o + 1] << 16) |
+                    ((uint32_t)ls_ptr[o + 2] << 8) | ls_ptr[o + 3];
+            }
+            if (new_consumer != old_consumer) {
+                static uint32_t last_ring = 0;
+                static uint32_t last_consumer = 0;
+                static uint64_t last_change_ns = 0;
+                const uint64_t now = ps3_host_monotonic_ns();
+                if (last_ring != ring) {
+                    last_ring = ring;
+                    last_consumer = old_consumer;
+                    last_change_ns = 0;
+                }
+                const uint64_t interval_ns = last_change_ns
+                    ? now - last_change_ns : 0;
+                const int discontinuity = old_consumer != last_consumer ||
+                    new_consumer != old_consumer + 1u;
+                const int timing_anomaly = interval_ns &&
+                    (interval_ns < 35000000ull || interval_ns > 70000000ull);
+                if (discontinuity || timing_anomaly) {
+                    fprintf(stderr,
+                        "[audio-ring-spu-anomaly] t=%llu lr=%05X ea=%08X "
+                        "size=%u ring=%08X consumer=%u->%u previous=%u "
+                        "interval=%.3fms discontinuity=%d\n",
+                        (unsigned long long)now, spu->gpr[0]._u32[0], e,
+                        size, ring, old_consumer, new_consumer, last_consumer,
+                        interval_ns / 1000000.0, discontinuity);
+                }
+                last_consumer = new_consumer;
+                last_change_ns = now;
+            }
+        }
+    }
+
 #ifdef SPU_DMA_LOG
     { extern int g_spu_dma_log; if (g_spu_dma_log-- > 0)
         fprintf(stderr, "[spu-dma] %s lsa=0x%05X ea=0x%08X size=%u\n",
@@ -241,6 +291,25 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                   shape_count);
           }
       } }
+    /* Sequence-level trace for bnusCore's shared source-buffer fetch helper.
+     * ATRAC3plus publishes 2048-frame PCM blocks through a three-slot guest
+     * ring.  Shape-deduplicated tracing proves the call path exists but cannot
+     * reveal a skipped slot; record every source GET so its EA progression can
+     * be paired with [taiko_atrac-ring] producer/consumer publications.  This
+     * is intentionally separate from the low-volume ring anomaly trace: the
+     * voice loop can issue millions of GETs and logging them perturbs audio
+     * scheduling on the Pi. */
+    { static int ring_trace = -1;
+      if (ring_trace < 0)
+          ring_trace = getenv("TAIKO_AUDIO_PCM_GET_TRACE") ? 1 : 0;
+      if (ring_trace && spu->image_id == 5 && mfc_is_get(cmd) &&
+          spu->gpr[0]._u32[0] == 0x0000F310u) {
+          static uint64_t pcm_gets = 0;
+          fprintf(stderr,
+              "[audio-spu-pcm-get] t=%llu get=%llu ea=%08X lsa=%05X size=%u\n",
+              (unsigned long long)ps3_host_monotonic_ns(),
+              (unsigned long long)++pcm_gets, (uint32_t)ea, lsa, size);
+      } }
     /* Peak of the mixer's own output block, measured in local store before it
      * reaches main memory.  cellAudio's [cellAudio-pcm] peak only proves the
      * port is silent; this says whether the SPU produced silence in the first
@@ -277,8 +346,30 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
         /* GET: main memory -> local store */
         memcpy(ls_ptr, ea_ptr, size);
     } else if (mfc_is_put(cmd)) {
-        /* PUT: local store -> main memory */
-        memcpy(ea_ptr, ls_ptr, size);
+        /* PUT: local store -> main memory.  The raw Taiko mixer publishes a
+         * three-slot ATRAC ring with a 16-byte DMA from call site E5A0:
+         * consumer at +0 followed by three slot-state words.  A plain memcpy
+         * can expose consumer first.  The PPU decoder then reuses that slot
+         * while the trailing DMA stores are still landing, and the stale slot
+         * state can make the next mixer pass consume two entries at once.
+         * This was measured in exact sink PCM as periodic 2048-sample jumps
+         * and in the live ring as consumer 860->862 / 1570->1572.
+         *
+         * Publish the state words first and the consumer word last with
+         * release ordering.  The path is deliberately restricted to the
+         * exact mixer image/call-site/size; all other SPU DMAs retain their
+         * ordinary byte-copy semantics. */
+        if (spu->image_id == 5 && spu->gpr[0]._u32[0] == 0x0000E5A0u &&
+            size == 16u && (((uintptr_t)ea_ptr & 3u) == 0)) {
+            uint32_t consumer_word;
+            memcpy(ea_ptr + 4, ls_ptr + 4, 12);
+            __atomic_thread_fence(__ATOMIC_RELEASE);
+            memcpy(&consumer_word, ls_ptr, sizeof(consumer_word));
+            __atomic_store_n((uint32_t*)ea_ptr, consumer_word,
+                             __ATOMIC_RELEASE);
+        } else {
+            memcpy(ea_ptr, ls_ptr, size);
+        }
         /* POISON-DMA detector: does an SPU PUT write the singleton object region
          * (0x40003000-0x40005000) or carry the 0xC708C708 poison? This host-side
          * memcpy bypasses vm_write32/AWATCH, so it's the prime suspect for the

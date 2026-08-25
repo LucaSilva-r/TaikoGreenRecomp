@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #if defined(PS3RECOMP_AUDIO_BACKEND_SDL3)
 
@@ -13,13 +14,44 @@
 #include <SDL3/SDL.h>
 
 #define AUDIO_FRAME_BYTES (2u * (uint32_t)sizeof(float))
-#define SDL_PREBUFFER_BLOCKS 4u
-#define SDL_LOW_WATER_BLOCKS 3u
+/* The device pulls a whole ALSA period at once (four 256-frame blocks on the
+ * Pi), so a four-block queue has exactly zero margin for scheduler jitter.
+ * Each extra block is 5.33 ms of output latency; TAIKO_AUDIO_OFFSET_MS
+ * compensates the song against it. */
+#define SDL_DEFAULT_PREBUFFER_BLOCKS 6u
+#define SDL_MAX_PREBUFFER_BLOCKS 32u
 
 static SDL_AudioStream* s_sdl_stream;
 static uint32_t s_sdl_submitted_blocks;
 static uint32_t s_sdl_device_buffer_frames;
-static int s_sdl_resumed;
+static uint32_t s_sdl_prebuffer_blocks = SDL_DEFAULT_PREBUFFER_BLOCKS;
+static atomic_int s_sdl_resumed;
+static atomic_ullong s_sdl_starvation_events;
+static atomic_ullong s_sdl_starvation_frames;
+
+static void SDLCALL sdl_audio_get_callback(void* userdata,
+                                           SDL_AudioStream* stream,
+                                           int additional_amount,
+                                           int total_amount)
+{
+    (void)userdata;
+    (void)stream;
+    (void)total_amount;
+    /* SDL calls this immediately before its playback device obtains data.
+     * If additional input is required and we do not supply it synchronously,
+     * that device pull will be short and SDL will pad it with silence.  Do not
+     * log on the real-time audio thread; publish counters for cellAudio's
+     * once-per-second trace instead. */
+    if (atomic_load_explicit(&s_sdl_resumed, memory_order_relaxed) &&
+        additional_amount > 0) {
+        atomic_fetch_add_explicit(&s_sdl_starvation_events, 1,
+                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(
+            &s_sdl_starvation_frames,
+            (unsigned long long)additional_amount / AUDIO_FRAME_BYTES,
+            memory_order_relaxed);
+    }
+}
 
 const char* audio_sink_name(void) { return "sdl3"; }
 
@@ -31,13 +63,22 @@ int audio_sink_init(void)
         return AUDIO_SINK_INIT_FAILED;
     }
 
+    s_sdl_prebuffer_blocks = SDL_DEFAULT_PREBUFFER_BLOCKS;
+    const char* prebuffer_text = getenv("TAIKO_AUDIO_PREBUFFER_BLOCKS");
+    if (prebuffer_text && *prebuffer_text) {
+        const unsigned long parsed = strtoul(prebuffer_text, NULL, 0);
+        if (parsed >= 2u && parsed <= SDL_MAX_PREBUFFER_BLOCKS)
+            s_sdl_prebuffer_blocks = (uint32_t)parsed;
+    }
+
     const SDL_AudioSpec spec = {
         .format = SDL_AUDIO_F32,
         .channels = 2,
         .freq = CELL_AUDIO_SAMPLE_RATE,
     };
     s_sdl_stream = SDL_OpenAudioDeviceStream(
-        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
+        sdl_audio_get_callback, NULL);
     if (!s_sdl_stream) {
         fprintf(stderr, "[cellAudio] SDL_OpenAudioDeviceStream failed: %s\n",
                 SDL_GetError());
@@ -45,7 +86,9 @@ int audio_sink_init(void)
     }
     s_sdl_submitted_blocks = 0;
     s_sdl_device_buffer_frames = 0;
-    s_sdl_resumed = 0;
+    atomic_store_explicit(&s_sdl_resumed, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_sdl_starvation_events, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_sdl_starvation_frames, 0, memory_order_relaxed);
     SDL_AudioDeviceID device = SDL_GetAudioStreamDevice(s_sdl_stream);
     SDL_AudioSpec device_spec = {0};
     int device_frames = 0;
@@ -56,10 +99,11 @@ int audio_sink_init(void)
     const char* device_name = SDL_GetAudioDeviceName(device);
     fprintf(stderr,
             "[cellAudio] SDL3 sink opened (driver=%s device=%s, "
-            "48000 Hz stereo float, 4-block prebuffer, "
+            "48000 Hz stereo float, %u-block prebuffer, "
             "device=%d Hz/%u frames=%.2f ms)\n",
             driver ? driver : "unknown",
             device_name ? device_name : "unknown",
+            s_sdl_prebuffer_blocks,
             device_spec.freq, s_sdl_device_buffer_frames,
             device_spec.freq > 0
                 ? 1000.0 * s_sdl_device_buffer_frames / device_spec.freq : 0.0);
@@ -72,7 +116,7 @@ void audio_sink_shutdown(void)
     s_sdl_stream = NULL;
     s_sdl_submitted_blocks = 0;
     s_sdl_device_buffer_frames = 0;
-    s_sdl_resumed = 0;
+    atomic_store_explicit(&s_sdl_resumed, 0, memory_order_relaxed);
 }
 
 uint32_t audio_sink_queued_frames(void)
@@ -87,11 +131,23 @@ uint32_t audio_sink_device_buffer_frames(void)
     return s_sdl_device_buffer_frames;
 }
 
+uint64_t audio_sink_starvation_events(void)
+{
+    return atomic_load_explicit(&s_sdl_starvation_events,
+                                memory_order_relaxed);
+}
+
+uint64_t audio_sink_starvation_frames(void)
+{
+    return atomic_load_explicit(&s_sdl_starvation_frames,
+                                memory_order_relaxed);
+}
+
 int audio_sink_wait_for_block(uint32_t frames, const volatile int* running)
 {
     (void)frames;
     if (!s_sdl_stream) return 0;
-    if (!s_sdl_resumed) return 1;
+    if (!atomic_load_explicit(&s_sdl_resumed, memory_order_relaxed)) return 1;
 
     const uint64_t deadline = ps3_host_monotonic_ns() + 1000000000u;
     while (*running) {
@@ -102,7 +158,8 @@ int audio_sink_wait_for_block(uint32_t frames, const volatile int* running)
             return 0;
         }
         uint32_t queued = (uint32_t)bytes / AUDIO_FRAME_BYTES;
-        if (queued <= SDL_LOW_WATER_BLOCKS * CELL_AUDIO_BLOCK_SAMPLES)
+        if (queued <=
+            (s_sdl_prebuffer_blocks - 1u) * CELL_AUDIO_BLOCK_SAMPLES)
             return 1;
         if (ps3_host_monotonic_ns() >= deadline) {
             fprintf(stderr, "[cellAudio] SDL audio queue stopped consuming\n");
@@ -123,13 +180,14 @@ int audio_sink_submit(const float* stereo_samples, uint32_t frames)
         return 0;
     }
     ++s_sdl_submitted_blocks;
-    if (!s_sdl_resumed && s_sdl_submitted_blocks >= SDL_PREBUFFER_BLOCKS) {
+    if (!atomic_load_explicit(&s_sdl_resumed, memory_order_relaxed) &&
+        s_sdl_submitted_blocks >= s_sdl_prebuffer_blocks) {
         if (!SDL_ResumeAudioStreamDevice(s_sdl_stream)) {
             fprintf(stderr, "[cellAudio] SDL_ResumeAudioStreamDevice failed: %s\n",
                     SDL_GetError());
             return 0;
         }
-        s_sdl_resumed = 1;
+        atomic_store_explicit(&s_sdl_resumed, 1, memory_order_relaxed);
     }
     return 1;
 }
@@ -237,6 +295,9 @@ uint32_t audio_sink_device_buffer_frames(void)
     return s_buffer_frames;
 }
 
+uint64_t audio_sink_starvation_events(void) { return 0; }
+uint64_t audio_sink_starvation_frames(void) { return 0; }
+
 int audio_sink_wait_for_block(uint32_t frames, const volatile int* running)
 {
     if (!s_client || !s_render) return 0;
@@ -273,6 +334,8 @@ int audio_sink_submit(const float* samples, uint32_t frames)
 { (void)samples; (void)frames; return 1; }
 uint32_t audio_sink_queued_frames(void) { return 0; }
 uint32_t audio_sink_device_buffer_frames(void) { return 0; }
+uint64_t audio_sink_starvation_events(void) { return 0; }
+uint64_t audio_sink_starvation_frames(void) { return 0; }
 
 #else
 #error "No supported ps3recomp audio backend selected"
