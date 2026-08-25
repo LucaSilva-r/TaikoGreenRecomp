@@ -241,6 +241,21 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
                         (unsigned long long)now, spu->gpr[0]._u32[0], e,
                         size, ring, old_consumer, new_consumer, last_consumer,
                         interval_ns / 1000000.0, discontinuity);
+                    /* The published header is {consumer, then one
+                     * consumed-sample counter per ring slot}. A slot is retired
+                     * when its counter reaches 2048, so a skip shows up as a
+                     * counter jumping to 2048 from well short of it while the
+                     * consumer advances by two -- that slot was discarded
+                     * unplayed. Dumping both sides of the transfer is what
+                     * distinguishes that from a torn or stale write. */
+                    const uint32_t r9 = spu->gpr[9]._u32[0];
+                    fprintf(stderr, "  header old:");
+                    for (uint32_t i = 0; i < 16 && i < size; ++i)
+                        fprintf(stderr, " %02X", ea_ptr[i]);
+                    fprintf(stderr, "\n  header new:");
+                    for (uint32_t i = 0; i < 16 && i < size; ++i)
+                        fprintf(stderr, " %02X", ls_ptr[i]);
+                    fprintf(stderr, "\n  r9=%05X lsa=%05X\n", r9, lsa);
                 }
                 last_consumer = new_consumer;
                 last_change_ns = now;

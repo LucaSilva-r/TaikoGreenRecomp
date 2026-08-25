@@ -114,9 +114,15 @@ static int s_null_audio_clock = 0;
 /* How many blocks ahead of the block being played the guest is told to write.
  * cellAudio's contract publishes the block that is about to be consumed, which
  * leaves the producer exactly one 5.33 ms period; that is fine on a PS3 and far
- * too tight for a loaded Pi. The port ring has 8-32 blocks, so spending a few
- * of them as slack costs only output latency. */
-static u32 s_read_index_lookahead = 2;
+ * too tight for a loaded host. The port ring has 8-32 blocks, so spending a few
+ * of them as slack costs only output latency.
+ *
+ * Four measured clean where two did not: on a contended desktop, two left 2.1%
+ * of blocks unfilled and several ATRAC slot discards per song, four left zero
+ * of both. It also closes the mixer's slot-discard window -- the producer now
+ * publishes far enough ahead that the SPU never advances onto a slot whose
+ * consumed-counter has not been reset. Clamped to nBlock/2. */
+static u32 s_read_index_lookahead = 4;
 static int s_sink_initialized = 0;
 static atomic_ullong s_notify_drops;
 /* Notifications pushed while the previous one was still unserviced. Each of
@@ -843,7 +849,7 @@ s32 cellAudioInit(void)
     atomic_store_explicit(&s_gameplay_audible_reported, 0,
                           memory_order_relaxed);
     s_null_audio_clock = 0;
-    s_read_index_lookahead = 2;
+    s_read_index_lookahead = 4;
     { const char* text = getenv("TAIKO_AUDIO_LOOKAHEAD_BLOCKS");
       if (text && *text) {
           const unsigned long parsed = strtoul(text, NULL, 0);

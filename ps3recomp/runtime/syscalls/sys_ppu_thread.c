@@ -6,6 +6,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>   /* getenv (else return value truncated to int on x64) */
+#ifndef _WIN32
+#include <sched.h>
+#include <errno.h>
+#include <sys/resource.h>
+#endif
 #include <ps3emu/host_platform.h>
 #ifdef _WIN32
 #include <process.h>   /* _beginthreadex: CRT-aware thread creation (raw CreateThread
@@ -109,6 +114,30 @@ static void* ppu_host_thread_proc(void* param)
      * reservations and ABA slips through for it (see ppu_loader.cpp). */
     { extern void ppu_resv_register(ppu_context*); ppu_resv_register(&info->ctx); }
 
+#ifndef _WIN32
+    /* Relative priority without privileges. SCHED_FIFO for the title's urgent
+     * threads needs RLIMIT_RTPRIO, which an ordinary desktop session does not
+     * have; lowering one's own priority needs nothing. So when the title marks
+     * a thread as clearly non-urgent, step it down and let the lv2-priority-0
+     * audio threads win the contended case by default. Must run on the thread
+     * itself: setpriority(PRIO_PROCESS, 0, ...) is per-thread on Linux. */
+    { static int nice_step = -2;
+      if (nice_step == -2) {
+          const char* text = getenv("TAIKO_GUEST_NICE_STEP");
+          /* On by default. The two deadlines are not symmetric: the chart
+           * reads sys_time_get_system_time, so a late frame costs frames but
+           * the chart re-derives its position from real time and catches up.
+           * Audio has no recovery path -- a missed block or ATRAC slot is
+           * destroyed content and a permanent offset, because nothing resyncs
+           * audio to the chart. So when the host is short of CPU, the renderer
+           * is the right thing to slow down. 0 disables. */
+          nice_step = text ? atoi(text) : 5;
+      }
+      if (nice_step > 0 && info->priority >= 1000)
+          (void)setpriority(PRIO_PROCESS, 0, nice_step);
+    }
+#endif
+
     fprintf(stderr, "[THREAD %llu] host thread started, host_tid=%lu name=\"%s\" entry=0x%08llX\n",
             (unsigned long long)info->ctx.thread_id,
             (unsigned long)ps3_host_thread_id(), info->name,
@@ -205,6 +234,58 @@ void ydkj_release_pending_threads(void)
 }
 #else
 void ydkj_release_pending_threads(void) {}
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Guest thread priority
+ *
+ * lv2 priority runs 0 (highest) to 3071 (lowest). The runtime used to parse it,
+ * log it and discard it. Green asks for 0 on exactly three threads --
+ * bnusCoreUpdateThread, bnusCoreDecoderServerThread and the short-lived
+ * bnusCoreDecoderAT3PThread -- and 499 or worse on everything else, so that one
+ * value is the title telling us which threads must not miss their deadline.
+ *
+ * They must not: the raw SPU mixer gives the PPU one 5.33 ms block period to
+ * refill a retired ATRAC slot, and when it is late the mixer finds the slot's
+ * consumed-counter still full, declares it exhausted and discards it. That is
+ * 46 ms of song destroyed, permanently, because nothing resyncs audio to the
+ * chart. On a contended host it happened several times per song; on an idle one
+ * not at all.
+ *
+ * Raise only the threads the title itself marked urgent. SCHED_FIFO needs
+ * RLIMIT_RTPRIO, so failure is normal and non-fatal -- report it once and carry
+ * on at default scheduling rather than pretending it worked.
+ * -----------------------------------------------------------------------*/
+#ifndef _WIN32
+static void ppu_thread_apply_priority(pthread_t thread, int32_t priority,
+                                      const char* name)
+{
+    static int threshold = -1;
+    if (threshold < 0) {
+        const char* text = getenv("TAIKO_GUEST_RT_PRIO");
+        /* Default: only lv2 priority 0. -1 disables entirely. */
+        threshold = text ? atoi(text) : 0;
+    }
+    if (threshold < 0 || priority > threshold) return;
+
+    struct sched_param param;
+    memset(&param, 0, sizeof(param));
+    param.sched_priority = 2;   /* just above ordinary work, well below 99 */
+    const int rc = pthread_setschedparam(thread, SCHED_FIFO, &param);
+
+    static int reported_ok = 0, reported_fail = 0;
+    if (rc == 0) {
+        if (!reported_ok++)
+            fprintf(stderr, "[SYS] guest priority %d -> SCHED_FIFO:2 (\"%s\")\n",
+                    priority, name ? name : "");
+    } else if (!reported_fail++) {
+        fprintf(stderr,
+                "[SYS] guest priority %d: SCHED_FIFO unavailable (%s); audio "
+                "threads stay at default scheduling. Grant RLIMIT_RTPRIO "
+                "(ulimit -r / LimitRTPRIO=) to enable it.\n",
+                priority, strerror(rc));
+    }
+}
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -387,6 +468,8 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     int rc = pthread_create(&t->host_thread, &attr, ppu_host_thread_proc, t);
     pthread_attr_destroy(&attr);
+    if (rc == 0)
+        ppu_thread_apply_priority(t->host_thread, priority, t->name);
     if (rc != 0) {
         t->state = PPU_THREAD_STATE_FREE;
         if (t->completion_initialized) {

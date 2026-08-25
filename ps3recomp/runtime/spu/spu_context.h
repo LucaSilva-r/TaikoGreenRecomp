@@ -267,11 +267,43 @@ static inline void spu_ls_write128(spu_context* ctx, uint32_t lsa, u128 val)
             watch = e ? 1 : 0;
         }
         if (watch && addr >= lsa && addr < lsa + 16) {
+            /* SPU_LSWATCH_STEP=1: report only writes where the watched word
+             * does not advance by exactly one. A counter updated every few
+             * milliseconds exhausts an unconditional log long before the rare
+             * bad update, which is the only one worth seeing. */
+            static int step_only = -1;
+            if (step_only < 0) {
+                const char* e = getenv("SPU_LSWATCH_STEP");
+                step_only = (e && e[0] && e[0] != '0') ? 1 : 0;
+            }
+            const uint32_t word = val._u32[(addr - lsa) >> 2];
+            static uint32_t prev_word = 0;
+            static int have_prev = 0;
+            const int anomalous = have_prev && word != prev_word &&
+                                 word != prev_word + 1u;
             static unsigned n = 0;
-            if (n++ < 40)
-                fprintf(stderr, "[ls-write] addr=%05X pc=%05X lr=%05X = %08X %08X %08X %08X\n",
+            /* Keep the preceding write so the anomaly can be read against the
+             * per-slot counters as they stood one pass earlier. */
+            static uint32_t prev_line[4];
+            static uint32_t prev_pc, prev_lr;
+            if ((!step_only || anomalous) && n++ < (step_only ? 400u : 40u)) {
+                if (step_only)
+                    fprintf(stderr,
+                            "[ls-write] PREV pc=%05X lr=%05X = %08X %08X %08X %08X\n",
+                            prev_pc, prev_lr, prev_line[0], prev_line[1],
+                            prev_line[2], prev_line[3]);
+                fprintf(stderr,
+                        "[ls-write] addr=%05X pc=%05X lr=%05X prev=%u new=%u "
+                        "delta=%d = %08X %08X %08X %08X\n",
                         addr, ctx->pc, ctx->gpr[0]._u32[0] & 0x3FFFF,
+                        have_prev ? prev_word : 0u, word,
+                        have_prev ? (int)(word - prev_word) : 0,
                         val._u32[0], val._u32[1], val._u32[2], val._u32[3]);
+            }
+            for (int q = 0; q < 4; ++q) prev_line[q] = val._u32[q];
+            prev_pc = ctx->pc; prev_lr = ctx->gpr[0]._u32[0] & 0x3FFFF;
+            prev_word = word;
+            have_prev = 1;
         }
     }
     uint8_t* p = &ctx->ls[lsa];
