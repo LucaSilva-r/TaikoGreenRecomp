@@ -115,6 +115,10 @@ s32 cellAudioUnsetPersonalDevice(s32 iPersonalStream);
 typedef void (*CellAudioExternalMixer)(float* stereo, u32 frames);
 void cellAudioSetExternalMixer(CellAudioExternalMixer mixer);
 
+/* Publish a port's queued ring position as its notification is delivered to
+ * the guest (called from sys_event_queue_receive). */
+void cellAudioNotifyDelivered(u64 source);
+
 /* Arm the optional sink-side WAV capture at the start of title gameplay. */
 void cellAudioGameplayDumpStart(void);
 

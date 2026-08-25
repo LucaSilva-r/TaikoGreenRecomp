@@ -483,6 +483,17 @@ int64_t sys_event_queue_receive(ppu_context* ctx)
      * buffer, so callers that read the registers saw stale values -> the SPURS
      * dispatch failed its source check and re-received forever, never dispatching
      * handler B. Set the registers. */
+    /* cellAudio publishes its ring position here rather than when it consumes
+     * a block. readIndexAddr is a single mutable location that the guest mixer
+     * re-reads once per notification; advancing it on the audio thread let the
+     * guest's read land after a later update, so it wrote that newer block and
+     * orphaned the one it was actually notified for -- measured on the Pi as a
+     * block permanently unwritten while the three after it were already filled.
+     * Writing it as the event is handed over closes that window: the guest
+     * cannot observe an index newer than its own notification. */
+    { extern __attribute__((weak)) void cellAudioNotifyDelivered(uint64_t source);
+      if (cellAudioNotifyDelivered) cellAudioNotifyDelivered(evt.source); }
+
     ctx->gpr[4] = evt.source;
     ctx->gpr[5] = evt.data1;
     ctx->gpr[6] = evt.data2;

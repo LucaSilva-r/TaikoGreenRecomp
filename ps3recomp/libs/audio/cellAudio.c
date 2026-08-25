@@ -85,6 +85,12 @@ typedef struct {
     u32                  stale_blocks;
     u32                  raced_blocks;
     u32                  unfilled_blocks;
+    /* Ring positions notified but not yet handed to the guest. Published from
+     * sys_event_queue_receive so the guest reads the index belonging to its own
+     * notification; see cellAudioNotifyDelivered. */
+    u32                  pending_index[CELL_AUDIO_BLOCK_32];
+    u32                  pending_head, pending_tail, pending_count;
+    u32                  pending_dropped;
     u8                   ever_filled;
     /* For address reporting to guest */
     u64                  port_addr;      /* guest-visible buffer address */
@@ -193,6 +199,33 @@ static int audio_guest_block_written(const AudioPortSlot* port, u32 block_idx)
             return 0;
     }
     return 1;
+}
+
+/* Called from sys_event_queue_receive as an event is delivered to the guest.
+ * If it is one of our notifications, publish the ring position that belongs to
+ * it. The guest mixer reads readIndexAddr immediately after this returns, so it
+ * observes exactly its own block and can never skip one. */
+void cellAudioNotifyDelivered(u64 source)
+{
+    int match = 0;
+    for (int i = 0; i < CELL_AUDIO_MAX_NOTIFY_EVENT_QUEUES; i++)
+        if (s_notify_queues[i].in_use && s_notify_queues[i].key == source) {
+            match = 1; break;
+        }
+    if (!match) return;
+
+    mutex_lock(&s_audio_mutex);
+    for (int p = 0; p < CELL_AUDIO_PORT_MAX; p++) {
+        AudioPortSlot* port = &s_ports[p];
+        if (!port->in_use || !port->running || !port->read_idx_addr) continue;
+        if (port->pending_count == 0) continue;
+        const u32 nblock = (u32)port->param.nBlock;
+        const u32 idx = port->pending_index[port->pending_head];
+        port->pending_head = (port->pending_head + 1u) % nblock;
+        port->pending_count--;
+        vm_write64((u32)port->read_idx_addr, idx);
+    }
+    mutex_unlock(&s_audio_mutex);
 }
 
 void cellAudioSetExternalMixer(CellAudioExternalMixer mixer)
@@ -444,13 +477,34 @@ static void audio_mix_one_block(void)
             } else if (port->ever_filled) {
                 port->unfilled_blocks++;
                 if (port->unfilled_blocks <= 512 ||
-                    (port->unfilled_blocks & 15u) == 0)
+                    (port->unfilled_blocks & 15u) == 0) {
+                    /* Which blocks does the guest actually hold written right
+                     * now? If it wrote some other slot twice instead of this
+                     * one, that slot shows written while this one still has
+                     * its tags -- that is a duplicate readIndexAddr read, not
+                     * a missed deadline. 'w' written, '.' still tagged, and
+                     * the block we told it to fill is bracketed. */
+                    char map[CELL_AUDIO_BLOCK_32 * 3 + 1];
+                    const u32 told = (u32)((port->read_index +
+                        (s_read_index_lookahead > nblock - 2u
+                             ? nblock - 2u : s_read_index_lookahead) - 1u)
+                        % nblock);
+                    unsigned o = 0;
+                    for (u32 b = 0; b < nblock && o + 3 < sizeof(map); ++b) {
+                        const char c = audio_guest_block_written(port, b)
+                            ? 'w' : '.';
+                        if (b == told) { map[o++] = '['; map[o++] = c;
+                                         map[o++] = ']'; }
+                        else map[o++] = c;
+                    }
+                    map[o] = '\0';
                     fprintf(stderr,
                             "[cellAudio-producer] UNFILLED port=%d slot=%u "
-                            "read=%llu count=%u capture_t=%.3f\n",
+                            "read=%llu count=%u told=%u map=%s\n",
                             p, block_idx,
                             (unsigned long long)port->read_index,
-                            port->unfilled_blocks, audio_capture_seconds());
+                            port->unfilled_blocks, told, map);
+                }
             }
         }
 
@@ -537,8 +591,17 @@ static void audio_mix_one_block(void)
         if (lookahead < 1u) lookahead = 1u;
         const u32 next_block =
             (u32)((port->read_index + lookahead - 1u) % nblock);
-        if (port->read_idx_addr)
-            vm_write64((u32)port->read_idx_addr, next_block);
+        /* Queue it; sys_event_queue_receive publishes it as the guest picks up
+         * the matching notification. If the guest is far enough behind that the
+         * queue fills, drop the oldest -- those blocks are already played. */
+        if (port->pending_count == nblock) {
+            port->pending_head = (port->pending_head + 1u) % nblock;
+            port->pending_count--;
+            port->pending_dropped++;
+        }
+        port->pending_index[port->pending_tail] = next_block;
+        port->pending_tail = (port->pending_tail + 1u) % nblock;
+        port->pending_count++;
     }
 
     mutex_unlock(&s_audio_mutex);
@@ -981,6 +1044,8 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
     port->raced_blocks = 0;
     port->unfilled_blocks = 0;
     port->ever_filled = 0;
+    port->pending_head = port->pending_tail = port->pending_count = 0;
+    port->pending_dropped = 0;
 
     /* Place the audio buffer in GUEST memory so portAddr/readIndexAddr are
      * real guest addresses (the game's mixer -- FMOD here -- writes PCM there
