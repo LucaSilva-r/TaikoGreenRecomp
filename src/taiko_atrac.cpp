@@ -55,6 +55,8 @@ extern "C" {
 extern "C" void ps3_frame_boot_fast_finish(void);
 extern "C" void cellAudioGameplayDumpStart(void);
 extern "C" uint32_t g_taiko_audio_ring_trace_ea;
+extern "C" void spu_taiko_audio_ring_register(uint32_t ea);
+extern "C" void spu_taiko_audio_ring_unregister(uint32_t ea);
 
 extern "C" void ps3_hle_register_ctx(uint32_t nid, const char* name,
                                       void (*handler)(ppu_context*));
@@ -98,6 +100,7 @@ struct DecoderState {
         std::make_shared<std::vector<float>>();
     size_t decode_cursor = 0; // position reported through cellAtracDecode
     uint32_t sample_rate = 0;
+    uint32_t ring_ea = 0;
     size_t gameplay_offset_frames = 0;
     bool gameplay_song = false;
     int32_t loop_num = 0;
@@ -705,9 +708,12 @@ void set_data_and_get_mem_size(ppu_context* ctx)
         {
             std::lock_guard<std::mutex> lock(g_decoder_mutex);
             auto previous = g_decoders.find(handle);
-            if (previous != g_decoders.end() && previous->second.loop_num_set) {
-                state.loop_num = previous->second.loop_num;
-                state.loop_num_set = true;
+            if (previous != g_decoders.end()) {
+                if (previous->second.loop_num_set) {
+                    state.loop_num = previous->second.loop_num;
+                    state.loop_num_set = true;
+                }
+                spu_taiko_audio_ring_unregister(previous->second.ring_ea);
             }
             state.data_ea = data;
             state.buffer_bytes = buffer;
@@ -865,6 +871,11 @@ void decode(ppu_context* ctx)
     {
         std::lock_guard<std::mutex> lock(g_decoder_mutex);
         auto it = g_decoders.find(handle);
+        if (it != g_decoders.end() && ring && it->second.ring_ea != ring) {
+            spu_taiko_audio_ring_unregister(it->second.ring_ea);
+            it->second.ring_ea = ring;
+            spu_taiko_audio_ring_register(ring);
+        }
         if (it != g_decoders.end() && it->second.pcm->empty()) {
             /* Decoder failure compatibility path. This is never used while a
              * successful in-process decode is pending: SetData does not return
@@ -931,19 +942,24 @@ void decode(ppu_context* ctx)
             state.decode_cursor += decoded_samples;
             end_of_stream = !can_loop && state.decode_cursor >= total_frames;
             decoded = true;
-            if (state.gameplay_song &&
-                std::getenv("TAIKO_AUDIO_RING_TRACE")) {
+            if (state.gameplay_song) {
+                /* The SPU DMA publisher uses this exact address to distinguish
+                 * the gameplay three-slot descriptor from short-effect headers
+                 * emitted by the same raw-SPU call site.  Keep it available in
+                 * normal runs; the environment variable controls logging only. */
                 __atomic_store_n(&g_taiko_audio_ring_trace_ea, ring,
-                                 __ATOMIC_RELAXED);
-                const uint32_t slot = produced % 3u;
-                std::fprintf(stderr,
-                    "[taiko_atrac-ring] t=%llu call=%u handle=%08X "
-                    "ring=%08X consumer=%u produced=%u depth=%u slot=%u "
-                    "pcm=%08X source=%zu samples=%u\n",
-                    static_cast<unsigned long long>(ps3_host_monotonic_ns()),
-                    state.decode_calls, handle, ring, consumer, produced,
-                    produced - consumer, slot, pcm, cursor_before,
-                    decoded_samples);
+                                 __ATOMIC_RELEASE);
+                if (std::getenv("TAIKO_AUDIO_RING_TRACE")) {
+                    const uint32_t slot = produced % 3u;
+                    std::fprintf(stderr,
+                        "[taiko_atrac-ring] t=%llu call=%u handle=%08X "
+                        "ring=%08X consumer=%u produced=%u depth=%u slot=%u "
+                        "pcm=%08X source=%zu samples=%u\n",
+                        static_cast<unsigned long long>(ps3_host_monotonic_ns()),
+                        state.decode_calls, handle, ring, consumer, produced,
+                        produced - consumer, slot, pcm, cursor_before,
+                        decoded_samples);
+                }
             }
             if (state.gameplay_song &&
                 std::getenv("TAIKO_AUDIO_LATENCY_TRACE")) {
@@ -1021,7 +1037,10 @@ void delete_decoder(ppu_context* ctx)
     const uint32_t handle = static_cast<uint32_t>(ctx->gpr[3]);
     std::lock_guard<std::mutex> lock(g_decoder_mutex);
     auto it = g_decoders.find(handle);
-    if (it != g_decoders.end()) g_decoders.erase(it);
+    if (it != g_decoders.end()) {
+        spu_taiko_audio_ring_unregister(it->second.ring_ea);
+        g_decoders.erase(it);
+    }
     return_ok(ctx);
 }
 

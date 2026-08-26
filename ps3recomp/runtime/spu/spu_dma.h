@@ -31,6 +31,7 @@ extern "C" {
 
 extern uint8_t* vm_base;
 extern uint32_t g_taiko_audio_ring_trace_ea;
+int spu_taiko_audio_ring_is_registered(uint32_t ea);
 #ifdef _WIN32
 extern int vm_range_is_accessible(uint32_t addr, uint32_t size);
 #endif
@@ -155,6 +156,66 @@ static inline int mfc_is_fence(uint32_t cmd)
     return (cmd & 0x02) != 0; /* fence variants have bit 1 set */
 }
 
+static inline uint32_t mfc_load_be32(const uint8_t* p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+/* bnusCore shares this three-slot header between its PPU ATRAC producer and
+ * raw-SPU mixer:
+ *
+ *   +00 consumer (SPU)       +04..+0c consumed samples (SPU while active,
+ *   +18 produced (PPU)                    PPU when recycling a future slot)
+ *
+ * The mixer GETs the whole descriptor, works from that LS snapshot for one
+ * 2048-frame output period, then PUTs the first 16 bytes.  Meanwhile its
+ * 0x7651 callback can wake the PPU decoder, which resets a newly free slot and
+ * publishes `produced`.  Copying all 16 stale LS bytes back loses that reset.
+ * On the following period the slot is advertised as produced but still reads
+ * consumed==limit, so the lifted mixer retires it without playing it.
+ *
+ * Publish only state the SPU snapshot actually owns.  `consumer` is always
+ * SPU-owned.  If the post-mix consumer still names a slot that was present in
+ * the SPU's own produced snapshot, that active counter is SPU-owned too.  All
+ * other counters describe retired/future slots and stay in main memory, where
+ * a concurrent PPU recycle may already have reset them. */
+static inline uint32_t mfc_publish_taiko_audio_header(uint8_t* ea_ptr,
+                                                       const uint8_t* ls_ptr)
+{
+    const uint32_t consumer = mfc_load_be32(ls_ptr);
+    const uint32_t snapshot_produced = mfc_load_be32(ls_ptr + 0x18);
+    const uint32_t active_mask = consumer < snapshot_produced
+        ? 1u << (consumer % 3u) : 0u;
+    uint32_t preserved_reset_mask = 0;
+
+    if (active_mask) {
+        const uint32_t counter_offset = 4u + (consumer % 3u) * 4u;
+        memcpy(ea_ptr + counter_offset, ls_ptr + counter_offset, 4);
+    }
+
+    /* Expose the exact race to the live diagnostic.  A future slot reset from
+     * exhausted to zero/one after this SPU snapshot is what the old whole-copy
+     * path destroyed. */
+    for (uint32_t slot = 0; slot < 3; ++slot) {
+        if (active_mask & (1u << slot))
+            continue;
+        const uint32_t offset = 4u + slot * 4u;
+        const uint32_t current = mfc_load_be32(ea_ptr + offset);
+        const uint32_t snapshot = mfc_load_be32(ls_ptr + offset);
+        if (current <= 1u && snapshot >= 2048u)
+            preserved_reset_mask |= 1u << slot;
+    }
+
+    /* Make the active-counter update visible before consumer.  Store the raw
+     * four BE bytes atomically; their host-endian numeric value is irrelevant. */
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    uint32_t consumer_word;
+    memcpy(&consumer_word, ls_ptr, sizeof(consumer_word));
+    __atomic_store_n((uint32_t*)ea_ptr, consumer_word, __ATOMIC_RELEASE);
+    return preserved_reset_mask;
+}
+
 /*
  * Execute a single DMA transfer between local store and main memory.
  * Returns 0 on success, -1 on error.
@@ -199,24 +260,15 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
     uint8_t* ls_ptr = &spu->ls[lsa];
     uint8_t* ea_ptr = vm_base + (uint32_t)ea; /* PS3 uses 32-bit effective addresses for SPU DMA */
 
-    /* A gameplay ATRAC ring counter occasionally advances by three while the
-     * mixer fetches only one PCM tail.  Catch any raw-SPU DMA that overlaps the
-     * live ring and show the counter bytes before the memcpy changes them. */
+    /* Catch a registered ATRAC header publication whose consumer advances by
+     * more than one and show both sides before the transfer changes them. */
     if (spu->image_id == 5 && mfc_is_put(cmd)) {
-        const uint32_t ring = __atomic_load_n(
-            &g_taiko_audio_ring_trace_ea, __ATOMIC_RELAXED);
         const uint32_t e = (uint32_t)ea;
-        if (ring && e < ring + 0x40u && (uint64_t)e + size > ring) {
+        const uint32_t ring = spu_taiko_audio_ring_is_registered(e) ? e : 0;
+        if (ring && size >= 4u) {
             uint32_t old_consumer = 0, new_consumer = 0;
-            if (e <= ring && (uint64_t)e + size >= (uint64_t)ring + 4u) {
-                const uint32_t o = ring - e;
-                old_consumer = ((uint32_t)ea_ptr[o] << 24) |
-                    ((uint32_t)ea_ptr[o + 1] << 16) |
-                    ((uint32_t)ea_ptr[o + 2] << 8) | ea_ptr[o + 3];
-                new_consumer = ((uint32_t)ls_ptr[o] << 24) |
-                    ((uint32_t)ls_ptr[o + 1] << 16) |
-                    ((uint32_t)ls_ptr[o + 2] << 8) | ls_ptr[o + 3];
-            }
+            old_consumer = mfc_load_be32(ea_ptr);
+            new_consumer = mfc_load_be32(ls_ptr);
             if (new_consumer != old_consumer) {
                 static uint32_t last_ring = 0;
                 static uint32_t last_consumer = 0;
@@ -361,27 +413,40 @@ static inline int mfc_do_transfer(spu_context* spu, uint32_t lsa, uint64_t ea,
         /* GET: main memory -> local store */
         memcpy(ls_ptr, ea_ptr, size);
     } else if (mfc_is_put(cmd)) {
-        /* PUT: local store -> main memory.  The raw Taiko mixer publishes a
-         * three-slot ATRAC ring with a 16-byte DMA from call site E5A0:
-         * consumer at +0 followed by three slot-state words.  A plain memcpy
-         * can expose consumer first.  The PPU decoder then reuses that slot
-         * while the trailing DMA stores are still landing, and the stale slot
-         * state can make the next mixer pass consume two entries at once.
-         * This was measured in exact sink PCM as periodic 2048-sample jumps
-         * and in the live ring as consumer 860->862 / 1570->1572.
-         *
-         * Publish the state words first and the consumer word last with
-         * release ordering.  The path is deliberately restricted to the
-         * exact mixer image/call-site/size; all other SPU DMAs retain their
-         * ordinary byte-copy semantics. */
+        /* PUT: local store -> main memory.  This title-specific exception is
+         * restricted to the exact mixer image/call-site/header size.  See the
+         * helper above for why a whole-header copy is not ownership-safe. */
         if (spu->image_id == 5 && spu->gpr[0]._u32[0] == 0x0000E5A0u &&
             size == 16u && (((uintptr_t)ea_ptr & 3u) == 0)) {
-            uint32_t consumer_word;
-            memcpy(ea_ptr + 4, ls_ptr + 4, 12);
-            __atomic_thread_fence(__ATOMIC_RELEASE);
-            memcpy(&consumer_word, ls_ptr, sizeof(consumer_word));
-            __atomic_store_n((uint32_t*)ea_ptr, consumer_word,
-                             __ATOMIC_RELEASE);
+            if (spu_taiko_audio_ring_is_registered((uint32_t)ea) &&
+                (uint64_t)lsa + 0x1cu <= SPU_LS_SIZE &&
+                mfc_ea_range_committed(ea, 0x1cu)) {
+                const uint32_t preserved =
+                    mfc_publish_taiko_audio_header(ea_ptr, ls_ptr);
+                if (preserved && getenv("TAIKO_AUDIO_RING_TRACE")) {
+                    static uint32_t s_preserved_reports = 0;
+                    const uint32_t report = __atomic_fetch_add(
+                        &s_preserved_reports, 1u, __ATOMIC_RELAXED);
+                    if (report < 32)
+                        fprintf(stderr,
+                            "[audio-ring-spu-merge] ring=%08X consumer=%u "
+                            "snapshot_produced=%u current_produced=%u "
+                            "preserved_reset_mask=%X\n",
+                            (uint32_t)ea, mfc_load_be32(ls_ptr),
+                            mfc_load_be32(ls_ptr + 0x18),
+                            mfc_load_be32(ea_ptr + 0x18), preserved);
+                }
+            } else {
+                /* E5A0 also publishes headers for short sound effects whose
+                 * descriptors are not the three-slot ATRAC layout. Keep the
+                 * previous state-first publication for those. */
+                uint32_t consumer_word;
+                memcpy(ea_ptr + 4, ls_ptr + 4, 12);
+                __atomic_thread_fence(__ATOMIC_RELEASE);
+                memcpy(&consumer_word, ls_ptr, sizeof(consumer_word));
+                __atomic_store_n((uint32_t*)ea_ptr, consumer_word,
+                                 __ATOMIC_RELEASE);
+            }
         } else {
             memcpy(ea_ptr, ls_ptr, size);
         }

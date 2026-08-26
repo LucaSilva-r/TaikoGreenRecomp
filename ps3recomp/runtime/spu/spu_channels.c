@@ -54,11 +54,58 @@ void (*g_spu_out_mbox_hook)(uint32_t group_id, uint32_t spu_id,
  * existing stop-and-signal behaviour. */
 int (*g_spu_stop_hook)(spu_context* ctx, uint32_t stop_code) = 0;
 
-/* Set by Taiko's ATRAC shim while ring tracing is enabled.  Keeping the
- * watched EA in the generic SPU runtime lets both lifted PPU stores and raw
- * SPU DMA writes report the same dynamically allocated ring without baking a
- * title address into either path. */
+/* Set by Taiko's ATRAC shim for the active gameplay decoder.  Keeping the
+ * watched EA in the generic SPU runtime lets the raw-SPU publisher distinguish
+ * the three-slot song ring from short-effect headers emitted at the same DMA
+ * call site.  TAIKO_AUDIO_RING_TRACE controls diagnostics, not publication. */
 uint32_t g_taiko_audio_ring_trace_ea = 0;
+
+/* Every cellAtrac decoder owns a three-slot PCM ring, including selection
+ * previews. E5A0 also handles unrelated short-effect descriptors, so the DMA
+ * ownership merge must be gated by exact decoder-provided addresses rather
+ * than by image/call site alone. The fixed table is deliberately lock-free:
+ * decoder creation/deletion is rare, while the SPU publisher reads it every
+ * output period. */
+#define TAIKO_AUDIO_RING_REGISTRY_CAPACITY 64u
+static uint32_t s_taiko_audio_ring_registry[TAIKO_AUDIO_RING_REGISTRY_CAPACITY];
+
+void spu_taiko_audio_ring_register(uint32_t ea)
+{
+    if (!ea) return;
+    for (uint32_t i = 0; i < TAIKO_AUDIO_RING_REGISTRY_CAPACITY; ++i) {
+        uint32_t current = __atomic_load_n(&s_taiko_audio_ring_registry[i],
+                                           __ATOMIC_ACQUIRE);
+        if (current == ea) return;
+        if (current == 0u && __atomic_compare_exchange_n(
+                &s_taiko_audio_ring_registry[i], &current, ea, 0,
+                __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+            return;
+    }
+    if (getenv("TAIKO_AUDIO_RING_TRACE"))
+        fprintf(stderr, "[audio-ring-registry] full; dropped=%08X\n", ea);
+}
+
+void spu_taiko_audio_ring_unregister(uint32_t ea)
+{
+    if (!ea) return;
+    for (uint32_t i = 0; i < TAIKO_AUDIO_RING_REGISTRY_CAPACITY; ++i) {
+        uint32_t expected = ea;
+        if (__atomic_compare_exchange_n(&s_taiko_audio_ring_registry[i],
+                &expected, 0u, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+            return;
+    }
+}
+
+int spu_taiko_audio_ring_is_registered(uint32_t ea)
+{
+    if (!ea) return 0;
+    for (uint32_t i = 0; i < TAIKO_AUDIO_RING_REGISTRY_CAPACITY; ++i) {
+        if (__atomic_load_n(&s_taiko_audio_ring_registry[i],
+                            __ATOMIC_ACQUIRE) == ea)
+            return 1;
+    }
+    return 0;
+}
 
 void spu_halt(spu_context* ctx)
 {

@@ -717,6 +717,13 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING AND NOT WIN32)
+    add_executable(taiko_audio_header_tests
+        "tests/taiko_audio_header_tests.c")
+    target_include_directories(taiko_audio_header_tests PRIVATE
+        "${PS3RECOMP_DIR}/runtime/spu"
+        "${PS3RECOMP_DIR}/include")
+    add_test(NAME taiko_audio_header_tests COMMAND taiko_audio_header_tests)
+
     add_executable(rsx_render_batch_tests
         "tests/rsx_render_batch_tests.c"
         "${PS3RECOMP_DIR}/libs/video/rsx_render_batch.c"

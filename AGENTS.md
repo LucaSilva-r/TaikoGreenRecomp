@@ -480,11 +480,13 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   blind counter reading zero was once mistaken for a clean run. Read it per
   port: Green opens two 8ch/8-block ports and only ever fills one.
 
-  **Open: the SPU mixer retires an ATRAC ring slot twice**, discarding 46 ms of
-  song each time. Measured on the Pi at about two events per gameplay song, a
-  permanent ~90 ms drift, and confirmed by aligning the sink capture against an
-  FFmpeg decode: the two `[audio-ring-spu-anomaly]` events at consumer slots
-  1815 and 2401 land exactly on the two waveform steps at 84 s and 111 s.
+  **4. Stale raw-SPU header publication is repaired** (2026-08-26; Pi live
+  validated). The mixer used to retire an ATRAC ring slot twice, discarding
+  46 ms of song each time. It was measured at about two events per gameplay
+  song, a permanent ~90 ms drift, and confirmed by aligning the sink capture
+  against an FFmpeg decode: the two `[audio-ring-spu-anomaly]` events at
+  consumer slots 1815 and 2401 landed exactly on the waveform steps at 84 s
+  and 111 s.
 
   Signature under `TAIKO_AUDIO_RING_TRACE=1`: a per-slot counter jumping to 2048
   from ~1924--1949 while the consumer advances by two, at a normal 42.6 ms slot
@@ -493,11 +495,45 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   from the next slot, and if that slot's counter has not been reset yet it reads
   as exhausted and is retired unplayed.
 
-  The relevant code is `func_00000420` (counter += step, signed `cgt` against
-  the limit, store, branch to `0x568` when exhausted) and `func_00000568`
-  (consumer += 1, then signal the PPU with selector `0x7651` via
-  `func_0000F908`). The counters are maintained entirely SPU-side -- every write
-  comes from `pc=0x00420` -- so the PPU only publishes `produced`.
+  The arithmetic was not the fault. The mixer GETs the complete descriptor to
+  local store, processes one output period from that snapshot, retires a slot,
+  and signals the PPU through selector `0x7651`. The PPU decoder can then reset
+  the newly reusable future-slot counter and publish `produced` before the SPU
+  executes its delayed 16-byte header PUT. That PUT copied the old exhausted
+  counter back over the PPU reset. The next mixer pass consequently saw a
+  produced slot whose counter was already 2048 and retired it unplayed. The
+  earlier state-before-consumer store ordering could not repair this ownership
+  race because it still wrote all three stale counters.
+
+  `mfc_publish_taiko_audio_header` now publishes only state owned by the SPU
+  snapshot: the consumer plus the active counter, if that slot existed in the
+  snapshot's `produced` range. Retired and future counters stay in main memory,
+  preserving a concurrent PPU recycle. The ATRAC shim registers the exact ring
+  EA of every live decoder (gameplay, previews and jingles) and unregisters it
+  on decoder replacement/deletion, so the exception is not selected by SPU
+  image/call site alone. This qualification is essential: E5A0 also publishes
+  headers for short voice/effect sources with a different descriptor layout.
+  An initial broad version read gameplay-only fields from those headers and
+  crashed on entering Player Entry. Unregistered E5A0 PUTs retain the previous
+  state-before-consumer publication.
+
+  Live Pi validation completed all of `SONG_MIKUGV`: 5,642,240 frames =
+  127.942 s of source over 129.866 s from first to final decode, retaining a
+  constant 1.924 s prefill lead. Both former failure slots passed with
+  `audio-ring-spu-anomaly=0`, `sink_starve=0`, `RACE=0`, `STALE=0`,
+  `UNFILLED=0`, and no process restart. A full 7,979,008-frame `SONG_MIKUSE`
+  run was clean too. Extending the address qualification to selection-preview
+  rings also survived the 389-draw Pi Song Select scene at ~53 FPS: the sink
+  stayed at 187.5 blocks/s with six queued blocks and zero starvation, race,
+  stale or unfilled reports, and the previously obvious audible skips were not
+  reproduced. `[audio-ring-spu-merge]` reports a live stale reset that the
+  ownership merge preserved; none of these validation runs happened to hit
+  that narrow race window.
+
+  The relevant lifted code remains `func_00000420` (counter += step, signed
+  `cgt` against the limit, store, branch to `0x568` when exhausted) and
+  `func_00000568` (consumer += 1, then signal the PPU with selector `0x7651`
+  through `func_0000F908`).
 
   Two hypotheses already **disproved**, do not repeat:
   - *A lifter register bug clobbering the step.* `func_00000420` does overwrite
@@ -509,11 +545,6 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
     lwmutex, the event queues and the SPU `'STAT'`/`'END '` round trip, all held
     by ordinary-priority threads. Adding `nice` on the renderer instead
     collapsed the Pi to 2.5 FPS. Scheduling is not a usable lever here.
-
-  Next step is the SPU instruction tracer (lift with `--trace`, then
-  `SPU_TRACE_FILE`/`SPU_TRACE_TRIG`/`SPU_TRACE_LIMIT`) around a double retire;
-  static reading of the lifted control flow between `0x420`, `0x468`, `0x568`
-  and `0x5A4` has not been conclusive.
 
   Measurement rig, which is what made these findable:
   `TAIKO_AUDIO_GAMEPLAY_DUMP` writes the exact PCM handed to the device from
