@@ -179,8 +179,9 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
 - `TAIKO_PERF_OVERLAY=1` — show only the one-second FPS average as a number in
   a built-in 5x7 digit font. F9 toggles it through both SDL keyboard events and
   the direct-KMS evdev path. Windowed output uses a 128x40 texture and GPU quad;
-  direct KMS copies the opaque 20 KiB badge into the scanout buffer after the
-  existing frame memcpy, avoiding a sixth full-target V3D render pass.
+  direct KMS composites the small badge into the scanout buffer after the
+  existing frame memcpy, avoiding a sixth full-target V3D render pass. The
+  transient audio-offset pill uses the same CPU/KMS route.
 - `RSX_FPS_LOG=1`, `RSX_FRAME_PACING_TRACE=1` — log frame rate and pacing.
 - `RSX_TEXTURE_CACHE_LIMIT=16..1024` — shrink the sampled-texture cache to
   force continuous eviction; how the long-session white-rectangle bug was
@@ -199,8 +200,9 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   `TAIKO_KMS_ATOMIC_WAIT` switches are diagnostic serialization controls.
   `TAIKO_KMS_ZERO_COPY=1` uses the pinned SDL dma-buf extension and three
   direct-scanout textures; it removes the download/CPU copy and is faster on
-  the measured Pi. The FPS badge writes only its 20 KiB opaque rectangle into
-  a mapped linear export after the render fence and costs about 0.01 ms/frame.
+  the measured Pi. The FPS badge writes only its 20 KiB rectangle into a mapped
+  linear export after the render fence and costs about 0.01 ms/frame; transient
+  title/status pills use the same path with straight-alpha blending.
   `TAIKO_KMS_ZERO_COPY_LINEAR=1` is modifier-selection diagnosis only.
 - `TAIKO_GPU_CHARACTER_FILTER_SCISSOR=N` applies an exact-shader-guarded crop
   to the 600x600 character outline/composite chain. Do not deploy `N=128`: it
@@ -466,8 +468,11 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   44100 Hz, all 5,642,240 frames = 127.942 s of content over 129.874 s of wall
   clock with a *constant* 1.93 s prefill lead, `sink_starve=0`, `RACE=0`,
   `STALE=0`, `UNFILLED=0`, 60.00 FPS. The residual offset is plain output
-  latency (lookahead + sink queue + device buffer) and `TAIKO_AUDIO_OFFSET_MS`
-  compensates it; the value is device-specific and deliberately not compiled in.
+  latency (lookahead + sink queue + device buffer). F3/F4 adjust its persistent
+  compensation by -/+5 ms (Shift makes that 1 ms), while F5 only displays it;
+  `TAIKO_AUDIO_OFFSET_MS` remains a
+  startup override. The value is device-specific and deliberately not compiled
+  in.
 
   **Still imperfect:** heavy scenes (Song Select, loading) can still disturb
   audio on the Pi. Gameplay is clean.
@@ -629,12 +634,16 @@ at about 60 Hz in this path, so a captured hit normally reaches its next USIO
 report within one 16.7 ms frame. Live play testing described the inputs as
 feeling great.
 
-Native direct KMS uses `SDL_VIDEODRIVER=offscreen`, which has no window and
-therefore produces no SDL keyboard events. The SDL GPU backend now opens
-keyboard-like `/dev/input/event*` devices nonblocking when KMS is active and
-feeds them into the same atomic latch; SDL still owns gamepads. The `taikos`
-service must retain its `input` supplementary group. Live validation opened
-`/dev/input/event0` and restored coin, menu, drum, and F10 capture keys.
+Native direct KMS uses `SDL_VIDEODRIVER=offscreen`, so the SDL GPU backend owns
+keyboard input through a dedicated `poll()`-blocked evdev thread. It opens all
+keyboard-like `/dev/input/event*` devices, merges per-device held state, and
+uses `inotify` for hotplug rather than stalling on periodic event-node scans.
+KMS ignores SDL's delayed duplicate keyboard events; SDL still owns gamepads.
+The `taikos` service must retain its `input` supplementary group and
+`LimitRTPRIO=1`, which is used only by this input thread. Live validation used
+both `/dev/input/event0` and `/dev/input/event3`; kernel-read latency was
+0.015--0.049 ms and coin, menu, drum, F3--F5 offset, and F10 capture keys work
+from either device.
 
 Each latched drum hit becomes an analog peak followed by a short linear decay,
 which resembles the arcade piezo sensor and keeps it visible across multiple
@@ -985,15 +994,25 @@ decoded songs indefinitely; `TAIKO_AUDIO_PCM_CACHE_MB` selects 64--8192 MiB.
 The source-location index uses the stable first 4 KiB of the RIFF, allowing the
 8 KiB preview prefix and the larger gameplay prefix to resolve to the same NUB.
 
-`TAIKO_AUDIO_OFFSET_MS` advances only gameplay `SONG_*` PCM by the requested
-number of milliseconds (0--1000, default 0). It does not affect catalog
-previews, jingles, voices, or VAG effects. Positive values compensate for host
-output latency by beginning the song farther into its decoded PCM; the value is
-converted with the source sample rate and is reapplied if gameplay resets its
-decoder to sample zero. Native Linux play testing found 60 ms comfortable on
-the current PipeWire/device setup, but that is deliberately not compiled into
-the executable or launcher because the appropriate value is output-device
-specific. Example:
+Gameplay `SONG_*` audio compensation is persistent and adjustable from either
+keyboard: F3 decreases it by 5 ms, F4 increases it by 5 ms, holding Shift makes
+either step 1 ms, and F5 displays the current value without changing it. The range is 0--1000 ms and the
+default is zero. A temporary overlay shows
+the saved value. It is stored in
+`$XDG_CONFIG_HOME/taikorecomp/audio_offset_ms` (or
+`$HOME/.config/taikorecomp/audio_offset_ms`) and does not affect catalog
+previews, jingles, voices, or VAG effects.
+
+Positive values advance audible music to compensate for host output latency.
+A newly opened song begins that far into its decoded PCM; a change made during
+gameplay is applied live by consuming PCM at no more than one percent faster or
+slower until it reaches the new offset. A 5 ms step settles in about half a
+second without a hard cursor jump/click. Decoder resets reapply the current
+value. Native Linux play testing found 60 ms comfortable on the current
+PipeWire/device setup, but no value is compiled into the executable or launcher
+because it is output-device specific. `TAIKO_AUDIO_OFFSET_MS` remains a startup
+override for scripted tests; if it is set on every launch it takes precedence
+over the saved file. Example:
 
 ```sh
 TAIKO_AUDIO_OFFSET_MS=60 ./run-taiko-linux.sh

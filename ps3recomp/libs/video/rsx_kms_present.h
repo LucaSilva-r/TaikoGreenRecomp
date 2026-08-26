@@ -22,8 +22,8 @@ int rsx_kms_present_init(unsigned source_width, unsigned source_height);
 int rsx_kms_present_active(void);
 
 /* pixels are tightly packed R8G8B8A8 rows of the source size. An optional
- * opaque RGBA overlay is copied into the source-sized scanout image after the
- * frame copy; pass NULL/zeroes when unused. The optional timings split waiting
+ * straight-alpha RGBA overlay is blended into the source-sized scanout image
+ * after the frame copy; pass NULL/zeroes when unused. The optional timings split waiting
  * for a scanout buffer, copying into it and issuing the KMS plane update. They
  * are measured here, where those operations actually happen, rather than
  * around the asynchronous GPU download submit. */

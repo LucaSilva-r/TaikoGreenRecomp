@@ -74,6 +74,10 @@ RestartSec=5s
 KillSignal=SIGINT
 TimeoutStopSec=10s
 Nice=-5
+# Permit only the dedicated, poll-blocked evdev thread to use the lowest FIFO
+# priority. Audio/guest/render threads remain on normal CFS scheduling; making
+# those realtime caused priority inversion and catastrophic Pi performance.
+LimitRTPRIO=1
 LimitNOFILE=524288
 
 [Install]

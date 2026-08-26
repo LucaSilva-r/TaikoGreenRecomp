@@ -6,6 +6,7 @@
 #include "rsx_render_batch.h"
 #include "rsx_vp_decompiler.h"
 #include "rsx_fp_decompiler.h"
+#include "ps3emu/host_platform.h"
 #ifdef RSX_SDL_KMS_PRESENT
 #include "rsx_kms_present.h"
 #endif
@@ -33,8 +34,12 @@ extern bool SDL_GPUVulkanExportTextureDMABUF(
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
-#include <sys/stat.h>
+#include <poll.h>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 #endif
 
@@ -52,6 +57,8 @@ extern bool SDL_GPUVulkanExportTextureDMABUF(
 #define FPS_OVERLAY_WIDTH 128
 #define FPS_OVERLAY_HEIGHT 40
 #define FPS_GLYPH_SCALE 4
+#define KMS_CPU_OVERLAY_MAX_WIDTH 512
+#define KMS_CPU_OVERLAY_MAX_HEIGHT 128
 #define SDL_RSX_CHARACTER_OUTLINE_FP UINT64_C(0x5DCB6858EEF22438)
 #define SDL_RSX_CHARACTER_MESH_OUTLINE_SKINNED_FP \
     UINT64_C(0x5B1C86BF4A00F902)
@@ -105,9 +112,16 @@ typedef struct sampler_entry {
 /* Title-owned input API. Keeping this C boundary here lets the generic RSX
  * recorder remain independent of SDL and of Taiko's guest-facing USIO HLE. */
 extern void taiko_host_input_set_active(int active);
+extern void taiko_host_input_update_levels(unsigned player, unsigned levels,
+                                           unsigned long long timestamp_ns);
 extern void taiko_host_input_press(unsigned player, unsigned actions,
                                    unsigned long long timestamp_ns);
 extern void taiko_host_input_release(unsigned player, unsigned actions);
+#ifndef RSX_SDL_REPLAY_STANDALONE
+extern int taiko_audio_offset_adjust_ms(int delta_ms);
+extern int taiko_audio_offset_get_ms(void);
+extern void taiko_overlay_set_status(const char* text, int expires_in);
+#endif
 
 enum {
     TAIKO_HIT_SL = 1u << 0, TAIKO_HIT_CL = 1u << 1,
@@ -176,9 +190,12 @@ typedef struct sdl_rsx_state {
 #if defined(__linux__)
     int evdev_keyboards[16];
     int evdev_indices[16];          /* /dev/input/eventN, to skip duplicates */
+    unsigned long evdev_down[16][(KEY_MAX + sizeof(unsigned long) * 8u) /
+                                      (sizeof(unsigned long) * 8u)];
     unsigned evdev_keyboard_count;
-    long evdev_dir_mtime;           /* /dev/input mtime; rescan only on change */
-    Uint64 evdev_rescan_ns;
+    SDL_Thread* evdev_thread;
+    int evdev_stop;
+    unsigned evdev_hotkeys;
 #endif
     shader_entry shaders[SDL_RSX_MAX_SHADERS];
     unsigned shader_count;
@@ -227,8 +244,11 @@ typedef struct sdl_rsx_state {
         Uint32 height;
         Uint32 pitch;
         Uint32 bytes;
-        uint32_t fps_overlay[FPS_OVERLAY_WIDTH * FPS_OVERLAY_HEIGHT];
-        int fps_overlay_enabled;
+        uint32_t cpu_overlay[KMS_CPU_OVERLAY_MAX_WIDTH *
+                             KMS_CPU_OVERLAY_MAX_HEIGHT];
+        unsigned cpu_overlay_pitch;
+        unsigned cpu_overlay_x, cpu_overlay_y;
+        unsigned cpu_overlay_width, cpu_overlay_height;
         int busy;
     } kms_slots[3];
     unsigned kms_write;
@@ -2401,6 +2421,61 @@ static int kms_submit_download(struct kms_slot* slot,
     return 0;
 }
 
+/* Direct KMS avoids a GPU pass for tiny UI surfaces. Prefer the transient
+ * title/status pill while it is visible, then fall back to the always-on FPS
+ * badge. rsx_kms_present blends this straight-alpha RGBA surface directly into
+ * the mapped scanout buffer. */
+static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
+                                                unsigned* y, unsigned* width,
+                                                unsigned* height)
+{
+    int title_width = 0, title_height = 0;
+    uint32_t version = 0;
+    const uint32_t* title = g_rsx_overlay_frame
+        ? g_rsx_overlay_frame(&title_width, &title_height, &version) : NULL;
+    (void)version;
+    if (title && title_width > 0 && title_height > 0 &&
+        title_width <= KMS_CPU_OVERLAY_MAX_WIDTH &&
+        title_height <= KMS_CPU_OVERLAY_MAX_HEIGHT) {
+        *width = (unsigned)title_width;
+        *height = (unsigned)title_height;
+        *pitch = *width * 4u;
+        *x = (SDL_RSX_WIDTH - *width) / 2u;
+        *y = SDL_RSX_HEIGHT * 4u / 100u;
+        return title;
+    }
+    if (s_sdl.perf_overlay && s_fps_overlay.cpu_version != 0) {
+        *width = FPS_OVERLAY_WIDTH;
+        *height = FPS_OVERLAY_HEIGHT;
+        *pitch = FPS_OVERLAY_WIDTH * 4u;
+        *x = 12u;
+        *y = 12u;
+        return s_fps_overlay.pixels;
+    }
+    *pitch = *x = *y = *width = *height = 0;
+    return NULL;
+}
+
+static void kms_snapshot_cpu_overlay(struct kms_slot* slot)
+{
+    unsigned pitch, x, y, width, height;
+    const uint32_t* pixels = kms_current_cpu_overlay(
+        &pitch, &x, &y, &width, &height);
+    slot->cpu_overlay_pitch = 0;
+    slot->cpu_overlay_width = 0;
+    slot->cpu_overlay_height = 0;
+    if (!pixels) return;
+    for (unsigned row = 0; row < height; ++row)
+        memcpy(&slot->cpu_overlay[row * KMS_CPU_OVERLAY_MAX_WIDTH],
+               (const uint8_t*)pixels + (size_t)row * pitch,
+               (size_t)width * 4u);
+    slot->cpu_overlay_pitch = KMS_CPU_OVERLAY_MAX_WIDTH * 4u;
+    slot->cpu_overlay_x = x;
+    slot->cpu_overlay_y = y;
+    slot->cpu_overlay_width = width;
+    slot->cpu_overlay_height = height;
+}
+
 static int kms_copy_worker(void* userdata)
 {
     (void)userdata;
@@ -2441,9 +2516,10 @@ static int kms_copy_worker(void* userdata)
         if (mapped) {
             rsx_kms_present_frame(
                 mapped, slot->pitch,
-                slot->fps_overlay_enabled ? slot->fps_overlay : NULL,
-                FPS_OVERLAY_WIDTH * 4u, 12u, 12u,
-                FPS_OVERLAY_WIDTH, FPS_OVERLAY_HEIGHT,
+                slot->cpu_overlay_width ? slot->cpu_overlay : NULL,
+                slot->cpu_overlay_pitch,
+                slot->cpu_overlay_x, slot->cpu_overlay_y,
+                slot->cpu_overlay_width, slot->cpu_overlay_height,
                 &scanout_wait_ns, &copy_ns, &flip_ns);
             SDL_UnmapGPUTransferBuffer(s_sdl.device, slot->transfer);
         } else if (download_ready) {
@@ -2517,12 +2593,15 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
 
     if (s_sdl.kms_zero_copy) {
         const unsigned current = s_sdl.kms_display_index;
-        const void *overlay = s_sdl.perf_overlay &&
-            s_fps_overlay.cpu_version != 0 ? s_fps_overlay.pixels : NULL;
+        unsigned overlay_pitch, overlay_x, overlay_y;
+        unsigned overlay_width, overlay_height;
+        const void *overlay = kms_current_cpu_overlay(
+            &overlay_pitch, &overlay_x, &overlay_y,
+            &overlay_width, &overlay_height);
         Uint64 copy_ns = 0, flip_ns = 0;
         if (rsx_kms_present_dmabuf(
-                current, overlay, FPS_OVERLAY_WIDTH * 4u, 12u, 12u,
-                FPS_OVERLAY_WIDTH, FPS_OVERLAY_HEIGHT,
+                current, overlay, overlay_pitch, overlay_x, overlay_y,
+                overlay_width, overlay_height,
                 &copy_ns, &flip_ns) != 0) {
             fprintf(stderr, "[SDL_GPU] KMS dma-buf present failed\n");
             ++s_sdl.errors;
@@ -2590,11 +2669,7 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
     slot->width = width;
     slot->height = height;
     slot->pitch = pitch;
-    slot->fps_overlay_enabled = s_sdl.perf_overlay &&
-        s_fps_overlay.cpu_version != 0;
-    if (slot->fps_overlay_enabled)
-        memcpy(slot->fps_overlay, s_fps_overlay.pixels,
-               sizeof(slot->fps_overlay));
+    kms_snapshot_cpu_overlay(slot);
 
     if (kms_submit_download(slot, commands) != 0) {
         ++s_sdl.errors;
@@ -3387,16 +3462,45 @@ static void arm_capture_hotkey(void)
                              frames ? (u32)strtoul(frames, NULL, 0) : 1u);
     fprintf(stderr, "[SDL_GPU] F10 armed portable RSX capture\n");
 }
+
+static void change_audio_offset(int delta_ms, int display_only)
+{
+    const int offset = display_only ? taiko_audio_offset_get_ms()
+                                    : taiko_audio_offset_adjust_ms(delta_ms);
+    char status[32];
+    snprintf(status, sizeof(status), "AUDIO +%03d MS", offset);
+    taiko_overlay_set_status(status, 3);
+    fprintf(stderr, "[SDL_INPUT] audio offset %d ms %s\n", offset,
+            display_only ? "displayed" : "saved (live gameplay slew)");
+}
 #endif
 
 #if defined(__linux__)
 #define EVDEV_BITS_PER_WORD (sizeof(unsigned long) * 8u)
 #define EVDEV_KEY_WORDS ((KEY_MAX + EVDEV_BITS_PER_WORD) / EVDEV_BITS_PER_WORD)
+enum {
+    EVDEV_HOTKEY_F9 = 1u << 0,
+    EVDEV_HOTKEY_F10 = 1u << 1,
+    EVDEV_HOTKEY_AUDIO_DOWN = 1u << 2,
+    EVDEV_HOTKEY_AUDIO_UP = 1u << 3,
+    EVDEV_HOTKEY_AUDIO_SHOW = 1u << 4,
+    EVDEV_HOTKEY_AUDIO_FINE_DOWN = 1u << 5,
+    EVDEV_HOTKEY_AUDIO_FINE_UP = 1u << 6,
+};
 
 static int evdev_bit(const unsigned long* bits, unsigned code)
 {
     return (bits[code / EVDEV_BITS_PER_WORD] &
             (1ul << (code % EVDEV_BITS_PER_WORD))) != 0;
+}
+
+static void evdev_set_bit(unsigned long* bits, unsigned code, int down)
+{
+    const unsigned long mask = 1ul << (code % EVDEV_BITS_PER_WORD);
+    if (down)
+        bits[code / EVDEV_BITS_PER_WORD] |= mask;
+    else
+        bits[code / EVDEV_BITS_PER_WORD] &= ~mask;
 }
 
 static SDL_Scancode evdev_scancode(unsigned code)
@@ -3409,6 +3513,9 @@ static SDL_Scancode evdev_scancode(unsigned code)
     case KEY_ENTER: case KEY_KPENTER: return SDL_SCANCODE_RETURN;
     case KEY_F1: return SDL_SCANCODE_F1;
     case KEY_F2: return SDL_SCANCODE_F2;
+    case KEY_F3: return SDL_SCANCODE_F3;
+    case KEY_F4: return SDL_SCANCODE_F4;
+    case KEY_F5: return SDL_SCANCODE_F5;
     case KEY_F9: return SDL_SCANCODE_F9;
     case KEY_F10: return SDL_SCANCODE_F10;
     case KEY_C: return SDL_SCANCODE_C;
@@ -3425,11 +3532,55 @@ static SDL_Scancode evdev_scancode(unsigned code)
     }
 }
 
-static void evdev_close_keyboards(void)
+static unsigned evdev_keyboard_levels(unsigned keyboard)
+{
+    unsigned levels = 0;
+    for (unsigned code = 0; code <= KEY_MAX; ++code) {
+        if (!evdev_bit(s_sdl.evdev_down[keyboard], code)) continue;
+        levels |= keyboard_action(evdev_scancode(code));
+    }
+    return levels;
+}
+
+static int evdev_shift_down(void)
 {
     for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
-        if (s_sdl.evdev_keyboards[i] >= 0) close(s_sdl.evdev_keyboards[i]);
-    s_sdl.evdev_keyboard_count = 0;
+        if (evdev_bit(s_sdl.evdev_down[i], KEY_LEFTSHIFT) ||
+            evdev_bit(s_sdl.evdev_down[i], KEY_RIGHTSHIFT))
+            return 1;
+    return 0;
+}
+
+static void evdev_publish_levels(unsigned long long timestamp_ns)
+{
+    unsigned levels = 0;
+    for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
+        levels |= evdev_keyboard_levels(i);
+    taiko_host_input_update_levels(0, levels, timestamp_ns);
+}
+
+static int evdev_has_drum_keys(const unsigned long* keys)
+{
+    /* A full keyboard and the ITAiko HID both pass. Requiring one gameplay
+     * key also admits drum-only firmwares which omit Enter/C, while rejecting
+     * the Pi's power and HDMI-remote event nodes. */
+    return evdev_bit(keys, KEY_D) || evdev_bit(keys, KEY_F) ||
+           evdev_bit(keys, KEY_J) || evdev_bit(keys, KEY_K);
+}
+
+static void evdev_remove_keyboard(unsigned keyboard)
+{
+    const unsigned last = s_sdl.evdev_keyboard_count - 1;
+    close(s_sdl.evdev_keyboards[keyboard]);
+    if (keyboard != last) {
+        s_sdl.evdev_keyboards[keyboard] = s_sdl.evdev_keyboards[last];
+        s_sdl.evdev_indices[keyboard] = s_sdl.evdev_indices[last];
+        memcpy(s_sdl.evdev_down[keyboard], s_sdl.evdev_down[last],
+               sizeof(s_sdl.evdev_down[keyboard]));
+    }
+    memset(s_sdl.evdev_down[last], 0, sizeof(s_sdl.evdev_down[last]));
+    --s_sdl.evdev_keyboard_count;
+    evdev_publish_levels(ps3_host_monotonic_ns());
 }
 
 /* Additive: keep what is already open and pick up anything new. This used to
@@ -3455,15 +3606,21 @@ static void evdev_open_keyboards(void)
         unsigned long keys[EVDEV_KEY_WORDS];
         memset(keys, 0, sizeof(keys));
         if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keys)), keys) < 0 ||
-            !evdev_bit(keys, KEY_ENTER) ||
-            !(evdev_bit(keys, KEY_C) || evdev_bit(keys, KEY_D))) {
+            !evdev_has_drum_keys(keys)) {
             close(fd);
             continue;
         }
+        int clock_id = CLOCK_MONOTONIC;
+        ioctl(fd, EVIOCSCLOCKID, &clock_id);
         char name[128] = "keyboard";
         ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-        s_sdl.evdev_indices[s_sdl.evdev_keyboard_count] = (int)index;
-        s_sdl.evdev_keyboards[s_sdl.evdev_keyboard_count++] = fd;
+        const unsigned keyboard = s_sdl.evdev_keyboard_count++;
+        s_sdl.evdev_indices[keyboard] = (int)index;
+        s_sdl.evdev_keyboards[keyboard] = fd;
+        memset(s_sdl.evdev_down[keyboard], 0,
+               sizeof(s_sdl.evdev_down[keyboard]));
+        ioctl(fd, EVIOCGKEY(sizeof(s_sdl.evdev_down[keyboard])),
+              s_sdl.evdev_down[keyboard]);
         fprintf(stderr, "[SDL_INPUT] evdev keyboard: %s (%s)\n", name, path);
     }
     if (!s_sdl.evdev_keyboard_count) {
@@ -3473,10 +3630,18 @@ static void evdev_open_keyboards(void)
                     "[SDL_INPUT] no readable evdev keyboard; "
                     "check the service input group\n");
     }
+    evdev_publish_levels(ps3_host_monotonic_ns());
 }
 
-static void evdev_handle_key(unsigned code, int down)
+static void evdev_handle_key(unsigned keyboard,
+                             const struct input_event* event)
 {
+    const unsigned code = event->code;
+    const int down = event->value != 0;
+    const int was_down = evdev_bit(s_sdl.evdev_down[keyboard], code);
+    if (down == was_down) return;
+    evdev_set_bit(s_sdl.evdev_down[keyboard], code, down);
+
     const SDL_Scancode scancode = evdev_scancode(code);
     if (scancode == SDL_SCANCODE_UNKNOWN) return;
 #ifdef RSX_SDL_REPLAY_STANDALONE
@@ -3486,67 +3651,197 @@ static void evdev_handle_key(unsigned code, int down)
     }
 #else
     if (down && scancode == SDL_SCANCODE_F9) {
-        toggle_performance_overlay();
+        __atomic_fetch_or(&s_sdl.evdev_hotkeys, EVDEV_HOTKEY_F9,
+                          __ATOMIC_RELEASE);
         return;
     }
     if (down && scancode == SDL_SCANCODE_F10) {
-        arm_capture_hotkey();
+        __atomic_fetch_or(&s_sdl.evdev_hotkeys, EVDEV_HOTKEY_F10,
+                          __ATOMIC_RELEASE);
+        return;
+    }
+    if (down && scancode == SDL_SCANCODE_F3) {
+        __atomic_fetch_or(&s_sdl.evdev_hotkeys,
+                          evdev_shift_down()
+                              ? EVDEV_HOTKEY_AUDIO_FINE_DOWN
+                              : EVDEV_HOTKEY_AUDIO_DOWN,
+                          __ATOMIC_RELEASE);
+        return;
+    }
+    if (down && scancode == SDL_SCANCODE_F4) {
+        __atomic_fetch_or(&s_sdl.evdev_hotkeys,
+                          evdev_shift_down()
+                              ? EVDEV_HOTKEY_AUDIO_FINE_UP
+                              : EVDEV_HOTKEY_AUDIO_UP,
+                          __ATOMIC_RELEASE);
+        return;
+    }
+    if (down && scancode == SDL_SCANCODE_F5) {
+        __atomic_fetch_or(&s_sdl.evdev_hotkeys, EVDEV_HOTKEY_AUDIO_SHOW,
+                          __ATOMIC_RELEASE);
         return;
     }
 #endif
     const unsigned action = keyboard_action(scancode);
     if (!action) return;
-    if (down)
-        taiko_host_input_press(0, action, SDL_GetTicksNS());
-    else
-        taiko_host_input_release(0, action);
+    unsigned long long timestamp_ns =
+        (unsigned long long)event->time.tv_sec * UINT64_C(1000000000) +
+        (unsigned long long)event->time.tv_usec * UINT64_C(1000);
+    if (!timestamp_ns) timestamp_ns = ps3_host_monotonic_ns();
+    if (getenv("TAIKO_INPUT_TRACE")) {
+        const unsigned long long now_ns = ps3_host_monotonic_ns();
+        const double read_age_ms = now_ns >= timestamp_ns
+            ? (double)(now_ns - timestamp_ns) / 1000000.0 : 0.0;
+        fprintf(stderr,
+                "[SDL_INPUT-EVENT] event%d code=%u action=%03X down=%d "
+                "read_age=%.3fms\n",
+                s_sdl.evdev_indices[keyboard], code, action, down,
+                read_age_ms);
+    }
+    evdev_publish_levels(timestamp_ns);
 }
 
-static void evdev_poll_keyboards(void)
+static void evdev_process_keyboard(unsigned keyboard)
 {
-    if (!s_sdl.kms_present) return;
-    const Uint64 now = SDL_GetTicksNS();
-    if (now >= s_sdl.evdev_rescan_ns) {
-        /* Scanning means up to 64 open()+ioctl()+close() calls, and this runs on
-         * the render thread -- doing that every second is a visible hitch on the
-         * Pi. /dev/input's mtime changes when a device appears or disappears, so
-         * one stat() per second replaces the scan in the common case. */
-        struct stat st;
-        const long mtime = (stat("/dev/input", &st) == 0)
-            ? (long)st.st_mtime : 0;
-        if (mtime != s_sdl.evdev_dir_mtime || !s_sdl.evdev_keyboard_count) {
-            s_sdl.evdev_dir_mtime = mtime;
+    struct input_event events[32];
+    ssize_t bytes;
+    while ((bytes = read(s_sdl.evdev_keyboards[keyboard], events,
+                         sizeof(events))) > 0) {
+        const size_t count = (size_t)bytes / sizeof(events[0]);
+        for (size_t i = 0; i < count; ++i)
+            if (events[i].type == EV_KEY && events[i].value != 2 &&
+                events[i].code <= KEY_MAX)
+                evdev_handle_key(keyboard, &events[i]);
+    }
+    if (bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+        evdev_remove_keyboard(keyboard);
+}
+
+static int evdev_input_thread(void* userdata)
+{
+    (void)userdata;
+    /* This thread blocks in poll() and does only bounded event decoding when
+     * woken. On the four-core Pi an ordinary CFS thread was nevertheless left
+     * runnable for 100--250 ms by the lifted guest/render workload. Give only
+     * this tiny thread the lowest FIFO priority; the service grants the narrow
+     * RLIMIT_RTPRIO required for it. Desktop/manual runs safely fall back. */
+    struct sched_param priority;
+    memset(&priority, 0, sizeof(priority));
+    priority.sched_priority = 1;
+    const int priority_error = pthread_setschedparam(
+        pthread_self(), SCHED_FIFO, &priority);
+    if (priority_error) {
+        SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+        fprintf(stderr,
+                "[SDL_INPUT] realtime priority unavailable (%s); using high "
+                "CFS priority\n",
+                strerror(priority_error));
+    } else {
+        fprintf(stderr, "[SDL_INPUT] input thread scheduling: SCHED_FIFO/1\n");
+    }
+    const int inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    const int inotify_watch = inotify_fd >= 0
+        ? inotify_add_watch(inotify_fd, "/dev/input",
+                            IN_CREATE | IN_DELETE | IN_MOVED_FROM |
+                            IN_MOVED_TO | IN_ATTRIB)
+        : -1;
+    if (inotify_watch < 0)
+        fprintf(stderr,
+                "[SDL_INPUT] /dev/input hotplug watch unavailable: %s\n",
+                strerror(errno));
+
+    evdev_open_keyboards();
+    while (!__atomic_load_n(&s_sdl.evdev_stop, __ATOMIC_ACQUIRE)) {
+        struct pollfd fds[SDL_arraysize(s_sdl.evdev_keyboards) + 1];
+        const unsigned input_offset = inotify_watch >= 0 ? 1u : 0u;
+        const unsigned count = s_sdl.evdev_keyboard_count;
+        if (input_offset) {
+            fds[0].fd = inotify_fd;
+            fds[0].events = POLLIN;
+            fds[0].revents = 0;
+        }
+        for (unsigned i = 0; i < count; ++i) {
+            fds[input_offset + i].fd = s_sdl.evdev_keyboards[i];
+            fds[input_offset + i].events = POLLIN;
+            fds[input_offset + i].revents = 0;
+        }
+        const int ready = poll(fds, input_offset + count, 100);
+        if (ready < 0 && errno != EINTR) continue;
+        if (ready <= 0) continue;
+
+        for (unsigned i = 0; i < count; ++i) {
+            struct pollfd* event_fd = &fds[input_offset + i];
+            if (!event_fd->revents) continue;
+            unsigned keyboard;
+            for (keyboard = 0; keyboard < s_sdl.evdev_keyboard_count;
+                 ++keyboard)
+                if (s_sdl.evdev_keyboards[keyboard] == event_fd->fd) break;
+            if (keyboard == s_sdl.evdev_keyboard_count) continue;
+            if (event_fd->revents & POLLIN) evdev_process_keyboard(keyboard);
+            if (keyboard < s_sdl.evdev_keyboard_count &&
+                s_sdl.evdev_keyboards[keyboard] == event_fd->fd &&
+                (event_fd->revents & (POLLERR | POLLHUP | POLLNVAL)))
+                evdev_remove_keyboard(keyboard);
+        }
+
+        if (input_offset && (fds[0].revents & POLLIN)) {
+            char changes[4096];
+            while (read(inotify_fd, changes, sizeof(changes)) > 0) {}
+            /* Keyboard fds above are always drained first. A hotplug scan can
+             * be slow on the Pi, but now happens only for a real directory
+             * change instead of blocking input for ~200 ms twice per second. */
             evdev_open_keyboards();
         }
-        s_sdl.evdev_rescan_ns = now + UINT64_C(1000000000);
     }
-    for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i) {
-        struct input_event events[32];
-        ssize_t bytes;
-        while ((bytes = read(s_sdl.evdev_keyboards[i], events,
-                             sizeof(events))) > 0) {
-            const size_t count = (size_t)bytes / sizeof(events[0]);
-            for (size_t event = 0; event < count; ++event)
-                if (events[event].type == EV_KEY && events[event].value != 2)
-                    evdev_handle_key(events[event].code,
-                                     events[event].value != 0);
-        }
-        if (bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            close(s_sdl.evdev_keyboards[i]);
-            s_sdl.evdev_keyboards[i] =
-                s_sdl.evdev_keyboards[s_sdl.evdev_keyboard_count - 1];
-            s_sdl.evdev_indices[i] =
-                s_sdl.evdev_indices[s_sdl.evdev_keyboard_count - 1];
-            --s_sdl.evdev_keyboard_count;
-            --i;
-            s_sdl.evdev_rescan_ns = 0;
-        }
+    if (inotify_watch >= 0) inotify_rm_watch(inotify_fd, inotify_watch);
+    if (inotify_fd >= 0) close(inotify_fd);
+    return 0;
+}
+
+static void evdev_start_keyboards(void)
+{
+    if (!s_sdl.kms_present || s_sdl.evdev_thread) return;
+    __atomic_store_n(&s_sdl.evdev_stop, 0, __ATOMIC_RELEASE);
+    s_sdl.evdev_thread = SDL_CreateThread(evdev_input_thread,
+                                          "taiko-input", NULL);
+    if (!s_sdl.evdev_thread)
+        fprintf(stderr, "[SDL_INPUT] cannot start evdev input thread: %s\n",
+                SDL_GetError());
+    else
+        fprintf(stderr, "[SDL_INPUT] low-latency evdev thread started\n");
+}
+
+static void evdev_poll_hotkeys(void)
+{
+#ifndef RSX_SDL_REPLAY_STANDALONE
+    const unsigned hotkeys = __atomic_exchange_n(
+        &s_sdl.evdev_hotkeys, 0, __ATOMIC_ACQ_REL);
+    if (hotkeys & EVDEV_HOTKEY_F9) toggle_performance_overlay();
+    if (hotkeys & EVDEV_HOTKEY_F10) arm_capture_hotkey();
+    if (hotkeys & EVDEV_HOTKEY_AUDIO_DOWN) change_audio_offset(-5, 0);
+    if (hotkeys & EVDEV_HOTKEY_AUDIO_UP) change_audio_offset(5, 0);
+    if (hotkeys & EVDEV_HOTKEY_AUDIO_FINE_DOWN) change_audio_offset(-1, 0);
+    if (hotkeys & EVDEV_HOTKEY_AUDIO_FINE_UP) change_audio_offset(1, 0);
+    if (hotkeys & EVDEV_HOTKEY_AUDIO_SHOW) change_audio_offset(0, 1);
+#endif
+}
+
+static void evdev_close_keyboards(void)
+{
+    if (s_sdl.evdev_thread) {
+        __atomic_store_n(&s_sdl.evdev_stop, 1, __ATOMIC_RELEASE);
+        SDL_WaitThread(s_sdl.evdev_thread, NULL);
+        s_sdl.evdev_thread = NULL;
     }
+    for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
+        close(s_sdl.evdev_keyboards[i]);
+    s_sdl.evdev_keyboard_count = 0;
+    taiko_host_input_update_levels(0, 0, ps3_host_monotonic_ns());
 }
 #else
 static void evdev_close_keyboards(void) {}
-static void evdev_open_keyboards(void) {}
-static void evdev_poll_keyboards(void) {}
+static void evdev_start_keyboards(void) {}
+static void evdev_poll_hotkeys(void) {}
 #endif
 
 static int gamepad_player(SDL_JoystickID id)
@@ -3592,6 +3887,12 @@ static void handle_event(const SDL_Event* event)
         return;
     }
     if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
+        /* Direct KMS has a dedicated evdev thread. SDL's Linux input backend
+         * can still enqueue the same keyboard transitions even with the
+         * offscreen video driver, but they do not reach this render-owned
+         * event loop until tens or hundreds of milliseconds later under load.
+         * Processing both paths creates a second, visibly delayed hit. */
+        if (s_sdl.kms_present) return;
         if (event->key.repeat) return;
 #ifdef RSX_SDL_REPLAY_STANDALONE
         if (event->key.down && g_rsx_replay_key_hook) {
@@ -3613,6 +3914,20 @@ static void handle_event(const SDL_Event* event)
         }
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F10) {
             arm_capture_hotkey();
+            return;
+        }
+        if (event->key.down && event->key.scancode == SDL_SCANCODE_F3) {
+            change_audio_offset((event->key.mod & SDL_KMOD_SHIFT) ? -1 : -5,
+                                0);
+            return;
+        }
+        if (event->key.down && event->key.scancode == SDL_SCANCODE_F4) {
+            change_audio_offset((event->key.mod & SDL_KMOD_SHIFT) ? 1 : 5,
+                                0);
+            return;
+        }
+        if (event->key.down && event->key.scancode == SDL_SCANCODE_F5) {
+            change_audio_offset(0, 1);
             return;
         }
 #endif
@@ -4111,7 +4426,7 @@ swapchain_ready:
 #endif
     s_sdl.initialized = 1;
     taiko_host_input_set_active(1);
-    evdev_open_keyboards();
+    evdev_start_keyboards();
     fprintf(stderr, "[SDL_GPU] initialized %s, fixed output %ux%u\n",
             SDL_GetGPUDeviceDriver(s_sdl.device), SDL_RSX_WIDTH, SDL_RSX_HEIGHT);
     return 0;
@@ -4135,13 +4450,13 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
      * the batch execution, so a stall names its own half. */
     const Uint64 iterate_start_ns = SDL_GetTicksNS();
 
-    evdev_poll_keyboards();
+    evdev_poll_hotkeys();
     SDL_Event event;
     if (SDL_WaitEventTimeout(&event, timeout_ms)) {
         handle_event(&event);
         while (SDL_PollEvent(&event)) handle_event(&event);
     }
-    evdev_poll_keyboards();
+    evdev_poll_hotkeys();
     const Uint64 events_done_ns = SDL_GetTicksNS();
     const unsigned executed = drain_batches();
     const Uint64 end_ns = SDL_GetTicksNS();

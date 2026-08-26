@@ -692,6 +692,47 @@ int rsx_kms_present_acquire_dmabuf(unsigned index, uint64_t *wait_ns)
     return result;
 }
 
+/* Blend a small straight-alpha RGBA surface into an XBGR8888 scanout image.
+ * The legacy XRGB fallback needs R/B swapped, while imported dma-bufs are
+ * always XBGR. Opaque FPS pixels retain the old copy result; title overlays
+ * can now keep their rounded transparent edges. */
+static void kms_blend_overlay(kms_buffer *buffer, const void *overlay_pixels,
+                              unsigned overlay_pitch, unsigned overlay_x,
+                              unsigned overlay_y, unsigned overlay_width,
+                              unsigned overlay_height, int swizzle)
+{
+    if (!overlay_pixels || !overlay_pitch || !buffer->map ||
+        overlay_x >= s_kms.width || overlay_y >= s_kms.height)
+        return;
+    unsigned copy_width = overlay_width;
+    unsigned copy_height = overlay_height;
+    if (copy_width > s_kms.width - overlay_x)
+        copy_width = s_kms.width - overlay_x;
+    if (copy_height > s_kms.height - overlay_y)
+        copy_height = s_kms.height - overlay_y;
+
+    const uint8_t *overlay = (const uint8_t *)overlay_pixels;
+    for (unsigned y = 0; y < copy_height; ++y) {
+        uint8_t *destination = buffer->map + buffer->data_offset +
+            (size_t)(overlay_y + y) * buffer->pitch +
+            (size_t)overlay_x * 4u;
+        const uint8_t *source = overlay + (size_t)y * overlay_pitch;
+        for (unsigned x = 0; x < copy_width; ++x) {
+            const unsigned alpha = source[x * 4u + 3u];
+            if (!alpha) continue;
+            const unsigned inverse = 255u - alpha;
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                const unsigned source_channel =
+                    swizzle && channel != 1u ? 2u - channel : channel;
+                destination[x * 4u + channel] = (uint8_t)(
+                    (source[x * 4u + source_channel] * alpha +
+                     destination[x * 4u + channel] * inverse + 127u) / 255u);
+            }
+            destination[x * 4u + 3u] = 0xff;
+        }
+    }
+}
+
 int rsx_kms_present_dmabuf(unsigned index,
                            const void *overlay_pixels, unsigned overlay_pitch,
                            unsigned overlay_x, unsigned overlay_y,
@@ -715,14 +756,8 @@ int rsx_kms_present_dmabuf(unsigned index,
             copy_height = s_kms.height - overlay_y;
         const int dma_sync = kms_cpu_sync(
             buffer, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE) == 0;
-        const uint8_t *overlay = (const uint8_t *)overlay_pixels;
-        for (unsigned y = 0; y < copy_height; ++y) {
-            uint8_t *destination = buffer->map + buffer->data_offset +
-                (size_t)(overlay_y + y) * buffer->pitch +
-                (size_t)overlay_x * 4u;
-            memcpy(destination, overlay + (size_t)y * overlay_pitch,
-                   (size_t)copy_width * 4u);
-        }
+        kms_blend_overlay(buffer, overlay_pixels, overlay_pitch, overlay_x,
+                          overlay_y, copy_width, copy_height, 0);
         if (dma_sync)
             kms_cpu_sync(buffer, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
         else
@@ -804,12 +839,9 @@ int rsx_kms_present_frame(const void *pixels, unsigned pitch,
             destination[x * 4 + 3] = 0xff;
         }
     }
-    /* Small opaque diagnostics belong in the copy we already have to perform,
+    /* Small overlays belong in the copy we already have to perform,
      * not in a separate GPU render pass. On V3D even a 128x40 quad can make a
-     * 1280x720 target pay another complete tile load/store. The FPS badge is
-     * black and white, so its byte order is unchanged by the optional R/B
-     * swizzle. Clipping keeps this helper generally safe for source-sized
-     * overlays without turning the full-frame memcpy into a per-pixel loop. */
+     * 1280x720 target pay another complete tile load/store. */
     if (overlay_pixels && overlay_pitch && overlay_x < s_kms.width &&
         overlay_y < s_kms.height) {
         unsigned copy_width = overlay_width;
@@ -818,14 +850,8 @@ int rsx_kms_present_frame(const void *pixels, unsigned pitch,
             copy_width = s_kms.width - overlay_x;
         if (copy_height > s_kms.height - overlay_y)
             copy_height = s_kms.height - overlay_y;
-        const uint8_t *overlay = (const uint8_t *)overlay_pixels;
-        for (unsigned y = 0; y < copy_height; ++y) {
-            uint8_t *destination = buffer->map +
-                (size_t)(overlay_y + y) * buffer->pitch +
-                (size_t)overlay_x * 4u;
-            memcpy(destination, overlay + (size_t)y * overlay_pitch,
-                   (size_t)copy_width * 4u);
-        }
+        kms_blend_overlay(buffer, overlay_pixels, overlay_pitch, overlay_x,
+                          overlay_y, copy_width, copy_height, s_kms.swizzle);
     }
     if (dma_sync) {
         if (kms_cpu_sync(buffer, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE) != 0) {

@@ -389,6 +389,7 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"        # cellHttp NID aliases
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"        # host TLS + online redirect
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"    # in-process ATRAC3plus -> game/SPU PCM ring
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_offset.cpp" # persistent gameplay A/V latency calibration
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_spu.c"  # raw lifted bnusCore mixer
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sail.cpp"     # cellSail async callback shim
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_usio.cpp"     # virtual System 357 I/O board
@@ -755,6 +756,13 @@ if(BUILD_TESTING AND NOT WIN32)
     target_include_directories(taiko_host_input_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_host_input_tests COMMAND taiko_host_input_tests)
+
+    add_executable(taiko_audio_offset_tests
+        "tests/taiko_audio_offset_tests.cpp"
+        "src/taiko_audio_offset.cpp")
+    target_include_directories(taiko_audio_offset_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_audio_offset_tests COMMAND taiko_audio_offset_tests)
 endif()
 
 if(BUILD_TESTING AND TAIKO_AUDIO_BACKEND STREQUAL "sdl3" AND

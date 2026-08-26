@@ -16,6 +16,8 @@ extern "C" {
 
 /* Show `code` with a countdown; `expires_in` is seconds from now. */
 void taiko_overlay_set_pairing(const char* code, int expires_in);
+/* Show a short appliance-status message using the same composited surface. */
+void taiko_overlay_set_status(const char* text, int expires_in);
 void taiko_overlay_clear(void);
 
 /* The image to draw over the frame, or NULL when there is nothing to show.

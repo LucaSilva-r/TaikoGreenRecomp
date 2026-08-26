@@ -39,7 +39,9 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t g_pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT];
 static uint32_t g_version;
 static int      g_visible;
+static int      g_mode;             /* 1 pairing, 2 transient status */
 static char     g_code[16];
+static char     g_status[32];
 static long     g_deadline;
 static int      g_drawn_remaining = -1;
 
@@ -228,6 +230,13 @@ static void render(int remaining)
 
     draw_pill();
 
+    if (g_mode == 2) {
+        draw_text(g_status, 24, OVERLAY_WIDTH / 2);
+        g_drawn_remaining = remaining;
+        ++g_version;
+        return;
+    }
+
     /* 661722 reads as 661-722 on the cabinet. */
     if (strlen(g_code) == 6)
         snprintf(code, sizeof(code), "%.3s-%s", g_code, g_code + 3);
@@ -252,6 +261,18 @@ void taiko_overlay_set_pairing(const char* code, int expires_in)
     snprintf(g_code, sizeof(g_code), "%s", code ? code : "");
     g_deadline = monotonic_seconds() + (expires_in > 0 ? expires_in : 0);
     g_visible = g_code[0] != '\0';
+    g_mode = 1;
+    g_drawn_remaining = -1;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void taiko_overlay_set_status(const char* text, int expires_in)
+{
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_status, sizeof(g_status), "%s", text ? text : "");
+    g_deadline = monotonic_seconds() + (expires_in > 0 ? expires_in : 0);
+    g_visible = g_status[0] != '\0';
+    g_mode = 2;
     g_drawn_remaining = -1;
     pthread_mutex_unlock(&g_lock);
 }
@@ -261,7 +282,9 @@ void taiko_overlay_clear(void)
     pthread_mutex_lock(&g_lock);
     if (g_visible) ++g_version;
     g_visible = 0;
+    g_mode = 0;
     g_code[0] = '\0';
+    g_status[0] = '\0';
     pthread_mutex_unlock(&g_lock);
 }
 

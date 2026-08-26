@@ -345,16 +345,19 @@ A/B tests. They are deliberately absent from the direct-KMS service.
 
 ### Direct-KMS keyboard input
 
-SDL's offscreen video driver has no window and therefore delivers no keyboard
-events. The game could render perfectly under direct KMS but `C`, Enter, and
-the drum keys did nothing. In KMS mode the SDL backend now opens keyboard-like
-Linux `/dev/input/event*` devices nonblocking and feeds their press/release
-events into the same title input latch used by SDL and the Windows 1 kHz
-sampler. SDL continues to own gamepads.
+SDL's offscreen video driver has no window and therefore cannot be the timely
+keyboard path. In KMS mode the SDL backend now has a dedicated `poll()`-blocked
+evdev thread which opens every keyboard-like `/dev/input/event*` device and
+feeds press/release transitions directly into the title input latch. Per-device
+held-key state is ORed, so two keyboards cannot release each other's keys.
+`inotify` wakes the thread only for real hotplug changes instead of periodically
+stalling input while scanning all 64 event nodes. Delayed duplicate keyboard
+events from SDL are ignored in KMS mode; SDL continues to own gamepads.
 
 The service account must belong to the `input` group. Startup logs each opened
-device as `[SDL_INPUT] evdev keyboard`; if no device is readable it retries
-once per second. The shipping mappings are:
+device as `[SDL_INPUT] evdev keyboard`. `LimitRTPRIO=1` permits only this
+poll-blocked input thread to use the lowest FIFO priority; do not extend that to
+audio, guest, or render threads. The shipping mappings are:
 
 | Key | Action |
 |---|---|
@@ -363,11 +366,15 @@ once per second. The shipping mappings are:
 | Enter | confirm/start |
 | F1 / F2 | test / service |
 | Up / Down | menu navigation |
+| F3 / F4 | audio offset -/+ 5 ms; hold Shift for 1 ms |
+| F5 | display the current audio offset without changing it |
 | F10 | arm the configured RSX capture |
 
-Live validation opened `/dev/input/event0`, inserted a coin, entered Player
-Entry, and retained the existing input latch semantics. Escape deliberately
-does not terminate the appliance.
+Live validation simultaneously opened the Lenovo keyboard on
+`/dev/input/event0` and ITAiko drum on `/dev/input/event3`. Kernel-read latency
+was 0.015--0.049 ms and hits reached the next 60 Hz guest USIO poll. Coin, menu,
+drum, and capture keys work from either device. Escape deliberately does not
+terminate the appliance.
 
 ### Cage swapchain presentation fence
 
@@ -892,13 +899,16 @@ appliance service already does. The 1.5 GiB Song Select capture also drove
 the 4 GB Pi into swap churn during repeated comparison loads, so use the
 483 MiB Player Entry capture or reboot between oversized replay attempts.
 
-The FPS badge remains available without restoring an extra GPU pass. Each
+The FPS badge and transient audio-offset pill remain available without
+restoring an extra GPU pass. Each
 exported linear dma-buf is CPU-mappable on the tested V3DV stack, so after the
-render fence the KMS path synchronizes and writes only the opaque 128x40 badge
-into the completed target. That is 20 KiB rather than a full-frame copy and
+render fence the KMS path synchronizes and writes only the small active overlay
+into the completed target. The FPS case is 20 KiB rather than a full-frame copy and
 measured about **0.01 ms/frame** with unchanged replay throughput. If an export
 is not CPU-mappable, zero-copy presentation still works and the import log
-reports `CPU-map=no`; only the badge is omitted. `TAIKO_KMS_ZERO_COPY_LINEAR=1`
+reports `CPU-map=no`; only the overlays are omitted. Straight-alpha blending
+keeps the status pill's rounded edges while opaque FPS pixels retain the old
+copy result. `TAIKO_KMS_ZERO_COPY_LINEAR=1`
 forces linear allocation directly and exists only to diagnose modifier
 selection.
 
@@ -1102,9 +1112,14 @@ path only for future movie-decoder work.
   else. Do not reintroduce it without measuring on the target core count.
 
   Remaining: heavy scenes (Song Select, loading) still disturb audio; gameplay
-  is clean. The residual constant offset is output latency and
-  `TAIKO_AUDIO_OFFSET_MS` compensates it, with a Pi-specific value -- its buffer
-  depths differ from the desktop's (37 ms visible bound against 48 ms).
+  is clean. The residual constant offset is output latency. F3/F4 adjust its
+  persistent compensation by -/+5 ms (Shift makes that 1 ms), while F5 only
+  displays it; the screen briefly shows the value. Changes during gameplay slew at no more than one percent and
+  settle a 5 ms step in about half a second instead of cutting/repeating a PCM
+  interval. The value is saved under
+  `$XDG_CONFIG_HOME/taikorecomp/audio_offset_ms`. `TAIKO_AUDIO_OFFSET_MS`
+  remains a startup override for scripted tests. Use a Pi-specific value -- its
+  buffer depths differ from the desktop's (37 ms visible bound against 48 ms).
 
 - **ALSA must be pinned to the HDMI card by name.** vc4 card numbering depends
   on module load order: a USB audio device takes card 0, and once it is

@@ -16,6 +16,7 @@
  */
 
 #include "ppu_recomp.h"
+#include "taiko_audio_offset.h"
 
 #ifdef TAIKO_HAVE_FFMPEG
 extern "C" {
@@ -72,6 +73,11 @@ constexpr uint32_t kChannels = 2;
  * to 0x4000 bytes / 0x800 samples per slot, matching RPCS3 exactly, where 512
  * gave 0x1000 / 0x200. */
 constexpr uint32_t kMaxSamples = 2048;
+/* Live calibration must not jump the PCM cursor: that would audibly discard
+ * or repeat the requested interval.  Instead, consume at most one percent
+ * faster/slower until the saved offset is reached.  A 5 ms key step therefore
+ * settles in about half a second without changing the device or guest clocks. */
+constexpr double kMaximumOffsetSlew = 0.01;
 constexpr uint32_t kAllDataIsOnMemory = 0xFFFFFFFFu;
 constexpr uint32_t kLoopDataIsOnMemory = 0xFFFFFFFDu;
 
@@ -99,9 +105,10 @@ struct DecoderState {
     std::shared_ptr<std::vector<float>> pcm =
         std::make_shared<std::vector<float>>();
     size_t decode_cursor = 0; // position reported through cellAtracDecode
+    double decode_fraction = 0.0;
     uint32_t sample_rate = 0;
     uint32_t ring_ea = 0;
-    size_t gameplay_offset_frames = 0;
+    double gameplay_offset_frames = 0.0;
     bool gameplay_song = false;
     int32_t loop_num = 0;
     size_t loop_start = 0;
@@ -604,20 +611,7 @@ bool decode_guest_riff(uint32_t, uint32_t, uint64_t, DecoderState&,
 
 uint32_t gameplay_audio_offset_ms()
 {
-    static const uint32_t offset = [] {
-        const char* text = std::getenv("TAIKO_AUDIO_OFFSET_MS");
-        if (!text || !*text) return 0u;
-        char* end = nullptr;
-        const unsigned long parsed = std::strtoul(text, &end, 0);
-        if (*text == '-' || end == text || *end != '\0') {
-            std::fprintf(stderr,
-                "[taiko_atrac-offset] invalid TAIKO_AUDIO_OFFSET_MS='%s'; using 0\n",
-                text);
-            return 0u;
-        }
-        return static_cast<uint32_t>(std::min(parsed, 1000ul));
-    }();
-    return offset;
+    return static_cast<uint32_t>(taiko_audio_offset_get_ms());
 }
 
 bool is_gameplay_song(const std::string& source, uint32_t initial_bytes)
@@ -683,13 +677,16 @@ void set_data_and_get_mem_size(ppu_context* ctx)
         }
         if (ready && state.gameplay_song) {
             cellAudioGameplayDumpStart();
-            const uint64_t offset_frames =
-                static_cast<uint64_t>(gameplay_audio_offset_ms()) *
-                state.sample_rate / 1000u;
+            const double offset_frames =
+                static_cast<double>(gameplay_audio_offset_ms()) *
+                state.sample_rate / 1000.0;
             const size_t total_frames = state.pcm->size() / kChannels;
-            state.gameplay_offset_frames = static_cast<size_t>(
-                std::min<uint64_t>(offset_frames, total_frames));
-            state.decode_cursor = state.gameplay_offset_frames;
+            state.gameplay_offset_frames = std::min(
+                offset_frames, static_cast<double>(total_frames));
+            state.decode_cursor = static_cast<size_t>(
+                state.gameplay_offset_frames);
+            state.decode_fraction = state.gameplay_offset_frames -
+                static_cast<double>(state.decode_cursor);
             std::fprintf(stderr,
                 "[taiko_atrac-offset] gameplay source=%s offset=%ums "
                 "cursor=%zu rate=%u\n",
@@ -920,26 +917,63 @@ void decode(ppu_context* ctx)
              * decoded PCM includes codec tail padding after the authored end. */
             if (can_loop && state.decode_cursor >= loop_end) {
                 state.decode_cursor = state.loop_start;
+                state.decode_fraction = 0.0;
                 if (state.loop_num > 0) state.loop_num--;
             }
             const size_t decode_end = can_loop ? loop_end : total_frames;
-            const size_t available = decode_end -
-                std::min(state.decode_cursor, decode_end);
-            decoded_samples = static_cast<uint32_t>(
-                std::min<size_t>(available, kMaxSamples));
+            const double position = std::min<double>(
+                static_cast<double>(state.decode_cursor) +
+                    state.decode_fraction,
+                static_cast<double>(decode_end));
+            double source_step = 1.0;
+            if (state.gameplay_song && state.sample_rate) {
+                const double target_offset_frames =
+                    static_cast<double>(gameplay_audio_offset_ms()) *
+                    state.sample_rate / 1000.0;
+                const double remaining =
+                    target_offset_frames - state.gameplay_offset_frames;
+                source_step += std::clamp(
+                    remaining / static_cast<double>(kMaxSamples),
+                    -kMaximumOffsetSlew, kMaximumOffsetSlew);
+            }
+            const double available = static_cast<double>(decode_end) - position;
+            decoded_samples = static_cast<uint32_t>(std::min<double>(
+                std::ceil(available / source_step), kMaxSamples));
+            float output_peak = 0.0f;
             if (pcm) {
-                for (uint32_t i = 0; i < decoded_samples * kChannels; i++) {
-                    uint32_t bits;
-                    std::memcpy(&bits,
-                        &(*state.pcm)[state.decode_cursor * kChannels + i], sizeof(bits));
-                    vm_write32(pcm + i * 4u, bits);
+                for (uint32_t frame = 0; frame < decoded_samples; frame++) {
+                    const double source = std::min(
+                        position + static_cast<double>(frame) * source_step,
+                        static_cast<double>(decode_end - 1u));
+                    const size_t first = static_cast<size_t>(source);
+                    const size_t second = std::min(first + 1u, decode_end - 1u);
+                    const float fraction = static_cast<float>(
+                        source - static_cast<double>(first));
+                    for (uint32_t channel = 0; channel < kChannels; channel++) {
+                        const float a = (*state.pcm)[first * kChannels + channel];
+                        const float b = (*state.pcm)[second * kChannels + channel];
+                        const float sample = a + (b - a) * fraction;
+                        uint32_t bits;
+                        std::memcpy(&bits, &sample, sizeof(bits));
+                        vm_write32(pcm +
+                            (frame * kChannels + channel) * 4u, bits);
+                        output_peak = std::max(output_peak, std::abs(sample));
+                    }
                 }
                 for (uint32_t i = decoded_samples * kChannels;
                      i < kMaxSamples * kChannels; i++)
                     vm_write32(pcm + i * 4u, 0);
             }
             const size_t cursor_before = state.decode_cursor;
-            state.decode_cursor += decoded_samples;
+            const double advanced = std::min(
+                static_cast<double>(decoded_samples) * source_step, available);
+            const double next_position = position + advanced;
+            state.decode_cursor = static_cast<size_t>(next_position);
+            state.decode_fraction = next_position -
+                static_cast<double>(state.decode_cursor);
+            if (state.gameplay_song) {
+                state.gameplay_offset_frames += advanced - decoded_samples;
+            }
             end_of_stream = !can_loop && state.decode_cursor >= total_frames;
             decoded = true;
             if (state.gameplay_song) {
@@ -989,15 +1023,12 @@ void decode(ppu_context* ctx)
             }
             if (std::getenv("TAIKO_AUDIO_TRACE")) {
                 static unsigned blocks = 0;
-                float peak = 0.0f;
-                for (uint32_t i = 0; i < decoded_samples * kChannels; i++)
-                    peak = std::max(peak, std::abs(
-                        (*state.pcm)[(state.decode_cursor - decoded_samples) * kChannels + i]));
                 blocks++;
                 if (blocks <= 32 || (blocks & 255u) == 0)
                     std::fprintf(stderr,
                         "[taiko_atrac-pcm] handle=%08X samples=%u peak=%g cursor=%zu/%zu\n",
-                        handle, decoded_samples, peak, state.decode_cursor, total_frames);
+                        handle, decoded_samples, output_peak, state.decode_cursor,
+                        total_frames);
             }
         }
     }
@@ -1056,10 +1087,17 @@ void reset_play_position(ppu_context* ctx)
         * here as an absolute PCM sample. The old shim discarded uiSample,
          * which made every catalog preview begin at the start of the song. */
         const size_t total_frames = it->second.pcm->size() / kChannels;
+        if (it->second.gameplay_song) {
+            it->second.gameplay_offset_frames =
+                static_cast<double>(gameplay_audio_offset_ms()) *
+                it->second.sample_rate / 1000.0;
+        }
         const uint64_t adjusted = static_cast<uint64_t>(sample) +
-            (it->second.gameplay_song ? it->second.gameplay_offset_frames : 0u);
+            static_cast<uint64_t>(it->second.gameplay_song
+                ? it->second.gameplay_offset_frames : 0.0);
         it->second.decode_cursor = static_cast<size_t>(
             std::min<uint64_t>(adjusted, total_frames));
+        it->second.decode_fraction = 0.0;
     }
     if (std::getenv("TAIKO_ATRAC_TRACE"))
         std::fprintf(stderr,
