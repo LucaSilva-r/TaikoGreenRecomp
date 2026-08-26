@@ -682,6 +682,43 @@ static void replace_all(char* text, size_t capacity,
     }
 }
 
+static bool shader_cache_path(char* path, size_t path_size,
+                              const char* extension,
+                              SDL_ShaderCross_ShaderStage stage,
+                              u64 source_hash)
+{
+    const char* directory = getenv("TAIKO_SHADER_CACHE");
+    if (!directory || !directory[0]) return false;
+    const int length = SDL_snprintf(
+        path, path_size, "%s/v%u-%c-%016llx.%s", directory,
+        SDL_RSX_SHADER_DIALECT_VERSION,
+        stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX ? 'v' : 'f',
+        (unsigned long long)source_hash, extension);
+    return length > 0 && (size_t)length < path_size;
+}
+
+static bool shader_cache_valid_spirv(const void* data, size_t size)
+{
+    u32 magic = 0;
+    if (!data || size < 20 || size > 4u * 1024u * 1024u || (size & 3u))
+        return false;
+    memcpy(&magic, data, sizeof(magic));
+    return magic == UINT32_C(0x07230203);
+}
+
+static void shader_cache_save_source(const char* source,
+                                     SDL_ShaderCross_ShaderStage stage,
+                                     u64 source_hash)
+{
+    char path[1024];
+    const char* directory = getenv("TAIKO_SHADER_CACHE");
+    if (!directory || !directory[0] ||
+        !shader_cache_path(path, sizeof(path), "hlsl", stage, source_hash))
+        return;
+    SDL_CreateDirectory(directory);
+    SDL_SaveFile(path, source, strlen(source));
+}
+
 static SDL_GPUShader* compile_hlsl(const char* source,
                                    SDL_ShaderCross_ShaderStage stage,
                                    SDL_ShaderCross_GraphicsShaderResourceInfo* resources,
@@ -696,7 +733,55 @@ static SDL_GPUShader* compile_hlsl(const char* source,
     hlsl.entrypoint = "main";
     hlsl.shader_stage = stage;
     size_t spirv_size = 0;
-    Uint8* spirv = SDL_ShaderCross_CompileSPIRVFromHLSL(&hlsl, &spirv_size);
+    u64 source_hash = rsx_blob_hash64(source, (u64)strlen(source));
+    source_hash ^= (u64)stage;
+    source_hash *= UINT64_C(1099511628211);
+    char cache_path[1024];
+    Uint8* spirv = NULL;
+    if (shader_cache_path(cache_path, sizeof(cache_path), "spv", stage,
+                          source_hash)) {
+        spirv = (Uint8*)SDL_LoadFile(cache_path, &spirv_size);
+        if (spirv && !shader_cache_valid_spirv(spirv, spirv_size)) {
+            fprintf(stderr, "[SDL_GPU] ignoring invalid shader cache %s\n",
+                    cache_path);
+            SDL_free(spirv);
+            spirv = NULL;
+            spirv_size = 0;
+        }
+        if (spirv) {
+            fprintf(stderr, "[SDL_GPU] shader cache hit %016llx stage=%u bytes=%zu\n",
+                    (unsigned long long)hash, (unsigned)stage, spirv_size);
+        }
+    }
+    if (!spirv) {
+        shader_cache_save_source(source, stage, source_hash);
+        const char* readonly = getenv("TAIKO_SHADER_CACHE_READONLY");
+        if (readonly && readonly[0] && strcmp(readonly, "0") != 0) {
+            fprintf(stderr,
+                    "[SDL_GPU] shader cache miss %016llx stage=%u source=%016llx (cache only)\n",
+                    (unsigned long long)hash, (unsigned)stage,
+                    (unsigned long long)source_hash);
+            ++s_sdl.errors;
+            return NULL;
+        }
+        const Uint64 shader_compile_start_ns = SDL_GetTicksNS();
+        fprintf(stderr, "[SDL_GPU] shader compile begin %016llx stage=%u\n",
+                (unsigned long long)hash, (unsigned)stage);
+        spirv = SDL_ShaderCross_CompileSPIRVFromHLSL(&hlsl, &spirv_size);
+        fprintf(stderr,
+                "[SDL_GPU] shader compile end %016llx stage=%u %.2f ms bytes=%zu\n",
+                (unsigned long long)hash, (unsigned)stage,
+                (double)(SDL_GetTicksNS() - shader_compile_start_ns) / 1000000.0,
+                spirv_size);
+        if (spirv && shader_cache_path(cache_path, sizeof(cache_path), "spv",
+                                       stage, source_hash)) {
+            const char* directory = getenv("TAIKO_SHADER_CACHE");
+            SDL_CreateDirectory(directory);
+            if (!SDL_SaveFile(cache_path, spirv, spirv_size))
+                fprintf(stderr, "[SDL_GPU] shader cache save failed %s: %s\n",
+                        cache_path, SDL_GetError());
+        }
+    }
     if (!spirv) {
         fprintf(stderr, "[SDL_GPU] HLSL compile failed (%016llx): %s\n%s\n",
                 (unsigned long long)hash, SDL_GetError(), source);
@@ -3823,9 +3908,43 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
         s_sdl.device = SDL_CreateGPUDeviceWithProperties(props);
         SDL_DestroyProperties(props);
     } else {
+#ifdef __ANDROID__
+        /* Older Adreno Vulkan implementations can lack
+         * drawIndirectFirstInstance. SDL_GPU exposes it as an optional
+         * creation feature but enables it by default; this renderer issues no
+         * indirect draws, so do not reject otherwise capable Android GPUs. */
+        SDL_PropertiesID props = SDL_CreateProperties();
+        if (!props) goto fail;
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_SPIRV) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXBC_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_DXBC) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_DXIL) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_MSL) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN,
+            getenv("SDL_GPU_DEBUG") != NULL);
+        SDL_SetBooleanProperty(
+            props,
+            SDL_PROP_GPU_DEVICE_CREATE_FEATURE_INDIRECT_DRAW_FIRST_INSTANCE_BOOLEAN,
+            false);
+        if (requested_driver)
+            SDL_SetStringProperty(
+                props, SDL_PROP_GPU_DEVICE_CREATE_NAME_STRING,
+                requested_driver);
+        s_sdl.device = SDL_CreateGPUDeviceWithProperties(props);
+        SDL_DestroyProperties(props);
+#else
         s_sdl.device = SDL_CreateGPUDevice(
             shader_formats, getenv("SDL_GPU_DEBUG") != NULL,
             requested_driver);
+#endif
     }
     if (!s_sdl.device) goto fail;
     if (requested_driver)

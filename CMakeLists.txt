@@ -19,7 +19,13 @@ set(CMAKE_C_STANDARD 17)
 
 set(PS3RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ps3recomp" CACHE PATH "ps3recomp repo root")
 
-if(WIN32)
+if(ANDROID)
+    set(TAIKO_RSX_BACKEND_DEFAULT null)
+    set(TAIKO_INPUT_BACKEND_DEFAULT null)
+    set(TAIKO_AUDIO_BACKEND_DEFAULT null)
+    set(TAIKO_EMBED_DEFAULT ON)
+    set(TAIKO_ATRAC_DEFAULT OFF)
+elseif(WIN32)
     set(TAIKO_RSX_BACKEND_DEFAULT sdl_gpu)
     set(TAIKO_INPUT_BACKEND_DEFAULT sdl3)
     set(TAIKO_AUDIO_BACKEND_DEFAULT sdl3)
@@ -62,6 +68,38 @@ set_property(CACHE TAIKO_INPUT_BACKEND PROPERTY STRINGS null sdl3)
 set(TAIKO_AUDIO_BACKEND "${TAIKO_AUDIO_BACKEND_DEFAULT}" CACHE STRING
     "Host audio: null, sdl3, or wasapi")
 set_property(CACHE TAIKO_AUDIO_BACKEND PROPERTY STRINGS null sdl3 wasapi)
+
+# Android applications enter native code through SDLActivity and therefore
+# always need SDL's shared library/main glue, even for the null-backend smoke
+# build.  Build the exact pinned SDL source in-tree with the NDK; host/Linux
+# SDL archives are ABI- and libc-incompatible with Android.
+if(ANDROID)
+    if(DEFINED TAIKO_SDL_GPU_ROOT)
+        set(_TAIKO_ANDROID_SDL_PREFIX "${TAIKO_SDL_GPU_ROOT}")
+    else()
+        set(_TAIKO_ANDROID_SDL_PREFIX
+            "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-android-arm64")
+    endif()
+    set(TAIKO_ANDROID_SDL_SOURCE
+        "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-rpi-arm64/.src/SDL3-3.4.10"
+        CACHE PATH "Pinned SDL source used by the Android APK")
+    if(EXISTS "${_TAIKO_ANDROID_SDL_PREFIX}/lib/cmake/SDL3/SDL3Config.cmake")
+        # The graphical Android dependency bundle installs SDL alongside
+        # ShaderCross.  Use that exact shared build so both libraries agree on
+        # their SDL headers and ABI.
+        set(_TAIKO_ANDROID_SDL_FROM_PREFIX TRUE)
+    else()
+        if(NOT EXISTS "${TAIKO_ANDROID_SDL_SOURCE}/CMakeLists.txt")
+            message(FATAL_ERROR "Android SDL source is missing at ${TAIKO_ANDROID_SDL_SOURCE}")
+        endif()
+        set(_TAIKO_ANDROID_SDL_FROM_PREFIX FALSE)
+        set(SDL_SHARED ON CACHE BOOL "Build Android SDL shared library" FORCE)
+        set(SDL_STATIC OFF CACHE BOOL "Do not build a duplicate Android SDL archive" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "Do not build SDL tests" FORCE)
+        add_subdirectory("${TAIKO_ANDROID_SDL_SOURCE}"
+            "${CMAKE_BINARY_DIR}/android-sdl" EXCLUDE_FROM_ALL)
+    endif()
+endif()
 
 string(TOLOWER "${TAIKO_RSX_BACKEND}" TAIKO_RSX_BACKEND)
 string(TOLOWER "${TAIKO_INPUT_BACKEND}" TAIKO_INPUT_BACKEND)
@@ -118,7 +156,10 @@ set(PS3RECOMP_INPUT_BACKEND "${TAIKO_INPUT_BACKEND}" CACHE STRING
     "ps3recomp input backend" FORCE)
 set(PS3RECOMP_AUDIO_BACKEND "${TAIKO_AUDIO_BACKEND}" CACHE STRING
     "ps3recomp audio backend" FORCE)
-if(WIN32)
+if(ANDROID)
+    set(_TAIKO_FFMPEG_ROOT_DEFAULT
+        "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-android-arm64")
+elseif(WIN32)
     set(_TAIKO_FFMPEG_ROOT_DEFAULT
         "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-mingw")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
@@ -130,7 +171,10 @@ endif()
 set(TAIKO_FFMPEG_ROOT "${_TAIKO_FFMPEG_ROOT_DEFAULT}"
     CACHE PATH "Optional target prefix containing the minimal static FFmpeg build")
 
-if(WIN32)
+if(ANDROID)
+    set(_TAIKO_SDL_GPU_ROOT_DEFAULT
+        "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-android-arm64")
+elseif(WIN32)
     set(_TAIKO_SDL_GPU_ROOT_DEFAULT "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-mingw")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
     set(_TAIKO_SDL_GPU_ROOT_DEFAULT "${CMAKE_SOURCE_DIR}/third_party/sdl-gpu-rpi-arm64")
@@ -139,7 +183,8 @@ else()
 endif()
 set(TAIKO_SDL_GPU_ROOT "${_TAIKO_SDL_GPU_ROOT_DEFAULT}"
     CACHE PATH "Platform SDL3/SDL_shadercross developer prefix")
-if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu" OR
+if(_TAIKO_ANDROID_SDL_FROM_PREFIX OR
+   TAIKO_RSX_BACKEND STREQUAL "sdl_gpu" OR
    TAIKO_INPUT_BACKEND STREQUAL "sdl3" OR
    TAIKO_AUDIO_BACKEND STREQUAL "sdl3")
     if(NOT EXISTS "${TAIKO_SDL_GPU_ROOT}/include/SDL3/SDL.h")
@@ -155,11 +200,19 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu" OR
         set(SDL3_DIR "${TAIKO_SDL_GPU_ROOT}/lib64/cmake/SDL3"
             CACHE PATH "SDL3 package directory" FORCE)
     endif()
-    find_package(SDL3 3.4.10 CONFIG REQUIRED COMPONENTS SDL3-static
-        PATHS
-            "${TAIKO_SDL_GPU_ROOT}/lib/cmake/SDL3"
-            "${TAIKO_SDL_GPU_ROOT}/lib64/cmake/SDL3"
-        NO_DEFAULT_PATH)
+    if(ANDROID)
+        find_package(SDL3 3.4.10 CONFIG REQUIRED COMPONENTS SDL3-shared
+            PATHS
+                "${TAIKO_SDL_GPU_ROOT}/lib/cmake/SDL3"
+                "${TAIKO_SDL_GPU_ROOT}/lib64/cmake/SDL3"
+            NO_DEFAULT_PATH)
+    else()
+        find_package(SDL3 3.4.10 CONFIG REQUIRED COMPONENTS SDL3-static
+            PATHS
+                "${TAIKO_SDL_GPU_ROOT}/lib/cmake/SDL3"
+                "${TAIKO_SDL_GPU_ROOT}/lib64/cmake/SDL3"
+            NO_DEFAULT_PATH)
+    endif()
 endif()
 if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
     if(NOT EXISTS "${TAIKO_SDL_GPU_ROOT}/include/SDL3_shadercross/SDL_shadercross.h")
@@ -243,20 +296,27 @@ if(TAIKO_EMBED_PPU_IMAGE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(TAIKO_IMAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/embedded")
     set(TAIKO_IMAGE_BIN "${TAIKO_IMAGE_DIR}/taiko_ppu_image.bin")
-    set(TAIKO_IMAGE_RC  "${TAIKO_IMAGE_DIR}/taiko_ppu_image.rc")
+    if(WIN32)
+        set(TAIKO_IMAGE_GLUE "${TAIKO_IMAGE_DIR}/taiko_ppu_image.rc")
+        set(TAIKO_IMAGE_GLUE_ARG --rc "${TAIKO_IMAGE_GLUE}")
+    else()
+        enable_language(ASM)
+        set(TAIKO_IMAGE_GLUE "${TAIKO_IMAGE_DIR}/taiko_ppu_image.S")
+        set(TAIKO_IMAGE_GLUE_ARG --asm "${TAIKO_IMAGE_GLUE}")
+    endif()
     add_custom_command(
-        OUTPUT "${TAIKO_IMAGE_BIN}" "${TAIKO_IMAGE_RC}"
+        OUTPUT "${TAIKO_IMAGE_BIN}" "${TAIKO_IMAGE_GLUE}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${TAIKO_IMAGE_DIR}"
         COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_ppu_image.py"
                 "${TAIKO_EBOOT_IMAGE}"
-                --output "${TAIKO_IMAGE_BIN}" --rc "${TAIKO_IMAGE_RC}"
+                --output "${TAIKO_IMAGE_BIN}" ${TAIKO_IMAGE_GLUE_ARG}
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_ppu_image.py"
                 "${TAIKO_EBOOT_IMAGE}"
         COMMENT "Generating embedded PPU process image"
         VERBATIM)
-    set_source_files_properties("${TAIKO_IMAGE_RC}" PROPERTIES GENERATED TRUE)
-    list(APPEND TAIKO_EMBEDDED_IMAGE_SOURCES "${TAIKO_IMAGE_RC}")
+    set_source_files_properties("${TAIKO_IMAGE_GLUE}" PROPERTIES GENERATED TRUE)
+    list(APPEND TAIKO_EMBEDDED_IMAGE_SOURCES "${TAIKO_IMAGE_GLUE}")
 endif()
 
 # The title's SPURS enqueue is direct-called generated code, so apply its
@@ -318,7 +378,7 @@ file(GLOB GEN_SOURCES    "src/gen/*.c" "src/gen/*.cpp")
 # on `rchcnt(SPU_RdInMbox) == 0`, so the SPU never answered the PPU.
 file(GLOB SPU_GEN_SOURCES "src/spu_gen/*/spu_recomp.c" "src/spu_gen/*.c")
 
-add_executable(taiko_boot
+set(TAIKO_BOOT_SOURCES
     "${PS3RECOMP_DIR}/runtime/ppu/tests/boot_main.cpp"   # generic boot harness
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"        # vm + ELF loader + run
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_hle.cpp"           # NID -> handler dispatch
@@ -343,6 +403,14 @@ add_executable(taiko_boot
     ${RECOMP_SOURCES}
     ${TAIKO_EMBEDDED_IMAGE_SOURCES}
 )
+if(ANDROID)
+    add_library(taiko_boot SHARED ${TAIKO_BOOT_SOURCES})
+else()
+    add_executable(taiko_boot ${TAIKO_BOOT_SOURCES})
+endif()
+if(ANDROID)
+    set_target_properties(taiko_boot PROPERTIES OUTPUT_NAME main)
+endif()
 
 if(TAIKO_EMBED_PPU_IMAGE)
     # Only the boot harness needs to know that resource 101 exists. Keeping the
@@ -396,7 +464,9 @@ endif()
 # Static mbedTLS (scripts/build_mbedtls.sh) backs the online path: the arcade
 # services are HTTPS and the title's own cellSsl is a lifecycle shell. Vendored
 # rather than taken from the host so Linux and MinGW run one code path.
-if(WIN32)
+if(ANDROID)
+    set(_TAIKO_MBEDTLS_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-android-arm64")
+elseif(WIN32)
     set(_TAIKO_MBEDTLS_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-mingw")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
     set(_TAIKO_MBEDTLS_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls-rpi-arm64")
@@ -405,6 +475,11 @@ else()
 endif()
 set(TAIKO_MBEDTLS_ROOT "${_TAIKO_MBEDTLS_ROOT_DEFAULT}" CACHE PATH
     "Target mbedTLS installation prefix")
+# Library discoveries are absolute paths cached by CMake. A build directory
+# reused for a different target must not retain a host/glibc archive.
+unset(TAIKO_MBEDTLS_SSL CACHE)
+unset(TAIKO_MBEDTLS_X509 CACHE)
+unset(TAIKO_MBEDTLS_CRYPTO CACHE)
 find_library(TAIKO_MBEDTLS_SSL    mbedtls    PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_library(TAIKO_MBEDTLS_X509   mbedx509   PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_library(TAIKO_MBEDTLS_CRYPTO mbedcrypto PATHS "${TAIKO_MBEDTLS_ROOT}/lib" "${TAIKO_MBEDTLS_ROOT}/lib64" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
@@ -429,7 +504,9 @@ endif()
 # Static FreeType (scripts/build_freetype.sh) rasterizes the overlay text in the
 # game's own font. Vendored for the same reason as mbedTLS: one code path for
 # both targets, and no extra system package for the MinGW build.
-if(WIN32)
+if(ANDROID)
+    set(_TAIKO_FREETYPE_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-android-arm64")
+elseif(WIN32)
     set(_TAIKO_FREETYPE_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-mingw")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
     set(_TAIKO_FREETYPE_ROOT_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype-rpi-arm64")
@@ -438,6 +515,7 @@ else()
 endif()
 set(TAIKO_FREETYPE_ROOT "${_TAIKO_FREETYPE_ROOT_DEFAULT}" CACHE PATH
     "Target FreeType installation prefix")
+unset(TAIKO_FREETYPE_LIB CACHE)
 find_library(TAIKO_FREETYPE_LIB freetype
     PATHS "${TAIKO_FREETYPE_ROOT}/lib" "${TAIKO_FREETYPE_ROOT}/lib64"
     NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
@@ -486,6 +564,9 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
         SDL3_shadercross::SDL3_shadercross-static)
 endif()
 target_link_libraries(taiko_boot PRIVATE ps3recomp_runtime)
+if(ANDROID)
+    target_link_libraries(taiko_boot PRIVATE SDL3::SDL3-shared)
+endif()
 if(NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(taiko_boot PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
@@ -690,7 +771,7 @@ if(BUILD_TESTING AND TAIKO_AUDIO_BACKEND STREQUAL "sdl3" AND
         SKIP_RETURN_CODE 77 TIMEOUT 5)
 endif()
 
-if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
+if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu" AND NOT ANDROID)
     add_executable(rsx_replay
         "tools/rsx_replay.c"
         "src/taiko_host_input.cpp"

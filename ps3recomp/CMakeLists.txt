@@ -104,7 +104,11 @@ target_compile_definitions(ps3recomp_runtime PUBLIC
 # Presentation straight to KMS needs libdrm. It is only meaningful on a Linux
 # appliance that owns the display, so a missing libdrm simply leaves
 # rsx_kms_present.c compiling to stubs and the windowed path in charge.
-if(UNIX AND NOT APPLE)
+if(ANDROID)
+    # A reused cross-build directory can retain the host pkg-config result.
+    # Android never owns a Linux KMS device, and host libdrm is not linkable.
+    set(TAIKO_LIBDRM_FOUND FALSE)
+elseif(UNIX AND NOT APPLE)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(TAIKO_LIBDRM QUIET libdrm)

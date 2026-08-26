@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.level"
+        android:version="1" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:label="TaikoRecomp Android POC"
+        android:theme="@style/AppTheme">
+
+        <meta-data android:name="SDL_ENV.PS3_VFS_ROOT"
+            android:value="/storage/emulated/0/Android/data/org.taikorecomp.app/files/vfs" />
+        <meta-data android:name="SDL_ENV.PS3_VFS_LAYOUT" android:value="usrdir" />
+        <meta-data android:name="SDL_ENV.TAIKO_DNS_LOOPBACK" android:value="1" />
+        <meta-data android:name="SDL_ENV.TAIKO_OFFLINE_COMPLETE" android:value="1" />
+        <meta-data android:name="SDL_ENV.TAIKO_BOOT_VBLANK_HZ" android:value="120" />
+        <meta-data android:name="SDL_ENV.TAIKO_PERF_OVERLAY" android:value="1" />
+        <meta-data android:name="SDL_ENV.SDL_ORIENTATIONS"
+            android:value="LandscapeLeft LandscapeRight" />
+
+        <activity
+            android:name="org.taikorecomp.app.TaikoActivity"
+            android:alwaysRetainTaskState="true"
+            android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

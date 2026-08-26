@@ -67,7 +67,9 @@ void ps3_host_release_guest_vm(void* base)
 
 #else
 
+#ifndef __ANDROID__
 #include <execinfo.h>
+#endif
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -121,9 +123,15 @@ uintptr_t ps3_host_image_base(const void* address)
 
 size_t ps3_host_capture_backtrace(void** frames, size_t capacity)
 {
+#ifdef __ANDROID__
+    (void)frames;
+    (void)capacity;
+    return 0;
+#else
     if (capacity > INT32_MAX) capacity = INT32_MAX;
     int count = backtrace(frames, (int)capacity);
     return count > 0 ? (size_t)count : 0;
+#endif
 }
 
 void* ps3_host_reserve_guest_vm(void)

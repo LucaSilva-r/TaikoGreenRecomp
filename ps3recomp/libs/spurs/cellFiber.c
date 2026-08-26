@@ -10,10 +10,10 @@
 #include <string.h>
 #include <stdlib.h>
 
-#ifdef _WIN32
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
+#elif !defined(__ANDROID__)
 #include <ucontext.h>
 #endif
 
@@ -29,9 +29,9 @@ typedef struct FiberSlot {
     u32        stack_size;
     char       name[32];
     u32        priority;
-#ifdef _WIN32
+#if defined(_WIN32)
     LPVOID     native_fiber;
-#else
+#elif !defined(__ANDROID__)
     ucontext_t context;
     u8*        stack;
 #endif
@@ -41,9 +41,9 @@ static FiberSlot s_fibers[CELL_FIBER_MAX_FIBERS];
 static int s_initialized = 0;
 static s32 s_current_fiber = -1; /* index into s_fibers, or -1 for scheduler */
 
-#ifdef _WIN32
+#if defined(_WIN32)
 static LPVOID s_scheduler_fiber = NULL;
-#else
+#elif !defined(__ANDROID__)
 static ucontext_t s_scheduler_context;
 #endif
 
@@ -51,7 +51,7 @@ static ucontext_t s_scheduler_context;
  * Fiber trampoline
  * -----------------------------------------------------------------------*/
 
-#ifdef _WIN32
+#if defined(_WIN32)
 static void CALLBACK fiber_trampoline(LPVOID param)
 {
     u32 idx = (u32)(uintptr_t)param;
@@ -64,7 +64,7 @@ static void CALLBACK fiber_trampoline(LPVOID param)
     s_current_fiber = -1;
     SwitchToFiber(s_scheduler_fiber);
 }
-#else
+#elif !defined(__ANDROID__)
 static void fiber_trampoline(int idx_lo, int idx_hi)
 {
     u32 idx = ((u32)idx_hi << 16) | (u32)(u16)idx_lo;
@@ -91,15 +91,21 @@ s32 cellFiberPpuInitialize(void)
     memset(s_fibers, 0, sizeof(s_fibers));
     s_current_fiber = -1;
 
-#ifdef _WIN32
+#if defined(_WIN32)
     /* Convert the current thread to a fiber so we can switch */
     s_scheduler_fiber = ConvertThreadToFiber(NULL);
     if (!s_scheduler_fiber) {
         /* Already a fiber (e.g., re-init) */
         s_scheduler_fiber = GetCurrentFiber();
     }
-#else
+#elif !defined(__ANDROID__)
     getcontext(&s_scheduler_context);
+#else
+    /* Bionic intentionally has no getcontext/makecontext/swapcontext. Green
+     * does not import cellFiber in observed boots (its SPURS work is lifted),
+     * so retain a synchronous diagnostic fallback instead of making every
+     * Android build depend on a second platform context library. */
+    printf("[cellFiber] Android synchronous fallback active\n");
 #endif
 
     s_initialized = 1;
@@ -115,17 +121,17 @@ s32 cellFiberPpuFinalize(void)
 
     for (int i = 0; i < CELL_FIBER_MAX_FIBERS; i++) {
         if (s_fibers[i].in_use) {
-#ifdef _WIN32
+#if defined(_WIN32)
             if (s_fibers[i].native_fiber)
                 DeleteFiber(s_fibers[i].native_fiber);
-#else
+#elif !defined(__ANDROID__)
             free(s_fibers[i].stack);
 #endif
             s_fibers[i].in_use = 0;
         }
     }
 
-#ifdef _WIN32
+#if defined(_WIN32)
     ConvertFiberToThread();
     s_scheduler_fiber = NULL;
 #endif
@@ -180,7 +186,7 @@ s32 cellFiberPpuCreateFiber(CellFiber* fiber, CellFiberEntry entry,
         f->in_use = 0;
         return (s32)CELL_FIBER_ERROR_NOMEM;
     }
-#else
+#elif !defined(__ANDROID__)
     f->stack = (u8*)malloc(f->stack_size);
     if (!f->stack) {
         f->in_use = 0;
@@ -212,10 +218,10 @@ s32 cellFiberPpuDeleteFiber(CellFiber fiber)
 
     printf("[cellFiber] DeleteFiber(id=%u)\n", idx);
 
-#ifdef _WIN32
+#if defined(_WIN32)
     if (s_fibers[idx].native_fiber)
         DeleteFiber(s_fibers[idx].native_fiber);
-#else
+#elif !defined(__ANDROID__)
     free(s_fibers[idx].stack);
 #endif
 
@@ -242,9 +248,9 @@ s32 cellFiberPpuSwitchFiber(CellFiber fiber)
     s_current_fiber = (s32)idx;
     s_fibers[idx].state = CELL_FIBER_STATE_RUNNING;
 
-#ifdef _WIN32
+#if defined(_WIN32)
     SwitchToFiber(s_fibers[idx].native_fiber);
-#else
+#elif !defined(__ANDROID__)
     if (s_current_fiber == -1) {
         swapcontext(&s_scheduler_context, &s_fibers[idx].context);
     } else {
@@ -253,6 +259,13 @@ s32 cellFiberPpuSwitchFiber(CellFiber fiber)
                            : &s_scheduler_context;
         swapcontext(from, &s_fibers[idx].context);
     }
+#else
+    CellFiberEntry entry = s_fibers[idx].entry;
+    u64 arg = s_fibers[idx].arg;
+    entry(arg);
+    if (s_fibers[idx].state == CELL_FIBER_STATE_RUNNING)
+        s_fibers[idx].state = CELL_FIBER_STATE_TERMINATED;
+    s_current_fiber = -1;
 #endif
 
     return CELL_OK;
@@ -267,10 +280,15 @@ s32 cellFiberPpuYieldFiber(void)
     s32 prev = s_current_fiber;
     s_current_fiber = -1;
 
-#ifdef _WIN32
+#if defined(_WIN32)
     SwitchToFiber(s_scheduler_fiber);
-#else
+#elif !defined(__ANDROID__)
     swapcontext(&s_fibers[prev].context, &s_scheduler_context);
+#else
+    printf("[cellFiber] Yield is unavailable in Android synchronous mode\n");
+    s_current_fiber = (s32)prev;
+    s_fibers[prev].state = CELL_FIBER_STATE_RUNNING;
+    return (s32)CELL_FIBER_ERROR_PERM;
 #endif
     (void)prev;
 
@@ -285,9 +303,9 @@ s32 cellFiberPpuExitFiber(void)
     s_fibers[s_current_fiber].state = CELL_FIBER_STATE_TERMINATED;
     s_current_fiber = -1;
 
-#ifdef _WIN32
+#if defined(_WIN32)
     SwitchToFiber(s_scheduler_fiber);
-#else
+#elif !defined(__ANDROID__)
     setcontext(&s_scheduler_context);
 #endif
 
@@ -340,10 +358,15 @@ s32 cellFiberPpuSleep(void)
     s32 prev = s_current_fiber;
     s_current_fiber = -1;
 
-#ifdef _WIN32
+#if defined(_WIN32)
     SwitchToFiber(s_scheduler_fiber);
-#else
+#elif !defined(__ANDROID__)
     swapcontext(&s_fibers[prev].context, &s_scheduler_context);
+#else
+    printf("[cellFiber] Sleep is unavailable in Android synchronous mode\n");
+    s_current_fiber = (s32)prev;
+    s_fibers[prev].state = CELL_FIBER_STATE_RUNNING;
+    return (s32)CELL_FIBER_ERROR_PERM;
 #endif
     (void)prev;
 

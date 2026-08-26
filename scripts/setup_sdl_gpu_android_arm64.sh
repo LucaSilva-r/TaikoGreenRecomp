@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Build the complete SDL3/SDL_GPU shader stack for Android ARM64.
+set -euo pipefail
+
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+prefix="${TAIKO_SDL_GPU_ROOT:-${repo_dir}/third_party/sdl-gpu-android-arm64}"
+sdk_root="${TAIKO_ANDROID_SDK:-${repo_dir}/third_party/android-sdk}"
+ndk_root="${TAIKO_ANDROID_NDK:-${sdk_root}/ndk/28.2.13676358}"
+toolchain="${ndk_root}/build/cmake/android.toolchain.cmake"
+source_dir="${prefix}/.src"
+work_dir="${prefix}/.build"
+download_dir="${prefix}/.downloads"
+jobs="${TAIKO_DEP_JOBS:-4}"
+
+sdl_version="3.4.10"
+sdl_url="https://github.com/libsdl-org/SDL/releases/download/release-${sdl_version}/SDL3-${sdl_version}.tar.gz"
+sdl_sha256="12b34280415ec8418c864408b93d008a20a6530687ee613d60bfbd20411f2785"
+shadercross_commit="e55cf5e31ced6f3d1be5cc6d0c50e99384f9f4ba"
+spirv_cross_commit="1a6169566c73d3da552748fc372fe2bbb856e46e"
+dxc_commit="2c84a1c5ab7091608c97df6ba5ccf46e71c322eb"
+dxc_root="${prefix}/dxc-v1.8.2502"
+
+for tool in cmake git ninja curl sha256sum tar; do
+    command -v "${tool}" >/dev/null || {
+        printf 'Missing required tool: %s\n' "${tool}" >&2
+        exit 2
+    }
+done
+[[ -f "${toolchain}" ]] || {
+    echo "Android NDK 28.2.13676358 is missing; run scripts/setup_android_sdk.sh" >&2
+    exit 2
+}
+mkdir -p "${prefix}" "${source_dir}" "${work_dir}" "${download_dir}"
+
+download_verified() {
+    local url="$1" output="$2" expected="$3"
+    if [[ -f "${output}" ]] &&
+       printf '%s  %s\n' "${expected}" "${output}" | sha256sum -c - >/dev/null 2>&1; then
+        return
+    fi
+    local partial="${output}.part"
+    curl -L --fail --retry 3 --output "${partial}" "${url}"
+    printf '%s  %s\n' "${expected}" "${partial}" | sha256sum -c -
+    mv "${partial}" "${output}"
+}
+
+checkout_exact() {
+    local url="$1" directory="$2" commit="$3"
+    if [[ ! -d "${directory}/.git" ]]; then
+        git clone --filter=blob:none --no-checkout "${url}" "${directory}"
+    fi
+    git -C "${directory}" fetch --depth 1 origin "${commit}"
+    git -C "${directory}" checkout --detach "${commit}"
+    [[ "$(git -C "${directory}" rev-parse HEAD)" == "${commit}" ]]
+}
+
+android_cmake_args=(
+    -G Ninja
+    -DCMAKE_TOOLCHAIN_FILE="${toolchain}"
+    -DANDROID_ABI=arm64-v8a
+    -DANDROID_PLATFORM=android-28
+    -DCMAKE_BUILD_TYPE=Release
+)
+
+sdl_archive="${download_dir}/SDL3-${sdl_version}.tar.gz"
+download_verified "${sdl_url}" "${sdl_archive}" "${sdl_sha256}"
+sdl_source="${source_dir}/SDL3-${sdl_version}"
+if [[ ! -f "${sdl_source}/CMakeLists.txt" ]]; then
+    tar -xzf "${sdl_archive}" -C "${source_dir}"
+fi
+cmake -S "${sdl_source}" -B "${work_dir}/sdl" \
+    "${android_cmake_args[@]}" -DCMAKE_INSTALL_PREFIX="${prefix}" \
+    -DSDL_INSTALL=ON -DSDL_SHARED=ON -DSDL_STATIC=OFF \
+    -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+cmake --build "${work_dir}/sdl" --parallel "${jobs}"
+cmake --install "${work_dir}/sdl"
+
+spirv_source="${source_dir}/SPIRV-Cross"
+checkout_exact "https://github.com/KhronosGroup/SPIRV-Cross.git" \
+    "${spirv_source}" "${spirv_cross_commit}"
+cmake -S "${spirv_source}" -B "${work_dir}/spirv-cross" \
+    "${android_cmake_args[@]}" -DCMAKE_INSTALL_PREFIX="${prefix}" \
+    -DSPIRV_CROSS_STATIC=ON -DSPIRV_CROSS_SHARED=OFF \
+    -DSPIRV_CROSS_CLI=OFF -DSPIRV_CROSS_ENABLE_TESTS=OFF \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+cmake --build "${work_dir}/spirv-cross" --parallel "${jobs}"
+cmake --install "${work_dir}/spirv-cross"
+
+# DXC needs native TableGen executables while generating target source. Build
+# those two small host tools first, then compile the shared compiler for Bionic.
+dxc_source="${source_dir}/DirectXShaderCompiler"
+checkout_exact "https://github.com/libsdl-org/DirectXShaderCompiler.git" \
+    "${dxc_source}" "${dxc_commit}"
+git -C "${dxc_source}" submodule update --init --depth 1
+cmake -S "${dxc_source}" -B "${work_dir}/dxc-native" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DDXC_COVERAGE=OFF \
+    -C "${dxc_source}/cmake/caches/PredefinedParams.cmake" \
+    -DHLSL_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF \
+    -DHLSL_DISABLE_SOURCE_GENERATION=TRUE -DSPIRV_BUILD_TESTS=OFF \
+    -DLLVM_PARALLEL_COMPILE_JOBS="${jobs}" -DLLVM_PARALLEL_LINK_JOBS=1
+cmake --build "${work_dir}/dxc-native" \
+    --target llvm-tblgen clang-tblgen --parallel "${jobs}"
+cmake -S "${dxc_source}" -B "${work_dir}/dxc-android" \
+    "${android_cmake_args[@]}" -DCMAKE_INSTALL_PREFIX="${dxc_root}" \
+    -DDXC_COVERAGE=OFF \
+    -C "${dxc_source}/cmake/caches/PredefinedParams.cmake" \
+    -DHLSL_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF \
+    -DHLSL_DISABLE_SOURCE_GENERATION=TRUE -DSPIRV_BUILD_TESTS=OFF \
+    -DLLVM_TABLEGEN="${work_dir}/dxc-native/bin/llvm-tblgen" \
+    -DCLANG_TABLEGEN="${work_dir}/dxc-native/bin/clang-tblgen" \
+    -DLLVM_PARALLEL_COMPILE_JOBS="${jobs}" -DLLVM_PARALLEL_LINK_JOBS=1
+cmake --build "${work_dir}/dxc-android" --target dxcompiler dxildll \
+    --parallel "${jobs}"
+mkdir -p "${dxc_root}/include" "${dxc_root}/lib"
+cmake -E copy_directory "${dxc_source}/include/dxc" "${dxc_root}/include/dxc"
+cp -a "${work_dir}/dxc-android/lib/libdxcompiler.so"* "${dxc_root}/lib/"
+cp -a "${work_dir}/dxc-android/lib/libdxil.so"* "${dxc_root}/lib/"
+
+shadercross_source="${source_dir}/SDL_shadercross"
+checkout_exact "https://github.com/libsdl-org/SDL_shadercross.git" \
+    "${shadercross_source}" "${shadercross_commit}"
+spirv_package_args=()
+for component in c core cpp glsl hlsl msl reflect; do
+    spirv_package_args+=(
+        "-Dspirv_cross_${component}_DIR=${prefix}/share/spirv_cross_${component}/cmake"
+    )
+done
+cmake -S "${shadercross_source}" -B "${work_dir}/shadercross" \
+    "${android_cmake_args[@]}" -DCMAKE_INSTALL_PREFIX="${prefix}" \
+    -DCMAKE_PREFIX_PATH="${prefix}" \
+    -DSDL3_DIR="${prefix}/lib/cmake/SDL3" \
+    "${spirv_package_args[@]}" \
+    -DDirectXShaderCompiler_ROOT="${dxc_root}" \
+    -DDirectXShaderCompiler_INCLUDE_PATH="${dxc_root}/include/dxc" \
+    -DDirectXShaderCompiler_dxcompiler_LIBRARY="${dxc_root}/lib/libdxcompiler.so" \
+    -DDirectXShaderCompiler_dxil_LIBRARY="${dxc_root}/lib/libdxil.so" \
+    -DSDLSHADERCROSS_DXC=ON -DSDLSHADERCROSS_VENDORED=OFF \
+    -DSDLSHADERCROSS_SHARED=OFF -DSDLSHADERCROSS_STATIC=ON \
+    -DSDLSHADERCROSS_SPIRVCROSS_SHARED=OFF \
+    -DSDLSHADERCROSS_CLI=OFF -DSDLSHADERCROSS_TESTS=OFF
+cmake --build "${work_dir}/shadercross" --parallel "${jobs}"
+cmake --install "${work_dir}/shadercross"
+
+{
+    printf 'TARGET=android-arm64-v8a-api28\n'
+    printf 'SDL=%s\n' "${sdl_version}"
+    printf 'SDL_SHA256=%s\n' "${sdl_sha256}"
+    printf 'SDL_SHADERCROSS=%s\n' "${shadercross_commit}"
+    printf 'SPIRV_CROSS=%s\n' "${spirv_cross_commit}"
+    printf 'DXC_SOURCE=%s\n' "${dxc_commit}"
+} >"${prefix}/versions.txt"
+
+printf 'Android ARM64 SDL_GPU dependencies installed in %s\n' "${prefix}"

@@ -34,7 +34,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("elf", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--rc", required=True, type=Path)
+    glue = parser.add_mutually_exclusive_group(required=True)
+    glue.add_argument("--rc", type=Path)
+    glue.add_argument("--asm", type=Path)
     args = parser.parse_args()
 
     elf = args.elf.read_bytes()
@@ -142,11 +144,25 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(payload)
-    args.rc.write_text(
-        "#include <windows.h>\n"
-        f"{RESOURCE_ID} RCDATA \"{c_string(args.output)}\"\n",
-        encoding="ascii",
-    )
+    if args.rc:
+        args.rc.write_text(
+            "#include <windows.h>\n"
+            f"{RESOURCE_ID} RCDATA \"{c_string(args.output)}\"\n",
+            encoding="ascii",
+        )
+    else:
+        args.asm.write_text(
+            '.section .rodata.taiko_ppu_image,"a",%progbits\n'
+            ".balign 16\n"
+            ".global taiko_ppu_image_start\n"
+            ".global taiko_ppu_image_end\n"
+            ".type taiko_ppu_image_start, %object\n"
+            "taiko_ppu_image_start:\n"
+            f'.incbin "{c_string(args.output)}"\n'
+            "taiko_ppu_image_end:\n"
+            ".size taiko_ppu_image_start, .-taiko_ppu_image_start\n",
+            encoding="ascii",
+        )
 
     included_bytes = sum(len(data) for _, _, _, data in ranges)
     print(

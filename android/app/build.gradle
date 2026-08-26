@@ -1,0 +1,52 @@
+plugins {
+    id 'com.android.application'
+}
+
+def repoRoot = file('../..').canonicalFile
+def pinnedSdl = new File(repoRoot,
+        'third_party/sdl-gpu-rpi-arm64/.src/SDL3-3.4.10')
+
+android {
+    namespace 'org.taikorecomp.app'
+    compileSdk 35
+    ndkVersion '28.2.13676358'
+
+    defaultConfig {
+        applicationId 'org.taikorecomp.app'
+        minSdk 28
+        targetSdk 35
+        versionCode 1
+        versionName '0.1-android-poc'
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = [
+                'src/main/java',
+                new File(pinnedSdl, 'android-project/app/src/main/java')
+            ]
+            res.srcDirs = [new File(pinnedSdl, 'android-project/app/src/main/res')]
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}

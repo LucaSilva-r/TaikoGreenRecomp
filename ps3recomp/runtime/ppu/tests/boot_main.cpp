@@ -46,6 +46,11 @@ void     ps3_load_prx_modules(void) {}
 #include <atomic>
 #include <cstdio>
 #include <ps3emu/host_platform.h>
+#ifdef __ANDROID__
+#include <fcntl.h>
+#include <SDL3/SDL_main.h>
+#include <unistd.h>
+#endif
 #include <ps3emu/host_sdl.h>
 #ifdef _WIN32
 #include <algorithm>
@@ -206,6 +211,49 @@ static uint32_t load_embedded_ppu_image(void)
     const DWORD size = SizeofResource(NULL, resource);
     const void* data = loaded ? LockResource(loaded) : NULL;
     return ppu_load_embedded_image(data, size);
+#else
+    fprintf(stderr, "[boot] this build has no embedded PPU image\n");
+    return 0;
+#endif
+}
+#elif defined(__ANDROID__)
+static void set_default_environment(const char* name, const char* value)
+{
+    if (!getenv(name))
+        setenv(name, value, 0);
+}
+
+static int configure_standalone_usrdir(void)
+{
+    const char* root = getenv("PS3_VFS_ROOT");
+    if (!root || !*root) {
+        fprintf(stderr,
+                "[boot] Android build requires PS3_VFS_ROOT (set by the APK)\n");
+        return 0;
+    }
+    strncpy(s_vfs_root, root, sizeof s_vfs_root - 1);
+    s_vfs_root[sizeof s_vfs_root - 1] = 0;
+    ppu_vfs_root = s_vfs_root;
+
+    set_default_environment("PS3_VFS_LAYOUT", "usrdir");
+    set_default_environment("PS3_TOC_SET", "0x1027c58,0x1037a88,0x1047a38");
+    set_default_environment("FLOW_NOSPILL", "1");
+    set_default_environment("TAIKO_DNS_LOOPBACK", "1");
+    set_default_environment("TAIKO_OFFLINE_COMPLETE", "1");
+    set_default_environment("TAIKO_FS_YIELD", "0");
+    set_default_environment("TAIKO_AUDIO_DECODE", "1");
+    set_default_environment("TAIKO_AUDIO_SPU", "1");
+    return 1;
+}
+
+static uint32_t load_embedded_ppu_image(void)
+{
+#ifdef TAIKO_EMBED_PPU_IMAGE
+    extern const unsigned char taiko_ppu_image_start[];
+    extern const unsigned char taiko_ppu_image_end[];
+    return ppu_load_embedded_image(
+        taiko_ppu_image_start,
+        (size_t)(taiko_ppu_image_end - taiko_ppu_image_start));
 #else
     fprintf(stderr, "[boot] this build has no embedded PPU image\n");
     return 0;
@@ -701,8 +749,32 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
 }
 #endif
 
+#ifdef __ANDROID__
+static void android_redirect_stdio(void)
+{
+    const char* root = getenv("PS3_VFS_ROOT");
+    if (!root || !*root) return;
+
+    char path[1024];
+    if (snprintf(path, sizeof path, "%s/taiko-android.log", root) >=
+        (int)sizeof path)
+        return;
+
+    int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    if (fd < 0) return;
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    close(fd);
+}
+#endif
+
 int main(int argc, char** argv)
 {
+#ifdef __ANDROID__
+    /* Android does not reliably surface native stdout/stderr in logcat. Keep
+     * the normal diagnostics in the app's external-files VFS for adb pulls. */
+    android_redirect_stdio();
+#endif
     const int standalone = argc < 2;
 #ifndef TAIKO_EMBED_PPU_IMAGE
     if (standalone) {
@@ -710,7 +782,7 @@ int main(int argc, char** argv)
         return 2;
     }
 #endif
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__ANDROID__)
     /* Establish release defaults before reserving/loading the guest VM. Several
      * runtime paths cache environment switches on first use, and mutating the
      * process environment after loader activity perturbs early title startup. */
@@ -759,7 +831,7 @@ int main(int argc, char** argv)
     if (!vm_base) { printf("vm alloc failed\n"); return 1; }
 
     uint32_t entry = standalone
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__ANDROID__)
         ? load_embedded_ppu_image()
 #else
         ? 0

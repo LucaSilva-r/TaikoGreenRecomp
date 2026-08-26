@@ -9,6 +9,7 @@
 #   scripts/build_freetype.sh          # both targets
 #   scripts/build_freetype.sh linux    # or one of them
 #   scripts/build_freetype.sh rpi-arm64
+#   scripts/build_freetype.sh android-arm64
 set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,6 +58,16 @@ for target in ${targets[@]}; do
         linux) build_target linux ;;
         rpi-arm64) build_target rpi-arm64 \
                    -DCMAKE_TOOLCHAIN_FILE="${repo_dir}/cmake/raspberry-pi-aarch64.cmake" ;;
+        android-arm64)
+            android_ndk="${TAIKO_ANDROID_NDK:-${repo_dir}/third_party/android-sdk/ndk/28.2.13676358}"
+            [[ -f "${android_ndk}/build/cmake/android.toolchain.cmake" ]] || {
+                echo "Android NDK not found at ${android_ndk}" >&2
+                exit 2
+            }
+            build_target android-arm64 \
+                -DCMAKE_TOOLCHAIN_FILE="${android_ndk}/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-28 ;;
         mingw) build_target mingw \
                    -DCMAKE_TOOLCHAIN_FILE="${repo_dir}/mingw-w64.cmake" ;;
         *) echo "unknown target: ${target}" >&2; exit 1 ;;

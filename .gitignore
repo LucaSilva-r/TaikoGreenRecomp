@@ -19,6 +19,9 @@ src/spu_gen/
 # --- Build output and third-party prefixes ----------------------------------
 build*/
 third_party/
+android/.gradle/
+android/local.properties
+android/app/src/main/jniLibs/
 
 # --- Binary formats we must never carry -------------------------------------
 *.elf
