@@ -223,6 +223,11 @@ extern "C" void ps3_frame_boot_fast_finish(void)
     s_boot_fast_done.store(true, std::memory_order_release);
 }
 
+extern "C" int ps3_frame_boot_fast_is_done(void)
+{
+    return s_boot_fast_done.load(std::memory_order_acquire) ? 1 : 0;
+}
+
 extern "C" int ps3recomp_start_frame_driver(void)
 {
     s_frame_stop.store(false, std::memory_order_release);

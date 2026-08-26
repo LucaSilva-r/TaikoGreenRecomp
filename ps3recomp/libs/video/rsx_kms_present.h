@@ -50,6 +50,10 @@ int rsx_kms_present_dmabuf(unsigned index,
                            unsigned overlay_x, unsigned overlay_y,
                            unsigned overlay_width, unsigned overlay_height,
                            uint64_t *copy_ns, uint64_t *flip_ns);
+/* Duplicate the out-fence for the most recently submitted atomic update.
+ * Diagnostics may wait on this copy without stalling the render thread. The
+ * caller owns the returned fd, or receives -1 when no fence is available. */
+int rsx_kms_present_dup_pending_fence(void);
 void rsx_kms_present_shutdown(void);
 
 #ifdef __cplusplus

@@ -8,6 +8,9 @@ std::atomic<uint32_t> s_levels[2];
 std::atomic<uint32_t> s_rising[2];
 std::atomic<uint64_t> s_hit_timestamp[2][4];
 std::atomic<bool> s_active;
+std::atomic<uint64_t> s_trace_event_ns;
+std::atomic<uint64_t> s_trace_usio_ns;
+std::atomic<uint64_t> s_trace_sequence;
 constexpr uint32_t kHitBits[4] = {
     TAIKO_ACTION_HIT_SL, TAIKO_ACTION_HIT_CL,
     TAIKO_ACTION_HIT_CR, TAIKO_ACTION_HIT_SR};
@@ -26,6 +29,9 @@ void latch(unsigned player, uint32_t rising, uint64_t timestamp_ns)
 extern "C" void taiko_host_input_reset(void)
 {
     s_active.store(false, std::memory_order_release);
+    s_trace_event_ns.store(0, std::memory_order_relaxed);
+    s_trace_usio_ns.store(0, std::memory_order_relaxed);
+    s_trace_sequence.store(0, std::memory_order_release);
     for (unsigned player = 0; player < 2; ++player) {
         s_levels[player].store(0, std::memory_order_relaxed);
         s_rising[player].store(0, std::memory_order_relaxed);
@@ -78,5 +84,38 @@ extern "C" void taiko_host_input_consume(taiko_host_input_snapshot* snapshot)
                     s_hit_timestamp[player][hit].exchange(
                         0, std::memory_order_acq_rel);
         }
+    }
+}
+
+extern "C" void taiko_host_input_trace_consumed(uint64_t event_ns,
+                                                   uint64_t usio_ns)
+{
+    if (!event_ns || !usio_ns) return;
+    const uint64_t sequence = s_trace_sequence.load(std::memory_order_relaxed);
+    s_trace_sequence.store(sequence + 1u, std::memory_order_release);
+    s_trace_event_ns.store(event_ns, std::memory_order_relaxed);
+    s_trace_usio_ns.store(usio_ns, std::memory_order_relaxed);
+    s_trace_sequence.store(sequence + 2u, std::memory_order_release);
+}
+
+extern "C" void taiko_host_input_trace_snapshot(
+    taiko_input_trace_marker* marker)
+{
+    if (!marker) return;
+    for (;;) {
+        const uint64_t before =
+            s_trace_sequence.load(std::memory_order_acquire);
+        if (before & 1u) continue;
+        const uint64_t event_ns =
+            s_trace_event_ns.load(std::memory_order_relaxed);
+        const uint64_t usio_ns =
+            s_trace_usio_ns.load(std::memory_order_relaxed);
+        const uint64_t after =
+            s_trace_sequence.load(std::memory_order_acquire);
+        if (before != after) continue;
+        marker->sequence = after / 2u;
+        marker->event_ns = event_ns;
+        marker->usio_ns = usio_ns;
+        return;
     }
 }

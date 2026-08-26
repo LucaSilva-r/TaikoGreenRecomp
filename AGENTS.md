@@ -69,10 +69,13 @@ Budget **~3 GB per job** and set it from available RAM, not core count:
 cmake -S . -B build -DTAIKO_COMPILE_JOBS=8 ...   # ~24 GB peak, needs 32 GB+
 ```
 
-The default stays at 4 so a 16 GB machine builds unattended. On a 46 GB box 8
-is comfortable and roughly halves a full rebuild; going to `nproc` is what
-caused the original wedging. It is a cache variable — pass it at configure
-time, or edit the cache and re-run cmake.
+The default stays at 4 so a 16 GB machine builds unattended. **On this 46 GB
+development host, agents must use 8** for TaikoRecomp builds: configure native
+build directories with `-DTAIKO_COMPILE_JOBS=8`, and invoke cross-build scripts
+as `TAIKO_COMPILE_JOBS=8 ./scripts/build_rpi_arm64.sh`. Eight is comfortable
+and roughly halves a full rebuild; going to `nproc` is what caused the original
+wedging. It is a cache variable — pass it at configure time, or reconfigure an
+existing build directory before expecting the new limit to apply.
 
 Changing the chunk count (a re-lift) needs a **re-configure**, not just a build —
 `file(GLOB)` is evaluated at configure time.
@@ -559,6 +562,18 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   short window: bnusCore buffers ahead, so the first checkpoint always shows a
   slow apparent rate that is really the constant prefill lead. Take
   segment-to-segment rates.
+- **Don3D and ordinary Lumen animation timing is frame-rate independent**
+  (2026-08-26; Pi live validated). `TAIKO_ANIMATION_TIMING=1` measures elapsed
+  guest flip intervals in authored 60 Hz units, then scales Lumen's delta at
+  guest `0x0038B560` and Don3D's shared NU motion step at `0x002A6BCC`.
+  Song Select held the same Don-chan animation speed while switching between
+  roughly 40--47 FPS and the 60 FPS difficulty screen. Both insertions live in
+  `tools/recomp_hand_edits.json` so relifting preserves them. Do not replace the
+  Don3D insertion with only `ppu_register_function(0x002A6BB4, ...)`: its nine
+  lifted callers invoke `func_002A6BB4` directly and bypass the indirect/OPD
+  registry. `TAIKO_ANIMATION_TIMING_TRACE=1` reports the scale and Don3D/Lumen
+  call counts. The generated `onp_don`/`onp_katsu` face timelines remain a
+  separate deferred problem; do not feed them fractional deltas.
 - ~~Thread 5 spins on SPU event queue 5.~~ **Fixed 2026-08-12** — that was the
   audio mixer's `'END '` wait never being satisfied. Audio now works; see
   "Audio mixer" below.

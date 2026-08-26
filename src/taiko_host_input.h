@@ -27,6 +27,12 @@ typedef struct taiko_host_input_snapshot {
     int active;
 } taiko_host_input_snapshot;
 
+typedef struct taiko_input_trace_marker {
+    uint64_t sequence;
+    uint64_t event_ns;
+    uint64_t usio_ns;
+} taiko_input_trace_marker;
+
 void taiko_host_input_reset(void);
 void taiko_host_input_set_active(int active);
 void taiko_host_input_update_levels(unsigned player, uint32_t levels,
@@ -35,6 +41,10 @@ void taiko_host_input_press(unsigned player, uint32_t actions,
                             uint64_t timestamp_ns);
 void taiko_host_input_release(unsigned player, uint32_t actions);
 void taiko_host_input_consume(taiko_host_input_snapshot* snapshot);
+/* End-to-end diagnostic marker: USIO publishes the kernel event and guest
+ * consumption times; the renderer snapshots the newest marker onto batches. */
+void taiko_host_input_trace_consumed(uint64_t event_ns, uint64_t usio_ns);
+void taiko_host_input_trace_snapshot(taiko_input_trace_marker* marker);
 
 #ifdef __cplusplus
 }

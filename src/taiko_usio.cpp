@@ -965,6 +965,18 @@ void build_input_frames()
     if ((rising[0] | rising[1]) & kTest)
         g_usio.test_on = !g_usio.test_on;
 #ifndef PS3RECOMP_INPUT_BACKEND_NULL
+    if (std::getenv("TAIKO_INPUT_E2E_TRACE") &&
+        ((rising[0] | rising[1]) & (kHitSl | kHitCl | kHitCr | kHitSr))) {
+        uint64_t oldest = UINT64_MAX;
+        for (unsigned player = 0; player < 2; ++player)
+            for (unsigned hit = 0; hit < 4; ++hit)
+                if ((rising[player] & kHitBits[hit]) &&
+                    input.hit_timestamp_ns[player][hit])
+                    oldest = std::min(oldest,
+                                      input.hit_timestamp_ns[player][hit]);
+        if (oldest != UINT64_MAX)
+            taiko_host_input_trace_consumed(oldest, ps3_host_monotonic_ns());
+    }
     if (input_trace_enabled() &&
         (g_usio.input_trace_budget || rising[0] || rising[1])) {
         if (g_usio.input_trace_budget) --g_usio.input_trace_budget;
@@ -1373,6 +1385,17 @@ void hle_bulk_transfer(ppu_context* ctx)
     }
     callback(callback_opd, 0, count, argument);
     ctx->gpr[3] = 0;
+}
+
+extern "C" int ppu_gcm_pump_after_hle(uint32_t nid, ppu_context* ctx)
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("TAIKO_INPUT_PUMP_AFTER_USIO");
+        return value && value[0] && value[0] != '0';
+    }();
+    if (!enabled || nid != 0xAC77EB78u || !ctx) return 0;
+    const uint32_t pipe = static_cast<uint32_t>(ctx->gpr[3]);
+    return pipe == kPipeIn || pipe == kPipeOut;
 }
 
 __attribute__((constructor)) void register_taiko_usio()

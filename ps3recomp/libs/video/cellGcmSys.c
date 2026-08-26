@@ -22,6 +22,11 @@ static u32 s_gcm_context_ea = 0;
 #include <ps3emu/host_platform.h>
 #include <stdint.h>
 
+/* Optional title hook.  A project may use guest flip submissions as its
+ * authored-frame clock without coupling the generic GCM runtime to that
+ * project's animation implementation. */
+extern void taiko_project_flip_command(void) __attribute__((weak));
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -1160,6 +1165,8 @@ s32 cellGcmSetFlipCommand(u32 bufferId)
     s_flip_pending = 1;   /* ticker: present BEFORE the next drain */
     s_flip_request_count++;
     s_last_flip_time = get_timestamp_ns();
+    if (taiko_project_flip_command)
+        taiko_project_flip_command();
 
     /* Invoke via OPD resolution, not a raw call into guest code. */
     if (s_flip_handler_opd && g_ps3_guest_caller)
@@ -1207,6 +1214,8 @@ s32 cellGcmSetPrepareFlip(void* ctx, u32 bufferId)
     s_flip_status = CELL_GCM_FLIP_STATUS_DONE;
     s_flip_request_count++;
     s_last_flip_time = get_timestamp_ns();
+    if (taiko_project_flip_command)
+        taiko_project_flip_command();
 
     /* Invoke the guest flip handler via OPD resolution -- s_flip_handler holds
      * the raw guest OPD (e.g. 0x530D70); calling it as a host function pointer

@@ -54,6 +54,7 @@ extern bool SDL_GPUVulkanExportTextureDMABUF(
 #define SDL_RSX_KMS_MODIFIERS 64u
 #define SDL_RSX_SHADER_DIALECT_VERSION 3u
 #define SDL_RSX_PACE_SAMPLES 256u
+#define SDL_RSX_INPUT_VBLANK_TRACES 64u
 #define FPS_OVERLAY_WIDTH 128
 #define FPS_OVERLAY_HEIGHT 40
 #define FPS_GLYPH_SCALE 4
@@ -118,6 +119,12 @@ extern void taiko_host_input_press(unsigned player, unsigned actions,
                                    unsigned long long timestamp_ns);
 extern void taiko_host_input_release(unsigned player, unsigned actions);
 #ifndef RSX_SDL_REPLAY_STANDALONE
+typedef struct taiko_input_trace_marker {
+    uint64_t sequence;
+    uint64_t event_ns;
+    uint64_t usio_ns;
+} taiko_input_trace_marker;
+extern void taiko_host_input_trace_snapshot(taiko_input_trace_marker* marker);
 extern int taiko_audio_offset_adjust_ms(int delta_ms);
 extern int taiko_audio_offset_get_ms(void);
 extern void taiko_overlay_set_status(const char* text, int expires_in);
@@ -131,9 +138,20 @@ enum {
     TAIKO_UP = 1u << 8, TAIKO_DOWN = 1u << 9
 };
 
+typedef struct input_trace_frame {
+    Uint64 sequence;
+    Uint64 event_ns;
+    Uint64 usio_ns;
+    Uint64 enqueue_ns;
+    Uint64 execute_ns;
+    Uint64 batch_serial;
+    unsigned ordinal;
+} input_trace_frame;
+
 typedef struct queued_batch {
     rsx_render_batch batch;
     Uint64 enqueue_ns;
+    input_trace_frame input_trace;
     int occupied;
 } queued_batch;
 
@@ -249,6 +267,7 @@ typedef struct sdl_rsx_state {
         unsigned cpu_overlay_pitch;
         unsigned cpu_overlay_x, cpu_overlay_y;
         unsigned cpu_overlay_width, cpu_overlay_height;
+        input_trace_frame input_trace;
         int busy;
     } kms_slots[3];
     unsigned kms_write;
@@ -267,6 +286,18 @@ typedef struct sdl_rsx_state {
     SDL_Condition* kms_work;
     SDL_Condition* kms_free;
     int kms_stop;
+    input_trace_frame current_input_trace;
+    struct input_vblank_trace {
+        input_trace_frame trace;
+        int fence_fd;
+    } input_vblank_traces[SDL_RSX_INPUT_VBLANK_TRACES];
+    unsigned input_vblank_read;
+    unsigned input_vblank_write;
+    unsigned input_vblank_count;
+    SDL_Thread* input_vblank_thread;
+    SDL_Mutex* input_vblank_mutex;
+    SDL_Condition* input_vblank_work;
+    int input_vblank_stop;
     Uint64 perf_vertices_ns;
     Uint64 perf_render_ns;
     Uint64 perf_present_ns;
@@ -2476,6 +2507,129 @@ static void kms_snapshot_cpu_overlay(struct kms_slot* slot)
     slot->cpu_overlay_height = height;
 }
 
+static void input_trace_presented(const input_trace_frame* trace,
+                                  Uint64 present_ns, const char* path,
+                                  int exact_scanout)
+{
+    if (!trace || !trace->sequence || present_ns < trace->event_ns) return;
+    const double event_to_usio = trace->usio_ns >= trace->event_ns
+        ? (double)(trace->usio_ns - trace->event_ns) / 1000000.0 : 0.0;
+    const double usio_to_enqueue = trace->enqueue_ns >= trace->usio_ns
+        ? (double)(trace->enqueue_ns - trace->usio_ns) / 1000000.0 : 0.0;
+    const double queue = trace->execute_ns >= trace->enqueue_ns
+        ? (double)(trace->execute_ns - trace->enqueue_ns) / 1000000.0 : 0.0;
+    const double execute_to_present = present_ns >= trace->execute_ns
+        ? (double)(present_ns - trace->execute_ns) / 1000000.0 : 0.0;
+    const double total = (double)(present_ns - trace->event_ns) / 1000000.0;
+    if (exact_scanout) {
+        fprintf(stderr,
+                "[INPUT-E2E] hit=%llu frame=+%u batch=%llu path=%s "
+                "event-usio=%.3fms usio-enqueue=%.3fms queue=%.3fms "
+                "execute-scanout=%.3fms event-scanout=%.3fms exact=1\n",
+                (unsigned long long)trace->sequence, trace->ordinal,
+                (unsigned long long)trace->batch_serial, path,
+                event_to_usio, usio_to_enqueue, queue,
+                execute_to_present, total);
+    } else {
+        fprintf(stderr,
+                "[INPUT-E2E] hit=%llu frame=+%u batch=%llu path=%s "
+                "event-usio=%.3fms usio-enqueue=%.3fms queue=%.3fms "
+                "execute-commit=%.3fms event-commit=%.3fms "
+                "scanout-adds=0..16.7ms\n",
+                (unsigned long long)trace->sequence, trace->ordinal,
+                (unsigned long long)trace->batch_serial, path,
+                event_to_usio, usio_to_enqueue, queue,
+                execute_to_present, total);
+    }
+}
+
+static int input_vblank_trace_worker(void* userdata)
+{
+    (void)userdata;
+    for (;;) {
+        SDL_LockMutex(s_sdl.input_vblank_mutex);
+        while (!s_sdl.input_vblank_count && !s_sdl.input_vblank_stop)
+            SDL_WaitCondition(s_sdl.input_vblank_work,
+                              s_sdl.input_vblank_mutex);
+        if (s_sdl.input_vblank_stop && !s_sdl.input_vblank_count) {
+            SDL_UnlockMutex(s_sdl.input_vblank_mutex);
+            return 0;
+        }
+        struct input_vblank_trace item =
+            s_sdl.input_vblank_traces[s_sdl.input_vblank_read];
+        s_sdl.input_vblank_read =
+            (s_sdl.input_vblank_read + 1u) % SDL_RSX_INPUT_VBLANK_TRACES;
+        --s_sdl.input_vblank_count;
+        SDL_UnlockMutex(s_sdl.input_vblank_mutex);
+
+        struct pollfd wait = { item.fence_fd, POLLIN, 0 };
+        int result;
+        do {
+            result = poll(&wait, 1, -1);
+        } while (result < 0 && errno == EINTR);
+        const Uint64 scanout_ns = ps3_host_monotonic_ns();
+        close(item.fence_fd);
+        if (result > 0)
+            input_trace_presented(&item.trace, scanout_ns,
+                                  "zero-copy-vblank", 1);
+    }
+}
+
+static int input_vblank_trace_start(void)
+{
+    if (s_sdl.input_vblank_thread) return 0;
+    s_sdl.input_vblank_mutex = SDL_CreateMutex();
+    s_sdl.input_vblank_work = SDL_CreateCondition();
+    if (!s_sdl.input_vblank_mutex || !s_sdl.input_vblank_work) return -1;
+    s_sdl.input_vblank_thread = SDL_CreateThread(
+        input_vblank_trace_worker, "taiko-input-vblank", NULL);
+    return s_sdl.input_vblank_thread ? 0 : -1;
+}
+
+static int input_vblank_trace_enqueue(const input_trace_frame* trace)
+{
+    if (!trace || !trace->sequence || input_vblank_trace_start() != 0)
+        return -1;
+    const int fence_fd = rsx_kms_present_dup_pending_fence();
+    if (fence_fd < 0) return -1;
+    SDL_LockMutex(s_sdl.input_vblank_mutex);
+    if (s_sdl.input_vblank_count >= SDL_RSX_INPUT_VBLANK_TRACES) {
+        SDL_UnlockMutex(s_sdl.input_vblank_mutex);
+        close(fence_fd);
+        return -1;
+    }
+    struct input_vblank_trace* item =
+        &s_sdl.input_vblank_traces[s_sdl.input_vblank_write];
+    item->trace = *trace;
+    item->fence_fd = fence_fd;
+    s_sdl.input_vblank_write =
+        (s_sdl.input_vblank_write + 1u) % SDL_RSX_INPUT_VBLANK_TRACES;
+    ++s_sdl.input_vblank_count;
+    SDL_SignalCondition(s_sdl.input_vblank_work);
+    SDL_UnlockMutex(s_sdl.input_vblank_mutex);
+    return 0;
+}
+
+static void input_vblank_trace_stop(void)
+{
+    if (s_sdl.input_vblank_thread) {
+        SDL_LockMutex(s_sdl.input_vblank_mutex);
+        s_sdl.input_vblank_stop = 1;
+        SDL_BroadcastCondition(s_sdl.input_vblank_work);
+        SDL_UnlockMutex(s_sdl.input_vblank_mutex);
+        SDL_WaitThread(s_sdl.input_vblank_thread, NULL);
+        s_sdl.input_vblank_thread = NULL;
+    }
+    if (s_sdl.input_vblank_work) {
+        SDL_DestroyCondition(s_sdl.input_vblank_work);
+        s_sdl.input_vblank_work = NULL;
+    }
+    if (s_sdl.input_vblank_mutex) {
+        SDL_DestroyMutex(s_sdl.input_vblank_mutex);
+        s_sdl.input_vblank_mutex = NULL;
+    }
+}
+
 static int kms_copy_worker(void* userdata)
 {
     (void)userdata;
@@ -2514,13 +2668,16 @@ static int kms_copy_worker(void* userdata)
             ? SDL_MapGPUTransferBuffer(s_sdl.device, slot->transfer, false)
             : NULL;
         if (mapped) {
-            rsx_kms_present_frame(
+            const int present_result = rsx_kms_present_frame(
                 mapped, slot->pitch,
                 slot->cpu_overlay_width ? slot->cpu_overlay : NULL,
                 slot->cpu_overlay_pitch,
                 slot->cpu_overlay_x, slot->cpu_overlay_y,
                 slot->cpu_overlay_width, slot->cpu_overlay_height,
                 &scanout_wait_ns, &copy_ns, &flip_ns);
+            if (present_result == 0)
+                input_trace_presented(&slot->input_trace,
+                                      ps3_host_monotonic_ns(), "download", 0);
             SDL_UnmapGPUTransferBuffer(s_sdl.device, slot->transfer);
         } else if (download_ready) {
             fprintf(stderr, "[SDL_GPU] KMS transfer-buffer map failed: %s\n",
@@ -2607,6 +2764,11 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
             ++s_sdl.errors;
             return -1;
         }
+        if (s_sdl.current_input_trace.sequence &&
+            input_vblank_trace_enqueue(&s_sdl.current_input_trace) != 0)
+            input_trace_presented(&s_sdl.current_input_trace,
+                                  ps3_host_monotonic_ns(),
+                                  "zero-copy-commit", 0);
         const unsigned next = (current + 1u) % s_sdl.kms_display_count;
         Uint64 acquire_ns = 0;
         if (rsx_kms_present_acquire_dmabuf(next, &acquire_ns) != 0) {
@@ -2669,6 +2831,7 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
     slot->width = width;
     slot->height = height;
     slot->pitch = pitch;
+    slot->input_trace = s_sdl.current_input_trace;
     kms_snapshot_cpu_overlay(slot);
 
     if (kms_submit_download(slot, commands) != 0) {
@@ -2936,10 +3099,14 @@ static void upload_surface_init(const rsx_surface_init* init)
     SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
 }
 
-static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns)
+static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
+                          input_trace_frame input_trace)
 {
     Uint64 perf_start = SDL_GetTicksNS();
     const Uint64 execute_start_ns = perf_start;
+    if (input_trace.sequence)
+        input_trace.execute_ns = ps3_host_monotonic_ns();
+    s_sdl.current_input_trace = input_trace;
     Uint64 perf_mark;
     const int resource_trace = getenv("RSX_RESOURCE_TRACE") != NULL;
     Uint64 surface_init_ns = 0, surface_ns = 0;
@@ -3377,6 +3544,32 @@ static int consumer_submit(void* userdata, const rsx_render_batch* batch)
     }
     slot->occupied = 1;
     slot->enqueue_ns = SDL_GetTicksNS();
+    memset(&slot->input_trace, 0, sizeof(slot->input_trace));
+#ifndef RSX_SDL_REPLAY_STANDALONE
+    if (getenv("TAIKO_INPUT_E2E_TRACE")) {
+        static Uint64 traced_sequence;
+        static unsigned next_ordinal;
+        taiko_input_trace_marker marker;
+        taiko_host_input_trace_snapshot(&marker);
+        if (marker.sequence && marker.sequence != traced_sequence) {
+            traced_sequence = marker.sequence;
+            next_ordinal = 0;
+        }
+        /* One line is enough to identify the first submitted batch after the
+         * guest consumed the hit.  Logging four consecutive presents from the
+         * render thread measurably perturbs a busy Pi and can itself grow the
+         * queue whose latency this diagnostic is intended to measure. */
+        if (marker.sequence && marker.sequence == traced_sequence &&
+            next_ordinal < 1u) {
+            slot->input_trace.sequence = marker.sequence;
+            slot->input_trace.event_ns = marker.event_ns;
+            slot->input_trace.usio_ns = marker.usio_ns;
+            slot->input_trace.enqueue_ns = ps3_host_monotonic_ns();
+            slot->input_trace.batch_serial = batch->serial;
+            slot->input_trace.ordinal = next_ordinal++;
+        }
+    }
+#endif
     s_sdl.queue_write = (s_sdl.queue_write + 1) % SDL_RSX_QUEUE_DEPTH;
     ++s_sdl.queue_count;
     SDL_UnlockMutex(s_sdl.queue_mutex);
@@ -4091,14 +4284,18 @@ static unsigned drain_batches(void)
     for (;;) {
         rsx_render_batch batch;
         Uint64 enqueue_ns = 0;
+        input_trace_frame input_trace;
+        memset(&input_trace, 0, sizeof(input_trace));
         int have_batch = 0;
         SDL_LockMutex(s_sdl.queue_mutex);
         if (s_sdl.queue_count) {
             queued_batch* slot = &s_sdl.queue[s_sdl.queue_read];
             batch = slot->batch;
             enqueue_ns = slot->enqueue_ns;
+            input_trace = slot->input_trace;
             memset(&slot->batch, 0, sizeof(slot->batch));
             slot->enqueue_ns = 0;
+            memset(&slot->input_trace, 0, sizeof(slot->input_trace));
             slot->occupied = 0;
             s_sdl.queue_read = (s_sdl.queue_read + 1) % SDL_RSX_QUEUE_DEPTH;
             --s_sdl.queue_count;
@@ -4107,7 +4304,7 @@ static unsigned drain_batches(void)
         }
         SDL_UnlockMutex(s_sdl.queue_mutex);
         if (!have_batch) break;
-        execute_batch(&batch, enqueue_ns);
+        execute_batch(&batch, enqueue_ns, input_trace);
         rsx_render_batch_destroy(&batch);
         ++executed;
         if (SDL_GetTicksNS() >= budget_end) break;
@@ -4568,6 +4765,7 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
 {
 #ifdef RSX_SDL_KMS_PRESENT
     if (s_sdl.kms_present) {
+        input_vblank_trace_stop();
         kms_stop_worker();
         rsx_kms_present_shutdown();
     }

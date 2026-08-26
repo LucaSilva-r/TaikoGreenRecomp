@@ -9,6 +9,8 @@
 
 #include "ppu_recomp.h"
 
+#include <ps3emu/host_platform.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +24,11 @@ namespace {
 
 std::atomic<int> g_shape_trace_left{0};
 std::atomic<uint32_t> g_shape_trace_seq{0};
+std::atomic<uint32_t> g_animation_scale_bits{0x3F800000u};
+std::atomic<uint64_t> g_animation_previous_flip_ns{0};
+std::atomic<uint32_t> g_animation_don3d_calls{0};
+std::atomic<uint32_t> g_animation_lumen_calls{0};
+std::atomic<uint32_t> g_animation_face_skips{0};
 
 constexpr uint32_t kSpriteAdvance = 0x003DF910u;
 constexpr uint32_t kSpriteVtable = 0x00F09030u;
@@ -29,6 +36,49 @@ constexpr uint32_t kPlayerEntryTitleId = 817u;
 constexpr uint32_t kPlayerEntryTitleFrames = 26u;
 constexpr uint32_t kOnlineCheckPtr = 0x01028F1Cu;
 constexpr uint32_t kNetworkFlagsPtr = 0x010290A4u;
+constexpr uint32_t kFaceDonWrapperVtable = 0x00F87868u;
+constexpr uint32_t kFaceKatsuWrapperVtable = 0x00F878A0u;
+constexpr uint64_t kAnimationTimingGapNs = 250000000ull;
+constexpr float kAnimationScaleMax = 4.0f;
+
+extern "C" int ps3_frame_boot_fast_is_done(void);
+
+bool animation_timing_enabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("TAIKO_ANIMATION_TIMING");
+        return value && value[0] && std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+uint32_t float_bits(float value)
+{
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+float animation_scale()
+{
+    const uint32_t bits =
+        g_animation_scale_bits.load(std::memory_order_acquire);
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+bool is_deferred_face_timeline(uint32_t player)
+{
+    if (!player)
+        return false;
+    const uint32_t owner = vm_read32(player + 8);
+    if (owner < 0x20000000u || owner >= 0x50000000u)
+        return false;
+    const uint32_t vtable = vm_read32(owner);
+    return vtable == kFaceDonWrapperVtable ||
+           vtable == kFaceKatsuWrapperVtable;
+}
 
 void release_offline_player_entry_title(ppu_context* ctx)
 {
@@ -63,7 +113,9 @@ void register_taiko_lumen_hooks()
 {
     ppu_register_function(kSpriteAdvance, release_offline_player_entry_title);
     std::fprintf(stderr,
-                 "[taiko_lumen] installed player-entry title Sprite::AdvanceFrame hook\n");
+                 "[taiko_lumen] installed player-entry Sprite hook; "
+                 "elapsed animation timing %s\n",
+                 animation_timing_enabled() ? "enabled" : "disabled");
 }
 
 __attribute__((constructor))
@@ -73,6 +125,88 @@ void configure_taiko_lumen_hooks()
 }
 
 } // namespace
+
+extern "C" void taiko_don3d_scale_frame_delta(ppu_context* ctx)
+{
+    if (!ctx || !animation_timing_enabled())
+        return;
+    g_animation_don3d_calls.fetch_add(1, std::memory_order_relaxed);
+    ctx->fpr[31] = static_cast<double>(static_cast<float>(
+        ctx->fpr[31] * static_cast<double>(animation_scale())));
+}
+
+extern "C" void taiko_project_flip_command()
+{
+    const uint64_t now = ps3_host_monotonic_ns();
+    if (!animation_timing_enabled() || !ps3_frame_boot_fast_is_done()) {
+        g_animation_previous_flip_ns.store(now, std::memory_order_relaxed);
+        g_animation_scale_bits.store(0x3F800000u,
+                                     std::memory_order_release);
+        return;
+    }
+
+    const uint64_t previous =
+        g_animation_previous_flip_ns.exchange(now, std::memory_order_relaxed);
+    float scale = 1.0f;
+    if (previous && now > previous) {
+        const uint64_t delta = now - previous;
+        if (delta < kAnimationTimingGapNs) {
+            scale = static_cast<float>(delta) * 0.00000006f;
+            if (scale > kAnimationScaleMax)
+                scale = kAnimationScaleMax;
+        }
+    }
+    g_animation_scale_bits.store(float_bits(scale),
+                                 std::memory_order_release);
+
+    if (std::getenv("TAIKO_ANIMATION_TIMING_TRACE")) {
+        static uint64_t report_ns;
+        static float minimum = kAnimationScaleMax;
+        static float maximum = 0.0f;
+        static double total;
+        static unsigned samples;
+        if (scale < minimum) minimum = scale;
+        if (scale > maximum) maximum = scale;
+        total += scale;
+        ++samples;
+        if (!report_ns) report_ns = now;
+        if (now - report_ns >= 1000000000ull) {
+            const uint32_t don3d_calls =
+                g_animation_don3d_calls.exchange(0,
+                                                  std::memory_order_relaxed);
+            const uint32_t lumen_calls =
+                g_animation_lumen_calls.exchange(0,
+                                                  std::memory_order_relaxed);
+            const uint32_t face_skips =
+                g_animation_face_skips.exchange(0,
+                                                 std::memory_order_relaxed);
+            std::fprintf(stderr,
+                         "[ANIMATION-TIMING] samples=%u scale=%.3f..%.3f "
+                         "mean=%.3f calls(don3d=%u lumen=%u face-skip=%u)\n",
+                         samples, minimum, maximum,
+                         samples ? total / samples : 0.0,
+                         don3d_calls, lumen_calls, face_skips);
+            report_ns = now;
+            minimum = kAnimationScaleMax;
+            maximum = 0.0f;
+            total = 0.0;
+            samples = 0;
+        }
+    }
+}
+
+extern "C" void taiko_lumen_scale_frame_delta(ppu_context* ctx)
+{
+    if (!ctx || !animation_timing_enabled())
+        return;
+    if (is_deferred_face_timeline(static_cast<uint32_t>(ctx->gpr[30]))) {
+        g_animation_face_skips.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    g_animation_lumen_calls.fetch_add(1, std::memory_order_relaxed);
+    ctx->fpr[1] = static_cast<double>(static_cast<float>(
+        ctx->fpr[1] * static_cast<double>(animation_scale())));
+}
 
 extern "C" void taiko_lumen_trace_arm()
 {

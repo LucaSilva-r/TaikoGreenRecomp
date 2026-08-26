@@ -36,6 +36,13 @@ int main()
                 second.hit_timestamp_ns[0][0] == 9999,
                 "release enables next press edge")) return 1;
 
+    taiko_host_input_trace_consumed(9999, 12000);
+    taiko_input_trace_marker marker{};
+    taiko_host_input_trace_snapshot(&marker);
+    if (!expect(marker.sequence == 1 && marker.event_ns == 9999 &&
+                marker.usio_ns == 12000,
+                "end-to-end trace marker published atomically")) return 1;
+
     std::puts("portable Taiko host input tests passed");
     return 0;
 }

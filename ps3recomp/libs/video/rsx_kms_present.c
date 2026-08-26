@@ -794,6 +794,13 @@ int rsx_kms_present_dmabuf(unsigned index,
     return result;
 }
 
+int rsx_kms_present_dup_pending_fence(void)
+{
+    if (!s_kms.active || !s_kms.atomic || s_kms.pending_fence_fd < 0)
+        return -1;
+    return dup(s_kms.pending_fence_fd);
+}
+
 int rsx_kms_present_frame(const void *pixels, unsigned pitch,
                           const void *overlay_pixels, unsigned overlay_pitch,
                           unsigned overlay_x, unsigned overlay_y,

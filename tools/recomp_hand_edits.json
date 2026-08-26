@@ -34,6 +34,16 @@
    "function": "func_003DAAD4"
   },
   {
+   "symbol": "taiko_lumen_scale_frame_delta",
+   "text": "extern \"C\" void taiko_lumen_scale_frame_delta(ppu_context* ctx);",
+   "function": "func_0038B458"
+  },
+  {
+   "symbol": "taiko_don3d_scale_frame_delta",
+   "text": "extern \"C\" void taiko_don3d_scale_frame_delta(ppu_context* ctx);",
+   "function": "func_002A6BB4"
+  },
+  {
    "symbol": "rsx_dbg_trace_armed",
    "text": "extern \"C\" int rsx_dbg_trace_armed(void);",
    "function": "func_00581F5C"
@@ -55,6 +65,24 @@
   }
  ],
  "functions": {
+  "func_002A6BB4": [
+   {
+    "anchor": "        ctx->fpr[31] = ctx->fpr[1];",
+    "replaces": [],
+    "lines": [
+     "        taiko_don3d_scale_frame_delta(ctx);"
+    ]
+   }
+  ],
+  "func_0038B458": [
+   {
+    "anchor": "loc_0038B560:",
+    "replaces": [],
+    "lines": [
+     "        taiko_lumen_scale_frame_delta(ctx);"
+    ]
+   }
+  ],
   "func_003DAAD4": [
    {
     "anchor": null,

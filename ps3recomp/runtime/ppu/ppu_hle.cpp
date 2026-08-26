@@ -178,6 +178,11 @@ static inline void* ps3_GetModuleHandleA(const char*)
 /* Weak so builds that do not link cellGcmSys.c (test harnesses) resolve it to
  * null and skip the pump. */
 extern "C" __attribute__((weak)) void ppu_gcm_pump(void);
+/* A title HLE may ask to complete a latency-sensitive emulated device transfer
+ * before the pending frame callback is delivered. Weak and opt-in: normal HLE
+ * ordering remains pump-before-handler. */
+extern "C" __attribute__((weak)) int ppu_gcm_pump_after_hle(uint32_t nid,
+                                                              ppu_context* ctx);
 
 /* Threads that must not run the frame callbacks.
  *
@@ -206,7 +211,9 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
      * guest thread.  The ticker no longer calls guest handlers itself, so
      * handler code is serialized with normal guest execution instead of racing
      * it from a host thread. */
-    if (ppu_gcm_pump && !t_no_gcm_pump) ppu_gcm_pump();
+    const bool defer_gcm_pump = ppu_gcm_pump && !t_no_gcm_pump &&
+        ppu_gcm_pump_after_hle && ppu_gcm_pump_after_hle(nid, ctx);
+    if (ppu_gcm_pump && !t_no_gcm_pump && !defer_gcm_pump) ppu_gcm_pump();
     /* Preserve the caller TOC (r2) across the HLE call. ELFv1 makes r2 caller-saved
      * across a cross-module call: the glink stub does `std r2,40(r1)` before jumping and
      * the caller does `ld r2,40(r1)` after. Our HLE import stubs (`ps3_hle_call(nid);
@@ -397,7 +404,11 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
     }
 
     for (uint32_t i = 0; i < g_ctx_count; i++)
-        if (g_ctx[i].nid == nid) { g_ctx[i].fn(ctx); return; }
+        if (g_ctx[i].nid == nid) {
+            g_ctx[i].fn(ctx);
+            if (defer_gcm_pump) ppu_gcm_pump();
+            return;
+        }
 
     ps3_nid_entry* e = g_hle_inited ? ps3_nid_table_find(&g_hle_nids, nid) : nullptr;
     if (!e || !e->handler) {
