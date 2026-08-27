@@ -18,6 +18,9 @@ void audio_sink_shutdown(void);
 int audio_sink_wait_for_block(uint32_t frames, const volatile int* running);
 int audio_sink_submit(const float* stereo_samples, uint32_t frames);
 uint32_t audio_sink_queued_frames(void);
+/* Software prebuffer selected by the sink. Zero means that the backend does
+ * not expose a separate software queue target. */
+uint32_t audio_sink_prebuffer_frames(void);
 /* Nominal host-device period/buffer capacity. This is separate from queued
  * stream data: together they bound the software-visible output latency. */
 uint32_t audio_sink_device_buffer_frames(void);

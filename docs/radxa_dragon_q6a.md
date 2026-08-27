@@ -95,3 +95,33 @@ framebuffer scaled by the MSM display plane to 1920x1080@60, opened Turnip's
 `renderD128`, and held HDMI playback PCM `/dev/snd/pcmC0D1p`. The service stayed
 active with zero restarts. External drum/USB input still requires a physical
 connection and an in-game input test.
+
+For HDMI-audio diagnosis, test the wire independently of OBS. On the validated
+setup, `speaker-test` through `plughw:CARD=QCS6490RadxaDra,DEV=1` produced a
+clean stereo tone at the MS2109 capture card. `/proc/asound/card0/pcm1p/sub0/status`
+shows its `hw_ptr` advancing near 46080 frames/s even though ALSA reports 48000
+Hz, but this is not the physical HDMI sample clock: applying a matching 25/24
+SDL frequency ratio audibly raised the pitch and was rejected in live testing.
+Do not derive resampling compensation from the Qualcomm DSP pointer. Measure a
+known recorded source at the HDMI receiver instead.
+
+The HDMI PCM pulls 960 frames at a time. The unit retains
+`TAIKO_AUDIO_PREBUFFER_BLOCKS=12` for the SDL fallback, enough SDL input for
+three such periods plus scheduler jitter. The migrated configuration now has
+attract audio restored; Player Entry remains a convenient repeatable live-audio
+check. `TAIKO_AUDIO_DUMP` records the exact float blocks submitted by Taiko
+before the host sink when deeper diagnosis is needed.
+
+Requesting a 44100 Hz SDL device is not a workaround. SDL opens a logical
+44100 Hz/882-frame stream, but `plughw` converts it back to the QCS6490's
+48000 Hz/960-frame PCM; a Player Entry capture advanced at about 0.960x versus
+0.966x on the normal 48000 Hz path and retained the same discontinuities.
+
+The validated fix is `TAIKO_AUDIO_ALSA_DIRECT_DEVICE=hw:CARD=QCS6490RadxaDra,DEV=1`
+in the Radxa service. Linux builds compile an opt-in direct ALSA sink alongside
+the normal SDL backend; the environment variable selects it only on this
+appliance. It writes 48 kHz stereo S16 directly with a 960-frame period and a
+3840-frame buffer, matching the clean `aplay` control path. Live Player Entry
+audio was reported clean and correctly pitched. The mixer advanced 5633
+256-frame blocks in 30.02 seconds (187.64 blocks/s; target 187.5) with zero
+xruns. Pi and desktop builds continue using SDL unless this variable is set.

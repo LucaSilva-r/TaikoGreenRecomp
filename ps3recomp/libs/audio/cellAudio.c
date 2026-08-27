@@ -811,16 +811,51 @@ static void audio_mix_thread_run(void)
              * Pull the period by 12.5% instead: notifications stay at least
              * 4.6 ms apart while the level walks back into the deadband.
              * audio_sink_wait_for_block remains the hard ceiling. */
-            if (queued < 2u * CELL_AUDIO_BLOCK_SAMPLES)
+            uint32_t low_watermark = 2u * CELL_AUDIO_BLOCK_SAMPLES;
+            uint32_t high_watermark = 6u * CELL_AUDIO_BLOCK_SAMPLES;
+            const uint32_t prebuffer = audio_sink_prebuffer_frames();
+            const uint32_t device_period = audio_sink_device_buffer_frames();
+            if (prebuffer) {
+                /* The SDL sink already blocks submission at its prebuffer
+                 * ceiling. Applying the slow clock pull as well double-
+                 * throttles the producer whenever SDL reports conversion
+                 * residue above the nominal target; the Q6A settled at only
+                 * ~180 blocks/s instead of 187.5. Keep the low-water recovery,
+                 * but let hard queue backpressure govern the upper bound. */
+                high_watermark = UINT32_MAX;
+                if (prebuffer > device_period) {
+                    const uint32_t after_device_pull =
+                        ((prebuffer - device_period) /
+                         CELL_AUDIO_BLOCK_SAMPLES) *
+                        CELL_AUDIO_BLOCK_SAMPLES;
+                    if (after_device_pull > low_watermark)
+                        low_watermark = after_device_pull;
+                }
+            }
+            if (queued < low_watermark)
                 period -= period_ns / 8u;
-            else if (queued > 6u * CELL_AUDIO_BLOCK_SAMPLES)
+            else if (queued > high_watermark)
                 period += period_ns / 8u;
             next_period += period;
             const uint64_t now = ps3_host_monotonic_ns();
             if (next_period > now)
                 ps3_host_sleep_until_ns(next_period);
-            else
-                next_period = now;
+            else {
+                /* Preserve ordinary scheduler overshoot so the absolute
+                 * clock actually averages 48 kHz. Resetting the deadline to
+                 * `now` here adds every wake-up delay to the next 5.33 ms
+                 * period; on the Q6A that slowed a 44.1 kHz source to about
+                 * 42.5 kHz. Bound the retained lateness so even after a long
+                 * stall the next notification remains at least 7/8 of a
+                 * block period away instead of being released in a burst. */
+                const uint64_t minimum_period =
+                    period_ns - period_ns / 8u;
+                const uint64_t maximum_catchup =
+                    period > minimum_period ? period - minimum_period : 0;
+                const uint64_t lateness = now - next_period;
+                if (lateness > maximum_catchup)
+                    next_period = now - maximum_catchup;
+            }
         }
     }
 

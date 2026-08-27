@@ -12,6 +12,10 @@
 
 #include <ps3emu/host_sdl.h>
 #include <SDL3/SDL.h>
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+#include <alsa/asoundlib.h>
+#include <math.h>
+#endif
 
 #define AUDIO_FRAME_BYTES (2u * (uint32_t)sizeof(float))
 /* The device pulls a whole ALSA period at once (four 256-frame blocks on the
@@ -28,6 +32,11 @@ static uint32_t s_sdl_prebuffer_blocks = SDL_DEFAULT_PREBUFFER_BLOCKS;
 static atomic_int s_sdl_resumed;
 static atomic_ullong s_sdl_starvation_events;
 static atomic_ullong s_sdl_starvation_frames;
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+static snd_pcm_t* s_alsa_pcm;
+static snd_pcm_uframes_t s_alsa_buffer_frames;
+static snd_pcm_uframes_t s_alsa_period_frames;
+#endif
 
 static void SDLCALL sdl_audio_get_callback(void* userdata,
                                            SDL_AudioStream* stream,
@@ -53,11 +62,51 @@ static void SDLCALL sdl_audio_get_callback(void* userdata,
     }
 }
 
-const char* audio_sink_name(void) { return "sdl3"; }
+const char* audio_sink_name(void)
+{
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) return "alsa-direct";
+#endif
+    return "sdl3";
+}
 
 int audio_sink_init(void)
 {
     if (getenv("PS3RECOMP_NULL_AUDIO")) return AUDIO_SINK_INIT_NULL_CLOCK;
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    const char* direct_device = getenv("TAIKO_AUDIO_ALSA_DIRECT_DEVICE");
+    if (direct_device && *direct_device) {
+        int error = snd_pcm_open(&s_alsa_pcm, direct_device,
+                                 SND_PCM_STREAM_PLAYBACK, 0);
+        if (error >= 0)
+            error = snd_pcm_set_params(
+                s_alsa_pcm, SND_PCM_FORMAT_S16_LE,
+                SND_PCM_ACCESS_RW_INTERLEAVED, 2, CELL_AUDIO_SAMPLE_RATE,
+                1, 80000u);
+        if (error < 0) {
+            fprintf(stderr, "[cellAudio] direct ALSA open failed for %s: %s\n",
+                    direct_device, snd_strerror(error));
+            if (s_alsa_pcm) snd_pcm_close(s_alsa_pcm);
+            s_alsa_pcm = NULL;
+            return AUDIO_SINK_INIT_FAILED;
+        }
+        snd_pcm_get_params(s_alsa_pcm, &s_alsa_buffer_frames,
+                           &s_alsa_period_frames);
+        atomic_store_explicit(&s_sdl_starvation_events, 0,
+                              memory_order_relaxed);
+        atomic_store_explicit(&s_sdl_starvation_frames, 0,
+                              memory_order_relaxed);
+        fprintf(stderr,
+                "[cellAudio] direct ALSA sink opened (device=%s, "
+                "48000 Hz stereo s16, period=%lu frames=%.2f ms, "
+                "buffer=%lu frames=%.2f ms)\n",
+                direct_device, (unsigned long)s_alsa_period_frames,
+                1000.0 * s_alsa_period_frames / CELL_AUDIO_SAMPLE_RATE,
+                (unsigned long)s_alsa_buffer_frames,
+                1000.0 * s_alsa_buffer_frames / CELL_AUDIO_SAMPLE_RATE);
+        return AUDIO_SINK_INIT_OK;
+    }
+#endif
     if (!ps3_host_sdl_audio_available()) {
         fprintf(stderr, "[cellAudio] SDL audio subsystem is unavailable\n");
         return AUDIO_SINK_INIT_FAILED;
@@ -70,7 +119,6 @@ int audio_sink_init(void)
         if (parsed >= 2u && parsed <= SDL_MAX_PREBUFFER_BLOCKS)
             s_sdl_prebuffer_blocks = (uint32_t)parsed;
     }
-
     const SDL_AudioSpec spec = {
         .format = SDL_AUDIO_F32,
         .channels = 2,
@@ -112,6 +160,16 @@ int audio_sink_init(void)
 
 void audio_sink_shutdown(void)
 {
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) {
+        snd_pcm_drop(s_alsa_pcm);
+        snd_pcm_close(s_alsa_pcm);
+        s_alsa_pcm = NULL;
+        s_alsa_buffer_frames = 0;
+        s_alsa_period_frames = 0;
+        return;
+    }
+#endif
     if (s_sdl_stream) SDL_DestroyAudioStream(s_sdl_stream);
     s_sdl_stream = NULL;
     s_sdl_submitted_blocks = 0;
@@ -121,13 +179,32 @@ void audio_sink_shutdown(void)
 
 uint32_t audio_sink_queued_frames(void)
 {
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) {
+        snd_pcm_sframes_t available = snd_pcm_avail_update(s_alsa_pcm);
+        if (available < 0) return 0;
+        if ((snd_pcm_uframes_t)available >= s_alsa_buffer_frames) return 0;
+        return (uint32_t)(s_alsa_buffer_frames - available);
+    }
+#endif
     if (!s_sdl_stream) return 0;
     int bytes = SDL_GetAudioStreamQueued(s_sdl_stream);
     return bytes > 0 ? (uint32_t)bytes / AUDIO_FRAME_BYTES : 0;
 }
 
+uint32_t audio_sink_prebuffer_frames(void)
+{
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) return (uint32_t)s_alsa_buffer_frames;
+#endif
+    return s_sdl_prebuffer_blocks * CELL_AUDIO_BLOCK_SAMPLES;
+}
+
 uint32_t audio_sink_device_buffer_frames(void)
 {
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) return (uint32_t)s_alsa_period_frames;
+#endif
     return s_sdl_device_buffer_frames;
 }
 
@@ -145,6 +222,28 @@ uint64_t audio_sink_starvation_frames(void)
 
 int audio_sink_wait_for_block(uint32_t frames, const volatile int* running)
 {
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) {
+        const uint64_t deadline = ps3_host_monotonic_ns() + 1000000000u;
+        while (*running) {
+            snd_pcm_sframes_t available = snd_pcm_avail_update(s_alsa_pcm);
+            if (available < 0) {
+                atomic_fetch_add_explicit(&s_sdl_starvation_events, 1,
+                                          memory_order_relaxed);
+                atomic_fetch_add_explicit(&s_sdl_starvation_frames,
+                    (unsigned long long)s_alsa_period_frames,
+                    memory_order_relaxed);
+                if (snd_pcm_recover(s_alsa_pcm, (int)available, 1) < 0)
+                    return 0;
+                continue;
+            }
+            if ((uint32_t)available >= frames) return 1;
+            if (ps3_host_monotonic_ns() >= deadline) return 0;
+            snd_pcm_wait(s_alsa_pcm, 10);
+        }
+        return 0;
+    }
+#endif
     (void)frames;
     if (!s_sdl_stream) return 0;
     if (!atomic_load_explicit(&s_sdl_resumed, memory_order_relaxed)) return 1;
@@ -172,6 +271,34 @@ int audio_sink_wait_for_block(uint32_t frames, const volatile int* running)
 
 int audio_sink_submit(const float* stereo_samples, uint32_t frames)
 {
+#ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
+    if (s_alsa_pcm) {
+        int16_t converted[CELL_AUDIO_BLOCK_SAMPLES * 2u];
+        if (frames > CELL_AUDIO_BLOCK_SAMPLES) return 0;
+        for (uint32_t i = 0; i < frames * 2u; ++i) {
+            const float clamped = fmaxf(-1.0f, fminf(1.0f, stereo_samples[i]));
+            converted[i] = (int16_t)lrintf(clamped * 32767.0f);
+        }
+        uint32_t written = 0;
+        while (written < frames) {
+            snd_pcm_sframes_t result = snd_pcm_writei(
+                s_alsa_pcm, converted + written * 2u, frames - written);
+            if (result < 0) {
+                atomic_fetch_add_explicit(&s_sdl_starvation_events, 1,
+                                          memory_order_relaxed);
+                atomic_fetch_add_explicit(&s_sdl_starvation_frames,
+                    (unsigned long long)s_alsa_period_frames,
+                    memory_order_relaxed);
+                if (snd_pcm_recover(s_alsa_pcm, (int)result, 1) < 0)
+                    return 0;
+                continue;
+            }
+            if (result == 0) return 0;
+            written += (uint32_t)result;
+        }
+        return 1;
+    }
+#endif
     if (!s_sdl_stream) return 0;
     const int bytes = (int)(frames * AUDIO_FRAME_BYTES);
     if (!SDL_PutAudioStreamData(s_sdl_stream, stereo_samples, bytes)) {
@@ -295,6 +422,8 @@ uint32_t audio_sink_device_buffer_frames(void)
     return s_buffer_frames;
 }
 
+uint32_t audio_sink_prebuffer_frames(void) { return 0; }
+
 uint64_t audio_sink_starvation_events(void) { return 0; }
 uint64_t audio_sink_starvation_frames(void) { return 0; }
 
@@ -333,6 +462,7 @@ int audio_sink_wait_for_block(uint32_t frames, const volatile int* running)
 int audio_sink_submit(const float* samples, uint32_t frames)
 { (void)samples; (void)frames; return 1; }
 uint32_t audio_sink_queued_frames(void) { return 0; }
+uint32_t audio_sink_prebuffer_frames(void) { return 0; }
 uint32_t audio_sink_device_buffer_frames(void) { return 0; }
 uint64_t audio_sink_starvation_events(void) { return 0; }
 uint64_t audio_sink_starvation_frames(void) { return 0; }

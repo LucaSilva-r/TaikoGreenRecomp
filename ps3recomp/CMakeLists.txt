@@ -121,6 +121,26 @@ if(TAIKO_LIBDRM_FOUND)
     message(STATUS "KMS presentation enabled (libdrm ${TAIKO_LIBDRM_VERSION})")
 endif()
 
+# SDL's queued stream misbehaves on the QCS6490 HDMI PCM even though direct
+# ALSA playback is clean. Compile an opt-in direct sink alongside SDL on Linux;
+# other platforms and the normal SDL path are unchanged.
+if(UNIX AND NOT APPLE AND NOT ANDROID AND
+   PS3RECOMP_AUDIO_BACKEND STREQUAL "sdl3")
+    if(NOT PkgConfig_FOUND)
+        find_package(PkgConfig QUIET)
+    endif()
+    if(PkgConfig_FOUND)
+        pkg_check_modules(TAIKO_ALSA QUIET alsa)
+    endif()
+    if(TAIKO_ALSA_FOUND)
+        target_compile_definitions(ps3recomp_runtime PRIVATE
+            PS3RECOMP_AUDIO_DIRECT_ALSA=1)
+        target_include_directories(ps3recomp_runtime PRIVATE
+            ${TAIKO_ALSA_INCLUDE_DIRS})
+        target_link_libraries(ps3recomp_runtime PUBLIC ${TAIKO_ALSA_LIBRARIES})
+    endif()
+endif()
+
 # HLE modules include their own headers
 target_include_directories(ps3recomp_runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/libs/system"

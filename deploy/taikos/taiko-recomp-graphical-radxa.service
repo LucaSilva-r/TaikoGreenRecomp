@@ -34,6 +34,7 @@ Environment=SDL_AUDIODRIVER=alsa
 # clients do not activate the UCM HDMI route themselves, so select both the
 # backend mixer and SDL's default playback PCM explicitly.
 Environment=SDL_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE=plughw:CARD=QCS6490RadxaDra,DEV=1
+Environment=TAIKO_AUDIO_ALSA_DIRECT_DEVICE=hw:CARD=QCS6490RadxaDra,DEV=1
 Environment=TAIKOS_OUTPUT_MODE=1920x1080@60
 Environment=TAIKO_GPU_DRIVER=vulkan
 Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*
@@ -44,6 +45,10 @@ Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
 Environment=FLOW_NOSPILL=1
 Environment=TAIKO_DNS_LOOPBACK=1
 Environment=TAIKO_AUDIO_SPU=1
+# Retain the larger software queue for the SDL fallback. The selected direct
+# ALSA sink instead uses the Q6A HDMI PCM's 960-frame period and 3840-frame
+# hardware buffer.
+Environment=TAIKO_AUDIO_PREBUFFER_BLOCKS=12
 # Preserve the Pi appliance's safe character-filter settings initially. The
 # Q6A can restore the outline after its baseline has been validated.
 Environment=TAIKO_GPU_CHARACTER_FILTER_SCISSOR=0
