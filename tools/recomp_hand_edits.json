@@ -29,6 +29,11 @@
  ],
  "declarations": [
   {
+   "symbol": "taiko_lumen_skip_redundant_face_seek",
+   "text": "extern \"C\" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx);",
+   "function": "func_003E1338"
+  },
+  {
    "symbol": "taiko_lumen_trace_shape",
    "text": "extern \"C\" void taiko_lumen_trace_shape(ppu_context* ctx);",
    "function": "func_003DAAD4"
@@ -89,6 +94,18 @@
     "replaces": [],
     "lines": [
      "        taiko_lumen_trace_shape(ctx);"
+    ]
+   }
+  ],
+  "func_003E1338": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_lumen_skip_redundant_face_seek(ctx)) {",
+     "                ctx->gpr[3] = (int64_t)(int32_t)(1);",
+     "                return;",
+     "        }"
     ]
    }
   ],

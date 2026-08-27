@@ -25,10 +25,15 @@ namespace {
 std::atomic<int> g_shape_trace_left{0};
 std::atomic<uint32_t> g_shape_trace_seq{0};
 std::atomic<uint32_t> g_animation_scale_bits{0x3F800000u};
+std::atomic<uint32_t> g_animation_tick_quanta{1};
 std::atomic<uint64_t> g_animation_previous_flip_ns{0};
+std::atomic<uint64_t> g_animation_flip_sequence{0};
 std::atomic<uint32_t> g_animation_don3d_calls{0};
 std::atomic<uint32_t> g_animation_lumen_calls{0};
-std::atomic<uint32_t> g_animation_face_skips{0};
+float g_animation_tick_accumulator = 0.0f;
+uint64_t g_face_seek_flip[5] = {};
+uint64_t g_face_seek_last_ns[5] = {};
+bool g_face_seek_allow[5] = {};
 
 constexpr uint32_t kSpriteAdvance = 0x003DF910u;
 constexpr uint32_t kSpriteVtable = 0x00F09030u;
@@ -36,9 +41,12 @@ constexpr uint32_t kPlayerEntryTitleId = 817u;
 constexpr uint32_t kPlayerEntryTitleFrames = 26u;
 constexpr uint32_t kOnlineCheckPtr = 0x01028F1Cu;
 constexpr uint32_t kNetworkFlagsPtr = 0x010290A4u;
-constexpr uint32_t kFaceDonWrapperVtable = 0x00F87868u;
-constexpr uint32_t kFaceKatsuWrapperVtable = 0x00F878A0u;
+constexpr uint32_t kNormalNoteFaceCharacter = 7u;
+constexpr uint32_t kNormalNoteFaceFrames = 90u;
+constexpr uint32_t kBigNoteFaceCharacter = 5u;
+constexpr uint32_t kBigNoteFaceFrames = 95u;
 constexpr uint64_t kAnimationTimingGapNs = 250000000ull;
+constexpr uint64_t kFaceSyncMinimumNs = 280000000ull;
 constexpr float kAnimationScaleMax = 4.0f;
 
 extern "C" int ps3_frame_boot_fast_is_done(void);
@@ -68,16 +76,18 @@ float animation_scale()
     return value;
 }
 
-bool is_deferred_face_timeline(uint32_t player)
+bool guest_string_equals(uint32_t address, const char* expected)
 {
-    if (!player)
+    if (!address || !expected)
         return false;
-    const uint32_t owner = vm_read32(player + 8);
-    if (owner < 0x20000000u || owner >= 0x50000000u)
-        return false;
-    const uint32_t vtable = vm_read32(owner);
-    return vtable == kFaceDonWrapperVtable ||
-           vtable == kFaceKatsuWrapperVtable;
+    for (uint32_t i = 0; i < 16; ++i) {
+        const char actual = static_cast<char>(vm_read8(address + i));
+        if (actual != expected[i])
+            return false;
+        if (actual == '\0')
+            return true;
+    }
+    return false;
 }
 
 void release_offline_player_entry_title(ppu_context* ctx)
@@ -126,6 +136,95 @@ void configure_taiko_lumen_hooks()
 
 } // namespace
 
+extern "C" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx)
+{
+    if (!ctx || !animation_timing_enabled())
+        return 0;
+
+    const uint32_t object = static_cast<uint32_t>(ctx->gpr[3]);
+    const uint32_t label = static_cast<uint32_t>(ctx->gpr[4]);
+    if (!object || vm_read32(object) != kSpriteVtable)
+        return 0;
+
+    const uint32_t sprite_id = vm_read32(object + 0xBC);
+    const uint32_t frame_count = vm_read32(object + 0x144);
+    const bool normal = sprite_id == kNormalNoteFaceCharacter &&
+                        frame_count == kNormalNoteFaceFrames;
+    const bool big = sprite_id == kBigNoteFaceCharacter &&
+                     frame_count == kBigNoteFaceFrames;
+    if (!normal && !big)
+        return 0;
+
+    uint32_t first;
+    uint32_t last;
+    uint32_t state;
+    /* The live label lookup maps these names one tier later than the raw LMF
+     * decompiler's label summary suggests.  The gameplay controller reissues
+     * the current label on a frame-counted timer.  At high refresh that seek
+     * lands before the face reaches its first visible keyframe and continually
+     * restarts it. */
+    if (guest_string_equals(label, "level01")) {
+        first = 0;
+        last = 9;
+        state = 0;
+    } else if (guest_string_equals(label, "level02")) {
+        first = 10;
+        last = 49;
+        state = 1;
+    } else if (guest_string_equals(label, "level03")) {
+        first = 50;
+        last = 69;
+        state = 2;
+    } else if (guest_string_equals(label, "level04")) {
+        first = 70;
+        last = 89;
+        state = 3;
+    } else if (big && guest_string_equals(label, "onp_wait")) {
+        first = 90;
+        last = 94;
+        state = 4;
+    } else {
+        return 0;
+    }
+
+    /* Unlike the normal face movie, the big-note movie does not stop at the
+     * end of level01: if its controller's repeated low-combo seek is filtered
+     * out, the timeline falls through into the animated level02 range.  Keep
+     * that authored seek intact.  Animated tiers still use the real-time
+     * phase-locking below. */
+    if (big && state == 0)
+        return 0;
+
+    const uint32_t frame = vm_read32(object + 0x140);
+    const bool stopped = vm_read8(object + 0x14C) != 0;
+    const bool redundant = frame >= first && frame <= last &&
+                           (first == 0 || (!stopped && frame < last));
+    const uint64_t flip =
+        g_animation_flip_sequence.load(std::memory_order_acquire);
+    const uint64_t now = ps3_host_monotonic_ns();
+    if (!redundant) {
+        /* State changes and authored per-face loops always execute, but a
+         * newly spawned note must not move the shared synchronization phase. */
+        if (g_face_seek_last_ns[state] == 0)
+            g_face_seek_last_ns[state] = now;
+        return 0;
+    }
+
+    /* The repeated seek is intentional: it periodically phase-locks all note
+     * faces.  Use a stable real-time floor rather than accumulating the noisy
+     * instantaneous frame scale.  Every face visited during one guest frame
+     * shares the same decision. */
+    if (flip != g_face_seek_flip[state]) {
+        g_face_seek_flip[state] = flip;
+        const uint64_t previous = g_face_seek_last_ns[state];
+        g_face_seek_allow[state] =
+            previous == 0 || now - previous >= kFaceSyncMinimumNs;
+        if (g_face_seek_allow[state])
+            g_face_seek_last_ns[state] = now;
+    }
+    return g_face_seek_allow[state] ? 0 : 1;
+}
+
 extern "C" void taiko_don3d_scale_frame_delta(ppu_context* ctx)
 {
     if (!ctx || !animation_timing_enabled())
@@ -138,16 +237,20 @@ extern "C" void taiko_don3d_scale_frame_delta(ppu_context* ctx)
 extern "C" void taiko_project_flip_command()
 {
     const uint64_t now = ps3_host_monotonic_ns();
+    g_animation_flip_sequence.fetch_add(1, std::memory_order_release);
     if (!animation_timing_enabled() || !ps3_frame_boot_fast_is_done()) {
         g_animation_previous_flip_ns.store(now, std::memory_order_relaxed);
         g_animation_scale_bits.store(0x3F800000u,
                                      std::memory_order_release);
+        g_animation_tick_accumulator = 0.0f;
+        g_animation_tick_quanta.store(1, std::memory_order_release);
         return;
     }
 
     const uint64_t previous =
         g_animation_previous_flip_ns.exchange(now, std::memory_order_relaxed);
     float scale = 1.0f;
+    uint32_t tick_quanta = 1;
     if (previous && now > previous) {
         const uint64_t delta = now - previous;
         if (delta < kAnimationTimingGapNs) {
@@ -155,9 +258,19 @@ extern "C" void taiko_project_flip_command()
             if (scale > kAnimationScaleMax)
                 scale = kAnimationScaleMax;
         }
+
+        /* Lumen's complete player update is transactional: preparation,
+         * timeline advance, actions, and child traversal must all happen as
+         * one authored tick. Convert elapsed time to whole 60 Hz quanta here
+         * instead of fractionally throttling individual Sprite callbacks. */
+        g_animation_tick_accumulator += scale;
+        tick_quanta = static_cast<uint32_t>(g_animation_tick_accumulator);
+        g_animation_tick_accumulator -= static_cast<float>(tick_quanta);
     }
     g_animation_scale_bits.store(float_bits(scale),
                                  std::memory_order_release);
+    g_animation_tick_quanta.store(tick_quanta,
+                                  std::memory_order_release);
 
     if (std::getenv("TAIKO_ANIMATION_TIMING_TRACE")) {
         static uint64_t report_ns;
@@ -177,15 +290,12 @@ extern "C" void taiko_project_flip_command()
             const uint32_t lumen_calls =
                 g_animation_lumen_calls.exchange(0,
                                                   std::memory_order_relaxed);
-            const uint32_t face_skips =
-                g_animation_face_skips.exchange(0,
-                                                 std::memory_order_relaxed);
             std::fprintf(stderr,
                          "[ANIMATION-TIMING] samples=%u scale=%.3f..%.3f "
-                         "mean=%.3f calls(don3d=%u lumen=%u face-skip=%u)\n",
+                         "mean=%.3f calls(don3d=%u lumen=%u)\n",
                          samples, minimum, maximum,
                          samples ? total / samples : 0.0,
-                         don3d_calls, lumen_calls, face_skips);
+                         don3d_calls, lumen_calls);
             report_ns = now;
             minimum = kAnimationScaleMax;
             maximum = 0.0f;
@@ -199,13 +309,11 @@ extern "C" void taiko_lumen_scale_frame_delta(ppu_context* ctx)
 {
     if (!ctx || !animation_timing_enabled())
         return;
-    if (is_deferred_face_timeline(static_cast<uint32_t>(ctx->gpr[30]))) {
-        g_animation_face_skips.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
     g_animation_lumen_calls.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t tick_quanta =
+        g_animation_tick_quanta.load(std::memory_order_acquire);
     ctx->fpr[1] = static_cast<double>(static_cast<float>(
-        ctx->fpr[1] * static_cast<double>(animation_scale())));
+        ctx->fpr[1] * static_cast<double>(tick_quanta)));
 }
 
 extern "C" void taiko_lumen_trace_arm()
