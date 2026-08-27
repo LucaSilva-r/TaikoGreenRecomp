@@ -49,6 +49,11 @@
    "function": "func_002A6BB4"
   },
   {
+   "symbol": "taiko_lumen_scale_effect_frames",
+   "text": "extern \"C\" uint32_t taiko_lumen_scale_effect_frames(uint32_t frames);",
+   "function": "func_00655474"
+  },
+  {
    "symbol": "rsx_dbg_trace_armed",
    "text": "extern \"C\" int rsx_dbg_trace_armed(void);",
    "function": "func_00581F5C"
@@ -106,6 +111,115 @@
      "                ctx->gpr[3] = (int64_t)(int32_t)(1);",
      "                return;",
      "        }"
+    ]
+   }
+  ],
+  "func_006549E8": [
+   {
+    "anchor": "        ctx->gpr[9] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[9] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[9]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[9] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[9] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[9]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[9] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[9] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[9]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x3C);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   }
+  ],
+  "func_00655474": [
+   {
+    "anchor": "        ctx->gpr[9] = (int64_t)(int32_t)(0x1E);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[9] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[9]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[9] = (int64_t)(int32_t)(0x1E);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[9] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[9]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x1E);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x1E);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x1E);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
+    ]
+   },
+   {
+    "anchor": "        ctx->gpr[0] = (int64_t)(int32_t)(0x1E);",
+    "replaces": [],
+    "lines": [
+     "        ctx->gpr[0] = taiko_lumen_scale_effect_frames((uint32_t)ctx->gpr[0]);"
     ]
    }
   ],

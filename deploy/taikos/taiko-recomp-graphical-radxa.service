@@ -1,0 +1,63 @@
+[Unit]
+Description=TaikOS TaikoRecomp Radxa Dragon Q6A SDL kiosk
+After=systemd-user-sessions.service systemd-logind.service sound.target network-online.target
+Wants=systemd-user-sessions.service network-online.target
+Conflicts=getty@tty1.service taikos-cage.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=taikos
+Group=taikos
+SupplementaryGroups=audio input render video
+PAMName=login
+UtmpIdentifier=tty1
+TTYPath=/dev/tty1
+StandardInput=tty-force
+StandardOutput=journal
+StandardError=journal
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+WorkingDirectory=/var/lib/taikos/recomp
+EnvironmentFile=-/etc/taikos/taikos.env
+Environment=HOME=/var/lib/taikos
+Environment=XDG_CONFIG_HOME=/var/lib/taikos/config
+Environment=XDG_CACHE_HOME=/var/lib/taikos/cache
+Environment=XDG_DATA_HOME=/var/lib/taikos/data
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=LD_LIBRARY_PATH=/var/lib/taikos/recomp/lib
+Environment=SDL_VIDEODRIVER=offscreen
+Environment=SDL_AUDIODRIVER=alsa
+Environment=TAIKOS_OUTPUT_MODE=1920x1080@60
+Environment=TAIKO_GPU_DRIVER=vulkan
+Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*
+Environment=TAIKO_KMS_PRESENT=1
+Environment=TAIKO_KMS_ATOMIC=1
+Environment=PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs
+Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
+Environment=FLOW_NOSPILL=1
+Environment=TAIKO_DNS_LOOPBACK=1
+Environment=TAIKO_AUDIO_SPU=1
+# Preserve the Pi appliance's safe character-filter settings initially. The
+# Q6A can restore the outline after its baseline has been validated.
+Environment=TAIKO_GPU_CHARACTER_FILTER_SCISSOR=0
+Environment=TAIKO_GPU_CHARACTER_OUTLINE=0
+Environment=TAIKO_PERF_OVERLAY=1
+Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb
+Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=4
+# Pi-only V3DV upload-fence workarounds and VC4 zero-copy scanout are omitted.
+# Turnip/MSM should first be validated on the portable atomic KMS path.
+ExecStart=/usr/local/bin/taiko-recomp-session
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGINT
+TimeoutStopSec=10s
+Nice=-5
+UMask=0002
+LimitRTPRIO=1
+LimitNOFILE=524288
+
+[Install]
+WantedBy=multi-user.target

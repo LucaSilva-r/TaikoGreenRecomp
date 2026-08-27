@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
+#include <cmath>
 
 extern "C" void ppu_register_function(uint64_t addr, void (*fn)(ppu_context*));
 extern "C" void ppu_set_project_register_hooks(void (*register_hooks)(void));
@@ -314,6 +315,44 @@ extern "C" void taiko_lumen_scale_frame_delta(ppu_context* ctx)
         g_animation_tick_quanta.load(std::memory_order_acquire);
     ctx->fpr[1] = static_cast<double>(static_cast<float>(
         ctx->fpr[1] * static_cast<double>(tick_quanta)));
+}
+
+extern "C" uint32_t taiko_lumen_scale_effect_frames(uint32_t frames)
+{
+    if (!animation_timing_enabled() || frames == 0)
+        return frames;
+
+    /* Gameplay effect pools count down once per submitted guest frame, while
+     * their Lumen movies now advance in real 60 Hz ticks.  Convert the stock
+     * frame lifetime to the current render cadence so a 30/60-frame slot is
+     * not recycled four times too early at 240 Hz.  This deliberately changes
+     * only slot ownership; Lumen's validated whole-tick stepping is untouched. */
+    const float scale = animation_scale();
+    if (!std::isfinite(scale) || scale <= 0.0f)
+        return frames;
+
+    const double scaled = std::ceil(static_cast<double>(frames) /
+                                    static_cast<double>(scale));
+    uint32_t result;
+    if (scaled < 1.0)
+        result = 1;
+    else if (scaled > 0x7FFFFFFF)
+        result = 0x7FFFFFFFu;
+    else
+        result = static_cast<uint32_t>(scaled);
+
+    if (std::getenv("TAIKO_EFFECT_TIMING_TRACE")) {
+        static std::atomic<uint32_t> sequence{0};
+        const uint32_t current = sequence.fetch_add(1,
+                                                     std::memory_order_relaxed);
+        if (current < 256) {
+            std::fprintf(stderr,
+                         "[EFFECT-TIMING] seq=%u stock=%u scale=%.4f "
+                         "lifetime=%u\n",
+                         current, frames, scale, result);
+        }
+    }
+    return result;
 }
 
 extern "C" void taiko_lumen_trace_arm()

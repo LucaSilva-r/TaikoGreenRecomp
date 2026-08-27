@@ -69,13 +69,13 @@ Budget **~3 GB per job** and set it from available RAM, not core count:
 cmake -S . -B build -DTAIKO_COMPILE_JOBS=8 ...   # ~24 GB peak, needs 32 GB+
 ```
 
-The default stays at 4 so a 16 GB machine builds unattended. **On this 46 GB
-development host, agents must use 8** for TaikoRecomp builds: configure native
-build directories with `-DTAIKO_COMPILE_JOBS=8`, and invoke cross-build scripts
-as `TAIKO_COMPILE_JOBS=8 ./scripts/build_rpi_arm64.sh`. Eight is comfortable
-and roughly halves a full rebuild; going to `nproc` is what caused the original
-wedging. It is a cache variable — pass it at configure time, or reconfigure an
-existing build directory before expecting the new limit to apply.
+The default stays at 4 so builds run unattended. **Agents must use 4 on this
+development host**: an eight-job lifted-code rebuild made the desktop
+unresponsive even with ample nominal RAM. Configure native build directories
+with `-DTAIKO_COMPILE_JOBS=4`, and invoke cross-build scripts as
+`TAIKO_COMPILE_JOBS=4 ./scripts/build_rpi_arm64.sh`. Never start a second build
+while one is active. The limit is a cache variable — pass it at configure time,
+or reconfigure an existing build directory before expecting it to apply.
 
 Changing the chunk count (a re-lift) needs a **re-configure**, not just a build —
 `file(GLOB)` is evaluated at configure time.

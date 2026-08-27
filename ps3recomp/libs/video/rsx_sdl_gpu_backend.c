@@ -68,6 +68,17 @@ extern bool SDL_GPUVulkanExportTextureDMABUF(
 #define SDL_RSX_CHARACTER_COMPOSITE_VP UINT64_C(0x4D27AA0BFB40F830)
 #define SDL_RSX_CHARACTER_COMPOSITE_FP UINT64_C(0x19BF731FEF02629F)
 #define SDL_RSX_DIRECT_COPY_FP UINT64_C(0x1533A97E809FFB4A)
+
+static Uint64 sdl_host_monotonic_ns(void)
+{
+#ifdef RSX_SDL_REPLAY_STANDALONE
+    /* rsx_replay intentionally does not link the emulator host runtime. */
+    return SDL_GetTicksNS();
+#else
+    return ps3_host_monotonic_ns();
+#endif
+}
+
 static const u8 s_direct_copy_fp[] = {
     0x9e, 0x01, 0x17, 0x00, 0xc8, 0x01, 0x1c, 0x9d,
     0xc8, 0x00, 0x00, 0x01, 0xc8, 0x00, 0x3f, 0xe1,
@@ -2567,7 +2578,7 @@ static int input_vblank_trace_worker(void* userdata)
         do {
             result = poll(&wait, 1, -1);
         } while (result < 0 && errno == EINTR);
-        const Uint64 scanout_ns = ps3_host_monotonic_ns();
+        const Uint64 scanout_ns = sdl_host_monotonic_ns();
         close(item.fence_fd);
         if (result > 0)
             input_trace_presented(&item.trace, scanout_ns,
@@ -2677,7 +2688,7 @@ static int kms_copy_worker(void* userdata)
                 &scanout_wait_ns, &copy_ns, &flip_ns);
             if (present_result == 0)
                 input_trace_presented(&slot->input_trace,
-                                      ps3_host_monotonic_ns(), "download", 0);
+                                      sdl_host_monotonic_ns(), "download", 0);
             SDL_UnmapGPUTransferBuffer(s_sdl.device, slot->transfer);
         } else if (download_ready) {
             fprintf(stderr, "[SDL_GPU] KMS transfer-buffer map failed: %s\n",
@@ -2767,7 +2778,7 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
         if (s_sdl.current_input_trace.sequence &&
             input_vblank_trace_enqueue(&s_sdl.current_input_trace) != 0)
             input_trace_presented(&s_sdl.current_input_trace,
-                                  ps3_host_monotonic_ns(),
+                                  sdl_host_monotonic_ns(),
                                   "zero-copy-commit", 0);
         const unsigned next = (current + 1u) % s_sdl.kms_display_count;
         Uint64 acquire_ns = 0;
@@ -3105,7 +3116,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
     Uint64 perf_start = SDL_GetTicksNS();
     const Uint64 execute_start_ns = perf_start;
     if (input_trace.sequence)
-        input_trace.execute_ns = ps3_host_monotonic_ns();
+        input_trace.execute_ns = sdl_host_monotonic_ns();
     s_sdl.current_input_trace = input_trace;
     Uint64 perf_mark;
     const int resource_trace = getenv("RSX_RESOURCE_TRACE") != NULL;
@@ -3564,7 +3575,7 @@ static int consumer_submit(void* userdata, const rsx_render_batch* batch)
             slot->input_trace.sequence = marker.sequence;
             slot->input_trace.event_ns = marker.event_ns;
             slot->input_trace.usio_ns = marker.usio_ns;
-            slot->input_trace.enqueue_ns = ps3_host_monotonic_ns();
+            slot->input_trace.enqueue_ns = sdl_host_monotonic_ns();
             slot->input_trace.batch_serial = batch->serial;
             slot->input_trace.ordinal = next_ordinal++;
         }
@@ -3773,7 +3784,7 @@ static void evdev_remove_keyboard(unsigned keyboard)
     }
     memset(s_sdl.evdev_down[last], 0, sizeof(s_sdl.evdev_down[last]));
     --s_sdl.evdev_keyboard_count;
-    evdev_publish_levels(ps3_host_monotonic_ns());
+    evdev_publish_levels(sdl_host_monotonic_ns());
 }
 
 /* Additive: keep what is already open and pick up anything new. This used to
@@ -3823,7 +3834,7 @@ static void evdev_open_keyboards(void)
                     "[SDL_INPUT] no readable evdev keyboard; "
                     "check the service input group\n");
     }
-    evdev_publish_levels(ps3_host_monotonic_ns());
+    evdev_publish_levels(sdl_host_monotonic_ns());
 }
 
 static void evdev_handle_key(unsigned keyboard,
@@ -3880,9 +3891,9 @@ static void evdev_handle_key(unsigned keyboard,
     unsigned long long timestamp_ns =
         (unsigned long long)event->time.tv_sec * UINT64_C(1000000000) +
         (unsigned long long)event->time.tv_usec * UINT64_C(1000);
-    if (!timestamp_ns) timestamp_ns = ps3_host_monotonic_ns();
+    if (!timestamp_ns) timestamp_ns = sdl_host_monotonic_ns();
     if (getenv("TAIKO_INPUT_TRACE")) {
-        const unsigned long long now_ns = ps3_host_monotonic_ns();
+        const unsigned long long now_ns = sdl_host_monotonic_ns();
         const double read_age_ms = now_ns >= timestamp_ns
             ? (double)(now_ns - timestamp_ns) / 1000000.0 : 0.0;
         fprintf(stderr,
@@ -4029,7 +4040,7 @@ static void evdev_close_keyboards(void)
     for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
         close(s_sdl.evdev_keyboards[i]);
     s_sdl.evdev_keyboard_count = 0;
-    taiko_host_input_update_levels(0, 0, ps3_host_monotonic_ns());
+    taiko_host_input_update_levels(0, 0, sdl_host_monotonic_ns());
 }
 #else
 static void evdev_close_keyboards(void) {}
