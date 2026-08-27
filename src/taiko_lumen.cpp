@@ -46,8 +46,19 @@ constexpr uint32_t kNormalNoteFaceCharacter = 7u;
 constexpr uint32_t kNormalNoteFaceFrames = 90u;
 constexpr uint32_t kBigNoteFaceCharacter = 5u;
 constexpr uint32_t kBigNoteFaceFrames = 95u;
+constexpr uint32_t kRollNoteFaceCharacter = 13u;
+constexpr uint32_t kBigRollNoteFaceCharacter = 11u;
+constexpr uint32_t kRollNoteFaceFrames = 95u;
+constexpr uint32_t kBalloonNoteFaceCharacter = 9u;
+constexpr uint32_t kBalloonNoteFaceFrames = 90u;
 constexpr uint64_t kAnimationTimingGapNs = 250000000ull;
-constexpr uint64_t kFaceSyncMinimumNs = 280000000ull;
+constexpr uint64_t kFaceSyncMinimumNs[5] = {
+    280000000ull, /* low-combo/static tier */
+    666666667ull, /* 40 authored frames */
+    333333334ull, /* 20 authored frames */
+    333333334ull, /* 20 authored frames */
+    280000000ull, /* big-note wait clip */
+};
 constexpr float kAnimationScaleMax = 4.0f;
 
 extern "C" int ps3_frame_boot_fast_is_done(void);
@@ -153,7 +164,13 @@ extern "C" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx)
                         frame_count == kNormalNoteFaceFrames;
     const bool big = sprite_id == kBigNoteFaceCharacter &&
                      frame_count == kBigNoteFaceFrames;
-    if (!normal && !big)
+    const bool roll =
+        (sprite_id == kRollNoteFaceCharacter ||
+         sprite_id == kBigRollNoteFaceCharacter) &&
+        frame_count == kRollNoteFaceFrames;
+    const bool balloon = sprite_id == kBalloonNoteFaceCharacter &&
+                         frame_count == kBalloonNoteFaceFrames;
+    if (!normal && !big && !roll && !balloon)
         return 0;
 
     uint32_t first;
@@ -164,7 +181,23 @@ extern "C" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx)
      * the current label on a frame-counted timer.  At high refresh that seek
      * lands before the face reaches its first visible keyframe and continually
      * restarts it. */
-    if (guest_string_equals(label, "level01")) {
+    if (roll && guest_string_equals(label, "level01")) {
+        first = 5;
+        last = 14;
+        state = 0;
+    } else if (roll && guest_string_equals(label, "level02")) {
+        first = 15;
+        last = 54;
+        state = 1;
+    } else if (roll && guest_string_equals(label, "level03")) {
+        first = 55;
+        last = 74;
+        state = 2;
+    } else if (roll && guest_string_equals(label, "level04")) {
+        first = 75;
+        last = 94;
+        state = 3;
+    } else if (guest_string_equals(label, "level01")) {
         first = 0;
         last = 9;
         state = 0;
@@ -198,8 +231,12 @@ extern "C" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx)
 
     const uint32_t frame = vm_read32(object + 0x140);
     const bool stopped = vm_read8(object + 0x14C) != 0;
-    const bool redundant = frame >= first && frame <= last &&
-                           (first == 0 || (!stopped && frame < last));
+    const bool in_segment = frame >= first && frame <= last;
+    /* Animated face tiers end in Stop actions.  Keep a completed face at that
+     * endpoint until the shared, cycle-aligned pulse instead of letting each
+     * note restart independently.  onp_wait retains its authored behavior. */
+    const bool redundant = in_segment &&
+                           (state != 4 || (!stopped && frame < last));
     const uint64_t flip =
         g_animation_flip_sequence.load(std::memory_order_acquire);
     const uint64_t now = ps3_host_monotonic_ns();
@@ -219,7 +256,7 @@ extern "C" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx)
         g_face_seek_flip[state] = flip;
         const uint64_t previous = g_face_seek_last_ns[state];
         g_face_seek_allow[state] =
-            previous == 0 || now - previous >= kFaceSyncMinimumNs;
+            previous == 0 || now - previous >= kFaceSyncMinimumNs[state];
         if (g_face_seek_allow[state])
             g_face_seek_last_ns[state] = now;
     }

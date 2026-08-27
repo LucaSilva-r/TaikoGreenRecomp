@@ -30,6 +30,7 @@ Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=LD_LIBRARY_PATH=/var/lib/taikos/recomp/lib
 Environment=SDL_VIDEODRIVER=wayland
 Environment=SDL_AUDIODRIVER=alsa
+Environment=SDL_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE=plughw:CARD=QCS6490RadxaDra,DEV=1
 Environment=TAIKOS_OUTPUT=HDMI-A-1
 Environment=TAIKOS_OUTPUT_MODE=1920x1080@60Hz
 Environment=TAIKO_GPU_DRIVER=vulkan
@@ -44,6 +45,8 @@ Environment=TAIKO_GPU_CHARACTER_OUTLINE=0
 Environment=TAIKO_PERF_OVERLAY=1
 Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb
 Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=4
+ExecStartPre=/usr/bin/amixer -q -c 0 cset "name=RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia2" 0
+ExecStartPre=/usr/bin/amixer -q -c 0 cset "name=DISPLAY_PORT_RX_0 Audio Mixer MultiMedia2" 1
 ExecStart=/usr/bin/cage -d -s -- /usr/local/bin/taiko-recomp-session
 Restart=on-failure
 RestartSec=5s

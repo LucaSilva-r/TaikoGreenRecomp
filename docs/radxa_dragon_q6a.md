@@ -1,23 +1,31 @@
 # Radxa Dragon Q6A kiosk deployment
 
 The Radxa Dragon Q6A uses the same generic AArch64 TaikoRecomp binary and game
-layout as the Raspberry Pi appliance. The tested OS is Armbian 26.8.3 / Debian
-13 with the QCS6490 kernel, Mesa Turnip on the Adreno 643, and a 1920x1080 60 Hz
-HDMI output.
+layout as the Raspberry Pi appliance. Live validation on 2026-08-27 used
+Armbian 26.8.3 / Debian 13 with the QCS6490 kernel, Mesa Turnip on the Adreno
+643, and a 1920x1080 60 Hz HDMI output.
 
 The primary service drives DRM/KMS directly. Cage is installed only as a
 disabled compositor fallback; it is not in the normal frame path.
+
+Avahi advertises the appliance as `radxa-dragon-q6a.local` for SSH access.
 
 ## Required packages
 
 ```sh
 sudo apt-get install libdrm2 libvulkan1 mesa-vulkan-drivers vulkan-tools \
   libasound2t64 alsa-utils cage wlr-randr libwayland-client0 \
-  libwayland-cursor0 libwayland-egl1 libxkbcommon0 rsync
+  libwayland-cursor0 libwayland-egl1 libxkbcommon0 rsync \
+  avahi-daemon libnss-mdns
 ```
 
 Verify that `vulkaninfo --summary` reports `Turnip Adreno (TM) 643`, not only
 llvmpipe.
+
+The QCS6490 card exposes headphones on PCM 0 and HDMI/DP on PCM 1. Direct ALSA
+clients do not apply the UCM route automatically. Both supplied Radxa units
+enable the `DISPLAY_PORT_RX_0 ... MultiMedia2` mixer route and set SDL's ALSA
+default playback device to `plughw:CARD=QCS6490RadxaDra,DEV=1`.
 
 ## Appliance layout
 
@@ -81,3 +89,9 @@ vulkaninfo --summary
 The startup log must select Vulkan/Turnip and `/dev/dri/card1`, establish an
 atomic 1920x1080@60 KMS output, and avoid llvmpipe. Keep the Pi intact until the
 Radxa reaches attract mode, accepts drum input, and produces HDMI audio.
+
+The initial live migration confirmed that `taiko_boot` owned a 1280x720 XB24
+framebuffer scaled by the MSM display plane to 1920x1080@60, opened Turnip's
+`renderD128`, and held HDMI playback PCM `/dev/snd/pcmC0D1p`. The service stayed
+active with zero restarts. External drum/USB input still requires a physical
+connection and an in-game input test.
