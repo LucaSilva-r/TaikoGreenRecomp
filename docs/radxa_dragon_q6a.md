@@ -125,3 +125,37 @@ appliance. It writes 48 kHz stereo S16 directly with a 960-frame period and a
 audio was reported clean and correctly pitched. The mixer advanced 5633
 256-frame blocks in 30.02 seconds (187.64 blocks/s; target 187.5) with zero
 xruns. Pi and desktop builds continue using SDL unless this variable is set.
+
+## Low-overhead profiling
+
+Install `deploy/taikos/taiko-recomp-profiling.conf` as
+`/etc/systemd/system/taikos.service.d/profiling.conf`, and install
+`taiko-profile-sampler` plus its service from the same directory. After the
+next reboot, `[RSXFPS]`, `[RSXREC]`, and `[PRESENTPACE]` report application
+timings once per second. `[TAIKO-SYS]` independently records process CPU/RSS,
+GPU target/current frequency, CPU-cluster frequencies, and CPU/GPU temperature
+once per second. Correlate them with:
+
+```sh
+journalctl -b -u taikos.service -u taiko-profile-sampler.service \
+  --output=short-precise
+```
+
+The default profiling drop-in does not enable `RSX_RESOURCE_TRACE`: that mode
+takes timestamps inside the per-operation preparation loop and can perturb a
+heavy Song Select frame. Enable it only for a short follow-up run if the first
+trace shows high `prep` time. Do not read `/sys/kernel/debug/dri/*/gpu` or
+`perf` while the game is running on this kernel; a live debugfs snapshot was
+followed by `VK_ERROR_DEVICE_LOST` and an automatic service restart.
+
+Rapid Song Select scrolling is not storage-bound on the validated system. A
+ten-second reproduction caused zero physical read bytes and zero major page
+faults; cached reads accounted for about 24 MB. With the default governors,
+however, the GPU remained at 315 MHz and CPU-cluster frequencies oscillated
+while the producer alternated between 16.7 and 33.3 ms submission intervals.
+Holding the GPU at its advertised 812 MHz reduced KMS render wait from about
+7.6 to 4.6 ms. Selecting the CPU `performance` governor as well made the same
+375-draw scrolling workload hold 59--60 FPS, with CPU/GPU temperatures around
+50/45 degrees C. Install and enable `taiko-performance.service` plus its helper
+from `deploy/taikos/`; it selects only frequencies advertised by the kernel and
+does not overclock the board.

@@ -1,0 +1,35 @@
+#!/bin/sh
+
+# Taiko's short alternating CPU/GPU bursts do not keep the QCS6490 ondemand
+# governors ramped. Missing one 16.67 ms deadline then turns into a 33 ms frame.
+# Use only advertised frequencies; this does not overclock the board.
+
+set -eu
+
+for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    [ -w "$policy/scaling_governor" ] || continue
+    IFS= read -r governors <"$policy/scaling_available_governors"
+    case " $governors " in
+        *' performance '*) printf performance >"$policy/scaling_governor" ;;
+    esac
+done
+
+gpu=/sys/class/devfreq/3d00000.gpu
+if [ -w "$gpu/min_freq" ] && [ -r "$gpu/max_freq" ]; then
+    IFS= read -r gpu_max <"$gpu/max_freq"
+    printf '%s' "$gpu_max" >"$gpu/min_freq"
+fi
+
+printf '[TAIKO-PERFORMANCE] CPU governors: '
+for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    [ -r "$policy/scaling_governor" ] || continue
+    IFS= read -r governor <"$policy/scaling_governor"
+    IFS= read -r frequency <"$policy/scaling_cur_freq"
+    printf '%s=%s@%sMHz ' "${policy##*/}" "$governor" "$((frequency / 1000))"
+done
+if [ -r "$gpu/cur_freq" ]; then
+    IFS= read -r gpu_frequency <"$gpu/cur_freq"
+    printf 'gpu=%sMHz\n' "$((gpu_frequency / 1000000))"
+else
+    printf 'gpu=unavailable\n'
+fi

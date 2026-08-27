@@ -1,0 +1,17 @@
+[Unit]
+Description=TaikOS low-overhead performance sampler
+After=taikos.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/taiko-profile-sampler
+Restart=on-failure
+RestartSec=2s
+Nice=19
+CPUWeight=1
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=TaikOS QCS6490 performance governors
+Before=taikos.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/taiko-performance
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,93 @@
+#!/bin/sh
+
+# One-Hz, read-only system telemetry to correlate with Taiko's [RSXFPS],
+# [RSXREC], and [PRESENTPACE] records. Avoid DRM/MSM debugfs: reading the live
+# GPU state endpoint has caused a device loss on the QCS6490 kernel.
+
+set -u
+
+service=taikos.service
+gpu=/sys/class/devfreq/3d00000.gpu
+clock_ticks=$(getconf CLK_TCK)
+previous_pid=0
+previous_ticks=0
+previous_ns=0
+
+read_value()
+{
+    if [ -r "$1" ]; then
+        IFS= read -r value <"$1" || value=0
+        printf '%s' "$value"
+    else
+        printf '0'
+    fi
+}
+
+find_thermal_zone()
+{
+    wanted=$1
+    for zone in /sys/class/thermal/thermal_zone*; do
+        [ -r "$zone/type" ] || continue
+        IFS= read -r zone_type <"$zone/type" || zone_type=
+        [ "$zone_type" = "$wanted" ] && {
+            printf '%s' "$zone"
+            return
+        }
+    done
+    printf '/nonexistent'
+}
+
+cpu_thermal=$(find_thermal_zone cpuss1-thermal)
+gpu_thermal=$(find_thermal_zone gpuss0-thermal)
+
+while :; do
+    now_ns=$(date +%s%N)
+    pid=$(systemctl show "$service" --property MainPID --value 2>/dev/null)
+    case "$pid" in
+        ''|*[!0-9]*) pid=0 ;;
+    esac
+
+    process_cpu=0.0
+    rss_kib=0
+    threads=0
+    process_ticks=0
+    if [ "$pid" -gt 0 ] && [ -r "/proc/$pid/stat" ]; then
+        IFS= read -r process_stat <"/proc/$pid/stat"
+        set -- $process_stat
+        process_ticks=$((${14} + ${15}))
+        while read -r key value rest; do
+            case "$key" in
+                VmRSS:) rss_kib=$value ;;
+                Threads:) threads=$value ;;
+            esac
+        done <"/proc/$pid/status"
+        if [ "$pid" -eq "$previous_pid" ] && [ "$previous_ns" -gt 0 ]; then
+            delta_ticks=$((process_ticks - previous_ticks))
+            delta_ns=$((now_ns - previous_ns))
+            if [ "$delta_ns" -gt 0 ]; then
+                process_cpu_tenth=$((delta_ticks * 1000000000000 /
+                    (clock_ticks * delta_ns)))
+                process_cpu="$((process_cpu_tenth / 10)).$((process_cpu_tenth % 10))"
+            fi
+        fi
+    fi
+
+    gpu_mhz=$(( $(read_value "$gpu/cur_freq") / 1000000 ))
+    gpu_target_mhz=$(( $(read_value "$gpu/target_freq") / 1000000 ))
+    cpu0_mhz=$(( $(read_value /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq) / 1000 ))
+    cpu4_mhz=$(( $(read_value /sys/devices/system/cpu/cpufreq/policy4/scaling_cur_freq) / 1000 ))
+    cpu7_mhz=$(( $(read_value /sys/devices/system/cpu/cpufreq/policy7/scaling_cur_freq) / 1000 ))
+    cpu_temp_mc=$(read_value "$cpu_thermal/temp")
+    gpu_temp_mc=$(read_value "$gpu_thermal/temp")
+
+    printf '[TAIKO-SYS] pid=%s cpu=%s%% rss_kib=%s threads=%s gpu=%s/%sMHz cpu_clusters=%s/%s/%sMHz temp_cpu=%s.%03dC temp_gpu=%s.%03dC\n' \
+        "$pid" "$process_cpu" "$rss_kib" "$threads" \
+        "$gpu_mhz" "$gpu_target_mhz" "$cpu0_mhz" "$cpu4_mhz" "$cpu7_mhz" \
+        "$((cpu_temp_mc / 1000))" "$((cpu_temp_mc % 1000))" \
+        "$((gpu_temp_mc / 1000))" "$((gpu_temp_mc % 1000))"
+
+    previous_pid=$pid
+    previous_ticks=$process_ticks
+    previous_ns=$now_ns
+    sleep 1
+done
