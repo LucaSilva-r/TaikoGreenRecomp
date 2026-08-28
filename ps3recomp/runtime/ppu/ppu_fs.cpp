@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <algorithm>
 #include <mutex>
 #ifdef _WIN32
 #include <io.h>          /* open/close on MinGW */
@@ -42,6 +43,11 @@ extern "C" void     ps3_hle_register_ctx(uint32_t nid, const char* name, void (*
 extern "C" void     vm_write32(uint64_t a, uint32_t v);
 extern "C" void     vm_write64(uint64_t a, uint64_t v);
 extern "C" void     ydkj_parse_yield(void);
+/* Title-local ATRAC can acknowledge compressed preview refills without
+ * copying bytes that its in-process decoder has already consumed. Weak keeps
+ * the generic runtime independent of Taiko when linked by another title. */
+extern "C" __attribute__((weak)) int
+taiko_atrac_discard_stream_read(uint32_t buffer, uint64_t bytes);
 #ifdef _WIN32
 extern "C" char __ImageBase;
 extern "C" unsigned short __stdcall RtlCaptureStackBackTrace(unsigned long,unsigned long,void**,unsigned long*);
@@ -254,7 +260,31 @@ static void cellFsRead(ppu_context* ctx)
     uint64_t raw_nbytes = ctx->gpr[5];
     long fpos_before = ftell(g_files[fd]);
     if (ppu_vm_size && (uint64_t)buf + nbytes > ppu_vm_size) nbytes = ppu_vm_size - buf;
-    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);   /* raw bytes, no swap */
+    size_t n = 0;
+    const bool discard_atrac = taiko_atrac_discard_stream_read &&
+        taiko_atrac_discard_stream_read(buf, nbytes);
+    if (discard_atrac) {
+        /* Preserve the exact fread position/count/EOF contract, but omit both
+         * the host read and the guest-memory copy. cellAtracAddStreamData only
+         * acknowledges these bytes; the title-local decoder already owns the
+         * complete immutable RIFF. Use stdio seeks for Windows/Linux parity. */
+        const long current = ftell(g_files[fd]);
+        long end = -1;
+        if (current >= 0 && fseek(g_files[fd], 0, SEEK_END) == 0)
+            end = ftell(g_files[fd]);
+        if (current >= 0 && end >= current &&
+            fseek(g_files[fd], current, SEEK_SET) == 0) {
+            n = (size_t)std::min<uint64_t>(
+                nbytes, static_cast<uint64_t>(end - current));
+            if (fseek(g_files[fd], current + (long)n, SEEK_SET) != 0)
+                n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);
+        } else {
+            if (current >= 0) fseek(g_files[fd], current, SEEK_SET);
+            n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);
+        }
+    } else {
+        n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);
+    }
     const char* taiko_fs_trace = getenv("TAIKO_FS_TRACE");
     if (taiko_fs_trace && taiko_fs_trace[0] != '0' &&
         (strstr(g_file_path[fd], "packeddata.ddp") ||

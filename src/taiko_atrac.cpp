@@ -39,8 +39,10 @@ extern "C" {
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <list>
@@ -131,10 +133,16 @@ struct DecoderState {
     bool end_trace_written = false;
     bool first_decode_seen = false;
     bool pcm_cache_hit = false;
+    bool async_pending = false;
+    bool discard_stream_reads = false;
+    bool reset_requested = false;
+    uint32_t pending_reset_sample = 0;
+    uint64_t generation = 0;
 };
 
 std::mutex g_decoder_mutex;
 std::unordered_map<uint32_t, DecoderState> g_decoders;
+std::atomic<uint64_t> g_decoder_generation{1};
 
 uint64_t fnv1a64(uint32_t ea, uint32_t size)
 {
@@ -203,6 +211,7 @@ struct RiffLocation {
 
 std::mutex g_riff_index_mutex;
 std::unordered_map<uint64_t, RiffLocation> g_riff_index;
+std::once_flag g_riff_index_once;
 
 /* Full decoded songs are tens of MiB each, so an unbounded "cache every song"
  * policy would consume tens of GiB while browsing the catalog. Keep recently
@@ -305,6 +314,61 @@ bool read_file_riff(const RiffLocation& location,
     return ok;
 }
 
+void build_riff_index()
+{
+    const char* root = std::getenv("PS3_VFS_ROOT");
+    if (!root || !*root) return;
+    const std::filesystem::path directory =
+        std::filesystem::path(root) / "data" / "sound" / "bgm" / "nub";
+    std::error_code directory_error;
+    std::filesystem::directory_iterator entries(directory, directory_error);
+    if (directory_error) return;
+
+    const uint64_t started_ns = ps3_host_monotonic_ns();
+    std::unordered_map<uint64_t, RiffLocation> built;
+    for (const auto& entry : entries) {
+        std::error_code entry_error;
+        if (!entry.is_regular_file(entry_error) || entry_error ||
+            entry.path().extension() != ".nub")
+            continue;
+        const std::string path = entry.path().string();
+        FILE* file = std::fopen(path.c_str(), "rb");
+        if (!file) continue;
+        std::vector<uint8_t> header(0x10000);
+        const size_t header_bytes =
+            std::fread(header.data(), 1, header.size(), file);
+        header.resize(header_bytes);
+        auto marker = std::search(header.begin(), header.end(),
+                                  "RIFF", "RIFF" + 4);
+        while (marker != header.end()) {
+            const size_t offset = static_cast<size_t>(marker - header.begin());
+            if (offset + 12 <= header.size() &&
+                std::memcmp(header.data() + offset + 8, "WAVE", 4) == 0 &&
+                std::fseek(file, static_cast<long>(offset), SEEK_SET) == 0) {
+                std::vector<uint8_t> signature(4096);
+                const size_t signature_bytes = std::fread(
+                    signature.data(), 1, signature.size(), file);
+                if (signature_bytes == signature.size())
+                    built[host_fnv1a64(signature)] =
+                        RiffLocation{path, offset};
+            }
+            marker = std::search(marker + 4, header.end(),
+                                 "RIFF", "RIFF" + 4);
+        }
+        std::fclose(file);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_riff_index_mutex);
+        for (auto& [hash, location] : built)
+            g_riff_index.emplace(hash, std::move(location));
+    }
+    const uint64_t finished_ns = ps3_host_monotonic_ns();
+    std::fprintf(stderr,
+        "[taiko_atrac] indexed %zu NUB RIFF sources in %.2fms\n",
+        built.size(),
+        static_cast<double>(finished_ns - started_ns) / 1000000.0);
+}
+
 bool resolve_complete_riff(uint64_t hash, const std::vector<uint8_t>& prefix,
                            std::vector<uint8_t>& riff, std::string& source)
 {
@@ -320,6 +384,9 @@ bool resolve_complete_riff(uint64_t hash, const std::vector<uint8_t>& prefix,
         source = "guest-buffer";
         return true;
     }
+
+    if (prefix.size() >= 4096)
+        std::call_once(g_riff_index_once, build_riff_index);
 
     std::lock_guard<std::mutex> index_lock(g_riff_index_mutex);
     if (auto known = g_riff_index.find(hash); known != g_riff_index.end()) {
@@ -424,7 +491,8 @@ std::string ffmpeg_error(int error)
 }
 
 bool decode_riff(const std::vector<uint8_t>& riff, DecoderState& state,
-                 std::string& failure)
+                 std::string& failure,
+                 const std::atomic<bool>* cancelled = nullptr)
 {
     static std::once_flag log_once;
     std::call_once(log_once, [] { av_log_set_level(AV_LOG_ERROR); });
@@ -521,6 +589,11 @@ bool decode_riff(const std::vector<uint8_t>& riff, DecoderState& state,
         };
 
         while ((last_error = av_read_frame(format, packet)) >= 0) {
+            if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+                failure = "cancelled";
+                av_packet_unref(packet);
+                return false;
+            }
             if (packet->stream_index == stream) {
                 last_error = avcodec_send_packet(decoder, packet);
                 if (last_error < 0) {
@@ -557,7 +630,14 @@ bool decode_riff(const std::vector<uint8_t>& riff, DecoderState& state,
         if (failure.empty()) failure = "decoder returned no PCM";
         return false;
     }
-    for (float sample : *state.pcm) {
+    for (size_t i = 0; i < state.pcm->size(); ++i) {
+        if ((i & 0x3FFFFu) == 0 && cancelled &&
+            cancelled->load(std::memory_order_relaxed)) {
+            failure = "cancelled";
+            state.pcm->clear();
+            return false;
+        }
+        const float sample = (*state.pcm)[i];
         if (!std::isfinite(sample) || std::abs(sample) > 4.0f) {
             failure = "decoder produced an unsafe PCM sample";
             state.pcm->clear();
@@ -578,30 +658,181 @@ bool decode_riff(const std::vector<uint8_t>& riff, DecoderState& state,
     return true;
 }
 
-bool decode_guest_riff(uint32_t data, uint32_t bytes, uint64_t hash,
-                       DecoderState& state, std::string& source,
-                       std::string& failure)
+bool prepare_guest_riff(uint32_t data, uint32_t bytes, uint64_t hash,
+                        DecoderState& state, std::string& source,
+                        std::string& failure, std::vector<uint8_t>& riff,
+                        uint64_t& pcm_hash)
 {
     std::vector<uint8_t> prefix(bytes);
     for (uint32_t i = 0; i < bytes; ++i) prefix[i] = vm_read8(data + i);
-    std::vector<uint8_t> riff;
     if (!resolve_complete_riff(hash, prefix, riff, source)) {
         failure = "could not resolve the complete RIFF in data/sound/bgm/nub";
         return false;
     }
-    const uint64_t pcm_hash = host_fnv1a64(riff);
+    pcm_hash = host_fnv1a64(riff);
     if (pcm_cache_lookup(pcm_hash, riff.size(), state))
-        return true;
-    if (!decode_riff(riff, state, failure))
-        return false;
-    pcm_cache_insert(pcm_hash, riff.size(), state.sample_rate, state.pcm);
+        riff.clear();
     return true;
+}
+
+struct PreviewDecodeJob {
+    uint32_t handle = 0;
+    uint32_t initial_bytes = 0;
+    uint32_t buffer_bytes = 0;
+    uint64_t generation = 0;
+    uint64_t prefix_hash = 0;
+    uint64_t pcm_hash = 0;
+    uint64_t queued_host_ns = 0;
+    std::string source;
+    std::vector<uint8_t> riff;
+    std::shared_ptr<std::atomic<bool>> cancelled =
+        std::make_shared<std::atomic<bool>>(false);
+};
+
+class PreviewDecodeWorker {
+public:
+    PreviewDecodeWorker() : worker_([this] { run(); }) {}
+
+    ~PreviewDecodeWorker()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+            if (active_cancelled_)
+                active_cancelled_->store(true, std::memory_order_relaxed);
+            if (pending_)
+                pending_->cancelled->store(true, std::memory_order_relaxed);
+        }
+        ready_.notify_one();
+        worker_.join();
+    }
+
+    void enqueue(PreviewDecodeJob job)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            /* Song Select has one audible preview. Keep only its newest
+             * request, and stop an obsolete full-song decode between packets
+             * instead of turning rapid browsing into an unbounded work queue. */
+            if (active_cancelled_)
+                active_cancelled_->store(true, std::memory_order_relaxed);
+            if (pending_)
+                pending_->cancelled->store(true, std::memory_order_relaxed);
+            pending_ = std::make_unique<PreviewDecodeJob>(std::move(job));
+        }
+        ready_.notify_one();
+    }
+
+private:
+    bool current(const PreviewDecodeJob& job)
+    {
+        std::lock_guard<std::mutex> lock(g_decoder_mutex);
+        const auto it = g_decoders.find(job.handle);
+        return it != g_decoders.end() &&
+            it->second.generation == job.generation &&
+            it->second.async_pending;
+    }
+
+    void run()
+    {
+        ps3_host_apply_thread_affinity(
+            "TAIKO_CPU_PREVIEW_AFFINITY", "ATRAC preview decode");
+        for (;;) {
+            std::unique_ptr<PreviewDecodeJob> job;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                ready_.wait(lock, [this] { return stopping_ || pending_; });
+                if (stopping_) return;
+                job = std::move(pending_);
+                active_cancelled_ = job->cancelled;
+            }
+
+            if (!current(*job)) {
+                finish(job->cancelled);
+                continue;
+            }
+
+            DecoderState decoded;
+            std::string failure;
+            const uint64_t decode_start_ns = ps3_host_monotonic_ns();
+            const bool ready = decode_riff(job->riff, decoded, failure,
+                                           job->cancelled.get());
+            const uint64_t ready_host_ns = ps3_host_monotonic_ns();
+            if (ready &&
+                !job->cancelled->load(std::memory_order_relaxed)) {
+                pcm_cache_insert(job->pcm_hash, job->riff.size(),
+                                 decoded.sample_rate, decoded.pcm);
+                size_t frames = 0;
+                bool published = false;
+                {
+                    std::lock_guard<std::mutex> lock(g_decoder_mutex);
+                    auto it = g_decoders.find(job->handle);
+                    if (it != g_decoders.end() &&
+                        it->second.generation == job->generation &&
+                        it->second.async_pending) {
+                        DecoderState& state = it->second;
+                        state.pcm = std::move(decoded.pcm);
+                        state.sample_rate = decoded.sample_rate;
+                        frames = state.pcm->size() / kChannels;
+                        if (state.reset_requested)
+                            state.decode_cursor = std::min<size_t>(
+                                state.pending_reset_sample, frames);
+                        state.decode_fraction = 0.0;
+                        state.async_pending = false;
+                        state.ready_host_ns = ready_host_ns;
+                        state.decode_work_ns = ready_host_ns - decode_start_ns;
+                        published = true;
+                    }
+                }
+                if (published) {
+                    std::fprintf(stderr,
+                        "[taiko_atrac] async decoded handle=%08X hash=%016llX "
+                        "frames=%zu decode=%.2fms cache=miss read=%u buffer=%u source=%s\n",
+                        job->handle,
+                        static_cast<unsigned long long>(job->prefix_hash),
+                        frames,
+                        static_cast<double>(ready_host_ns - decode_start_ns) /
+                            1000000.0,
+                        job->initial_bytes, job->buffer_bytes,
+                        job->source.c_str());
+                }
+            } else if (failure != "cancelled" && current(*job)) {
+                std::fprintf(stderr,
+                    "[taiko_atrac] async decode failed handle=%08X hash=%016llX: %s\n",
+                    job->handle,
+                    static_cast<unsigned long long>(job->prefix_hash),
+                    failure.c_str());
+            }
+            finish(job->cancelled);
+        }
+    }
+
+    void finish(const std::shared_ptr<std::atomic<bool>>& cancelled)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (active_cancelled_ == cancelled)
+            active_cancelled_.reset();
+    }
+
+    std::mutex mutex_;
+    std::condition_variable ready_;
+    std::unique_ptr<PreviewDecodeJob> pending_;
+    std::shared_ptr<std::atomic<bool>> active_cancelled_;
+    bool stopping_ = false;
+    std::thread worker_;
+};
+
+PreviewDecodeWorker& preview_decode_worker()
+{
+    static PreviewDecodeWorker worker;
+    return worker;
 }
 
 #else
 
-bool decode_guest_riff(uint32_t, uint32_t, uint64_t, DecoderState&,
-                       std::string&, std::string& failure)
+bool prepare_guest_riff(uint32_t, uint32_t, uint64_t, DecoderState&,
+                        std::string&, std::string& failure,
+                        std::vector<uint8_t>&, uint64_t&)
 {
     failure = "this executable was built without in-process ATRAC support";
     return false;
@@ -617,6 +848,13 @@ uint32_t gameplay_audio_offset_ms()
 bool is_gameplay_song(const std::string& source, uint32_t initial_bytes)
 {
     if (initial_bytes <= 8192u || source == "guest-buffer") return false;
+    const std::string filename = std::filesystem::path(source).filename().string();
+    return filename.rfind("SONG_", 0) == 0;
+}
+
+bool is_selection_preview(const std::string& source, uint32_t initial_bytes)
+{
+    if (initial_bytes > 8192u || source == "guest-buffer") return false;
     const std::string filename = std::filesystem::path(source).filename().string();
     return filename.rfind("SONG_", 0) == 0;
 }
@@ -666,15 +904,34 @@ void set_data_and_get_mem_size(ppu_context* ctx)
         read_riff_loop(data, bytes, state);
         std::string source;
         std::string failure;
-        /* Decode before publishing the handle. This may add setup latency for
-         * an uncached song, but it never advances the game with fabricated
-         * silence. Once SetData returns, every sample is consumed exclusively
-         * on the game's decoder/SPU timeline. */
-        const bool ready = decode_guest_riff(data, bytes, source_hash, state,
-                                             source, failure);
-        if (ready && is_gameplay_song(source, bytes)) {
-            state.gameplay_song = true;
+        std::vector<uint8_t> riff;
+        uint64_t pcm_hash = 0;
+        const bool prepared = prepare_guest_riff(
+            data, bytes, source_hash, state, source, failure, riff, pcm_hash);
+        state.gameplay_song = prepared && is_gameplay_song(source, bytes);
+        bool ready = prepared && state.pcm_cache_hit;
+        bool queued = false;
+#ifdef TAIKO_HAVE_FFMPEG
+        const char* async_previews = std::getenv("TAIKO_AUDIO_ASYNC_PREVIEWS");
+        state.discard_stream_reads = prepared && async_previews &&
+            async_previews[0] != '0' && is_selection_preview(source, bytes);
+        const bool use_async_preview = prepared && !ready &&
+            state.discard_stream_reads;
+        if (use_async_preview) {
+            /* The empty PCM state below intentionally produces temporary
+             * silence while the latest preview is decoded. This keeps the
+             * guest's decoder/ring alive without blocking its render thread. */
+            state.async_pending = true;
+            queued = true;
+        } else if (prepared && !ready) {
+            /* Gameplay and short in-memory jingles remain synchronous: their
+             * start time and authored loop state must be ready on return. */
+            ready = decode_riff(riff, state, failure);
+            if (ready)
+                pcm_cache_insert(pcm_hash, riff.size(), state.sample_rate,
+                                 state.pcm);
         }
+#endif
         if (ready && state.gameplay_song) {
             cellAudioGameplayDumpStart();
             const double offset_frames =
@@ -701,6 +958,9 @@ void set_data_and_get_mem_size(ppu_context* ctx)
         const size_t loop_start = state.loop_start;
         const size_t loop_end = state.loop_end;
         const bool cache_hit = state.pcm_cache_hit;
+        const uint64_t generation =
+            g_decoder_generation.fetch_add(1, std::memory_order_relaxed);
+        state.generation = generation;
         int32_t loop_num = state.loop_num;
         {
             std::lock_guard<std::mutex> lock(g_decoder_mutex);
@@ -719,6 +979,28 @@ void set_data_and_get_mem_size(ppu_context* ctx)
             loop_num = state.loop_num;
             g_decoders[handle] = std::move(state);
         }
+#ifdef TAIKO_HAVE_FFMPEG
+        if (queued) {
+            PreviewDecodeJob job;
+            job.handle = handle;
+            job.initial_bytes = bytes;
+            job.buffer_bytes = buffer;
+            job.generation = generation;
+            job.prefix_hash = hash;
+            job.pcm_hash = pcm_hash;
+            job.queued_host_ns = ready_host_ns;
+            job.source = source;
+            job.riff = std::move(riff);
+            preview_decode_worker().enqueue(std::move(job));
+            std::fprintf(stderr,
+                "[taiko_atrac] async queued handle=%08X hash=%016llX "
+                "prepare=%.2fms read=%u buffer=%u source=%s\n",
+                handle, static_cast<unsigned long long>(hash),
+                static_cast<double>(ready_host_ns - setdata_start_ns) /
+                    1000000.0,
+                bytes, buffer, source.c_str());
+        }
+#endif
         if (ready) {
             /* First decode is the attract/logo BGM, i.e. the boot state machine
              * is done -- drop the frame driver back to the 60 Hz play rate. */
@@ -730,7 +1012,7 @@ void set_data_and_get_mem_size(ppu_context* ctx)
                 static_cast<double>(ready_host_ns - setdata_start_ns) / 1000000.0,
                 cache_hit ? "hit" : "miss", bytes, buffer,
                 loop_start, loop_end, loop_num, source.c_str());
-        } else {
+        } else if (!queued) {
             std::fprintf(stderr,
                 "[taiko_atrac] decode failed handle=%08X hash=%016llX: %s\n",
                 handle, static_cast<unsigned long long>(hash), failure.c_str());
@@ -874,9 +1156,10 @@ void decode(ppu_context* ctx)
             spu_taiko_audio_ring_register(ring);
         }
         if (it != g_decoders.end() && it->second.pcm->empty()) {
-            /* Decoder failure compatibility path. This is never used while a
-             * successful in-process decode is pending: SetData does not return
-             * until its PCM is ready, so playback cannot run ahead in silence. */
+            /* Keep a failed or asynchronously pending decoder alive with
+             * silence. For an async preview the host already copied the whole
+             * RIFF, so report all data in memory: asking for two more frames
+             * made Green redundantly stream the complete NUB while browsing. */
             if (pcm)
                 for (uint32_t i = 0; i < kMaxSamples * kChannels; i++)
                     vm_write32(pcm + i * 4u, 0);
@@ -884,8 +1167,8 @@ void decode(ppu_context* ctx)
             decoded = true;
             end_of_stream = false;
             /* Keep the decoder thread and its three-slot output ring alive. */
-            streaming = true;
-            remain = 2;
+            streaming = !it->second.async_pending;
+            remain = streaming ? 2u : kAllDataIsOnMemory;
         } else if (it != g_decoders.end()) {
             DecoderState& state = it->second;
             if (!state.first_decode_seen) {
@@ -1092,11 +1375,14 @@ void reset_play_position(ppu_context* ctx)
                 static_cast<double>(gameplay_audio_offset_ms()) *
                 it->second.sample_rate / 1000.0;
         }
+        it->second.pending_reset_sample = sample;
+        it->second.reset_requested = true;
         const uint64_t adjusted = static_cast<uint64_t>(sample) +
             static_cast<uint64_t>(it->second.gameplay_song
                 ? it->second.gameplay_offset_frames : 0.0);
-        it->second.decode_cursor = static_cast<size_t>(
-            std::min<uint64_t>(adjusted, total_frames));
+        if (!it->second.async_pending)
+            it->second.decode_cursor = static_cast<size_t>(
+                std::min<uint64_t>(adjusted, total_frames));
         it->second.decode_fraction = 0.0;
     }
     if (std::getenv("TAIKO_ATRAC_TRACE"))
@@ -1204,6 +1490,23 @@ void get_vacant_size(ppu_context* ctx)
     return_ok(ctx);
 }
 
+bool discard_preview_stream_read(uint32_t buffer, uint64_t bytes)
+{
+    if (!buffer || !bytes) return false;
+    std::lock_guard<std::mutex> lock(g_decoder_mutex);
+    for (const auto& [handle, state] : g_decoders) {
+        (void)handle;
+        if (!state.discard_stream_reads || !state.data_ea ||
+            !state.buffer_bytes)
+            continue;
+        const uint64_t begin = state.data_ea;
+        const uint64_t end = begin + state.buffer_bytes;
+        if (buffer >= begin && static_cast<uint64_t>(buffer) + bytes <= end)
+            return true;
+    }
+    return false;
+}
+
 /* TAIKO_VOICE_WATCH=1: log every state change of an AT3P bnusCore voice.
  * Previews configure a voice and then hand it back, so a static dump only ever
  * catches one edge; this prints the timeline instead. */
@@ -1272,3 +1575,8 @@ __attribute__((constructor)) void register_taiko_atrac()
 }
 
 } // namespace
+
+extern "C" int taiko_atrac_discard_stream_read(uint32_t buffer, uint64_t bytes)
+{
+    return discard_preview_stream_read(buffer, bytes) ? 1 : 0;
+}
