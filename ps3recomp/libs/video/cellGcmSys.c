@@ -607,6 +607,11 @@ void ppu_gcm_pump(void)
     static int trace = -1;
     if (trace < 0) { const char* e = getenv("RSX_VBLANK_TRACE");
                      trace = (e && e[0] && e[0] != '0') ? 1 : 0; }
+    static int coalesce = -1;
+    if (coalesce < 0) {
+        const char* e = getenv("TAIKO_GCM_COALESCE_PENDING");
+        coalesce = (e && e[0] && e[0] != '0') ? 1 : 0;
+    }
 
     const int vpend = __atomic_exchange_n(&s_vblank_handler_pending, 0, __ATOMIC_ACQUIRE);
     if (trace && s_vblank_handler_opd && vpend) {
@@ -630,7 +635,13 @@ void ppu_gcm_pump(void)
         if (s_vblank_handler_opd) {
             g_ps3_guest_caller(s_vblank_handler_opd,
                                (uint64_t)s_vblank_count, 0, 0, 0);
-            if (vpend > 1)
+            /* Green's handler posts a binary frame semaphore. Replaying a
+             * backlog at successive HLE boundaries can therefore post twice
+             * before the main loop consumes once, phase-locking production at
+             * 30 FPS while callbacks still count 60/s. In coalescing mode one
+             * callback carries the latest vblank count and a new physical tick
+             * supplies the next wake, matching binary interrupt semantics. */
+            if (vpend > 1 && !coalesce)
                 __atomic_fetch_add(&s_vblank_handler_pending, vpend - 1,
                                    __ATOMIC_RELEASE);
         }
@@ -641,7 +652,7 @@ void ppu_gcm_pump(void)
         ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
         if (s_flip_handler_opd) {
             g_ps3_guest_caller(s_flip_handler_opd, 1, 0, 0, 0);
-            if (fpend > 1)
+            if (fpend > 1 && !coalesce)
                 __atomic_fetch_add(&s_flip_handler_pending, fpend - 1,
                                    __ATOMIC_RELEASE);
         }
