@@ -644,6 +644,7 @@ using initial_ppu_thread_handle = pthread_t;
 static void* initial_ppu_thread(void* opaque)
 {
     initial_ppu_args* args = static_cast<initial_ppu_args*>(opaque);
+    ps3_host_apply_thread_affinity("TAIKO_CPU_MAIN_AFFINITY", "main guest");
     std::fprintf(stderr, "[boot] MAIN guest thread tid=%llu (256 MiB stack)\n",
                  (unsigned long long)ps3_host_thread_id());
     args->result = ppu_run(args->entry, args->stack_top);
@@ -922,6 +923,11 @@ int main(int argc, char** argv)
             ps3_host_sdl_shutdown();
             return 1;
         }
+        /* Apply this only after creating the initial PPU thread. Affinity is
+         * inherited on Linux; pinning earlier would also pin the guest and all
+         * of the SDL/Vulkan workers to the renderer's core. */
+        ps3_host_apply_thread_affinity(
+            "TAIKO_CPU_RENDER_AFFINITY", "SDL renderer");
         bool close_requested = false;
         while (!args.completed.load(std::memory_order_acquire)) {
             if (rsx_sdl_gpu_backend_main_iterate(16)) {

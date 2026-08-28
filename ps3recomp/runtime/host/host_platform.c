@@ -4,6 +4,8 @@
 #include <ps3emu/host_platform.h>
 
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 #define PS3_GUEST_VM_SIZE  UINT64_C(0x100000000)
@@ -37,6 +39,16 @@ void ps3_host_sleep_until_ns(uint64_t deadline_ns)
 
 uint64_t ps3_host_thread_id(void) { return GetCurrentThreadId(); }
 void ps3_host_cpu_relax(void) { YieldProcessor(); }
+
+int ps3_host_apply_thread_affinity(const char* env_name, const char* role)
+{
+    const char* value = env_name ? getenv(env_name) : NULL;
+    if (!value || !value[0]) return 0;
+    (void)role;
+    fprintf(stderr,
+            "[affinity] %s=%s is ignored on Windows\n", env_name, value);
+    return -1;
+}
 
 uintptr_t ps3_host_image_base(const void* address)
 {
@@ -72,6 +84,7 @@ void ps3_host_release_guest_vm(void* base)
 #endif
 #include <dlfcn.h>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -101,6 +114,54 @@ uint64_t ps3_host_thread_id(void)
 #else
     return (uint64_t)(uintptr_t)pthread_self();
 #endif
+}
+
+int ps3_host_apply_thread_affinity(const char* env_name, const char* role)
+{
+    const char* value = env_name ? getenv(env_name) : NULL;
+    if (!value || !value[0]) return 0;
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    const char* cursor = value;
+    unsigned count = 0;
+    while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == ',') ++cursor;
+        if (!*cursor) break;
+        char* end = NULL;
+        long first = strtol(cursor, &end, 10);
+        if (end == cursor || first < 0 || first >= CPU_SETSIZE) goto invalid;
+        long last = first;
+        cursor = end;
+        if (*cursor == '-') {
+            long parsed = strtol(cursor + 1, &end, 10);
+            if (end == cursor + 1 || parsed < first || parsed >= CPU_SETSIZE)
+                goto invalid;
+            last = parsed;
+            cursor = end;
+        }
+        for (long cpu = first; cpu <= last; ++cpu) {
+            CPU_SET((int)cpu, &set);
+            ++count;
+        }
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (*cursor && *cursor != ',') goto invalid;
+    }
+    if (!count) goto invalid;
+    if (sched_setaffinity(0, sizeof(set), &set) != 0) {
+        fprintf(stderr,
+                "[affinity] failed role=%s env=%s value=%s errno=%d\n",
+                role ? role : "thread", env_name, value, errno);
+        return -1;
+    }
+    fprintf(stderr, "[affinity] role=%s tid=%llu cpus=%s\n",
+            role ? role : "thread",
+            (unsigned long long)ps3_host_thread_id(), value);
+    return 0;
+
+invalid:
+    fprintf(stderr, "[affinity] invalid env=%s value=%s\n", env_name, value);
+    return -1;
 }
 
 void ps3_host_cpu_relax(void)

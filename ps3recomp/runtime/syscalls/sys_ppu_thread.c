@@ -105,6 +105,18 @@ static void* ppu_host_thread_proc(void* param)
 {
     ppu_thread_info* info = (ppu_thread_info*)param;
 
+    /* The initial guest thread may be pinned to a prime core. Reset ordinary
+     * workers to the configured shared pool before applying the two narrow
+     * frame-critical roles; otherwise pthread affinity inheritance piles every
+     * guest worker onto the prime core. */
+    ps3_host_apply_thread_affinity("TAIKO_CPU_PPU_AFFINITY", "PPU worker");
+    if (strstr(info->name, "Draw::RequestManager"))
+        ps3_host_apply_thread_affinity(
+            "TAIKO_CPU_DRAW_AFFINITY", "draw request manager");
+    else if (strstr(info->name, "System::VSync"))
+        ps3_host_apply_thread_affinity(
+            "TAIKO_CPU_VSYNC_AFFINITY", "guest VSync");
+
     /* Join the lwarx/stwcx reservation set, else nobody breaks this thread's
      * reservations and ABA slips through for it (see ppu_loader.cpp). */
     { extern void ppu_resv_register(ppu_context*); ppu_resv_register(&info->ctx); }

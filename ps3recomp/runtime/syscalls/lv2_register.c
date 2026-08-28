@@ -23,6 +23,7 @@
 #include "sys_vm.h"
 #include "sys_fs.h"
 #include "ps3emu/spu_fallback.h"
+#include <ps3emu/host_platform.h>
 #include "sys_event.h"
 #include "../spu/spu_context.h"
 
@@ -559,6 +560,8 @@ static void* spu_fallback_thread_proc(void* arg)
 #endif
 {
     spu_thread_t* t = (spu_thread_t*)arg;
+    ps3_host_apply_thread_affinity(
+        "TAIKO_CPU_SPU_AFFINITY", "SPU fallback");
     int32_t rc = 0;
     if (t->fb_handler) {
         rc = t->fb_handler(t->tid, t->args_ea, t->args_size, t->fb_user);

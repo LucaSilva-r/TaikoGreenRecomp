@@ -742,6 +742,7 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
 
 static void audio_mix_thread_run(void)
 {
+    ps3_host_apply_thread_affinity("TAIKO_CPU_AUDIO_AFFINITY", "audio mixer");
     printf("[cellAudio] Mixing thread started (%s sink, %s clock)\n",
            audio_sink_name(), s_null_audio_clock ? "null" : "device");
 

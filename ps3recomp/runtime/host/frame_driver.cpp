@@ -65,6 +65,7 @@ void present_pending()
 
 void run_frame_driver()
 {
+    ps3_host_apply_thread_affinity("TAIKO_CPU_FRAME_AFFINITY", "frame/FIFO");
 #ifdef _WIN32
     if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST))
         std::fprintf(stderr, "[rsx] warning: failed to raise vblank priority (%lu)\n",

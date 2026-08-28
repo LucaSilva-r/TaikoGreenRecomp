@@ -17,6 +17,10 @@ void ps3_host_sleep_us(uint64_t microseconds);
 
 uint64_t ps3_host_thread_id(void);
 void ps3_host_cpu_relax(void);
+/* Apply a CPU-list from an environment variable to the calling thread.
+ * Lists use Linux taskset syntax (for example "4" or "0-3,6"). An unset
+ * variable is a no-op. Returns zero for success/no-op and -1 on error. */
+int ps3_host_apply_thread_affinity(const char* env_name, const char* role);
 uintptr_t ps3_host_image_base(const void* address);
 size_t ps3_host_capture_backtrace(void** frames, size_t capacity);
 
