@@ -103,70 +103,76 @@ void     vm_write64(uint64_t addr, uint64_t val);
 #ifdef PPU_RECOMP_FAST_VM
 /* Normal lifted loads/stores vastly outnumber syscalls and rendered draws.
  * Keep their common path inside each generated TU, while retaining the full
- * runtime helpers for OOB reporting and opt-in memory diagnostics.  The two
- * flags are initialized before guest threads start and never change. */
+ * runtime helpers for bounded test VMs and opt-in memory diagnostics.  The
+ * runtime publishes a non-null fast base only when both slow-path conditions
+ * are absent, reducing every normal access to one global lookup. */
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern uint8_t* vm_base;
+extern uint8_t* ppu_vm_fast_base;
 extern uint32_t ppu_vm_size;
 extern int g_vm_diag_enabled;
 #ifdef __cplusplus
 }
 #endif
-static inline int ppu_vm_needs_slow_path(uint32_t ea, uint32_t width) {
-    return g_vm_diag_enabled ||
-           (ppu_vm_size && (uint64_t)ea + width > ppu_vm_size);
-}
 static inline uint8_t ppu_vm_read8_fast(uint64_t addr) {
     uint32_t ea = (uint32_t)addr;
-    if (ppu_vm_needs_slow_path(ea, 1)) return vm_read8(addr);
-    return vm_base[ea];
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) return vm_read8(addr);
+    return base[ea];
 }
 static inline uint16_t ppu_vm_read16_fast(uint64_t addr) {
     uint32_t ea = (uint32_t)addr; uint16_t v;
-    if (ppu_vm_needs_slow_path(ea, 2)) return vm_read16(addr);
-    memcpy(&v, vm_base + ea, 2); return __builtin_bswap16(v);
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) return vm_read16(addr);
+    memcpy(&v, base + ea, 2); return __builtin_bswap16(v);
 }
 static inline uint32_t ppu_vm_read32_fast(uint64_t addr) {
     uint32_t ea = (uint32_t)addr, v;
-    if (ppu_vm_needs_slow_path(ea, 4)) return vm_read32(addr);
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) return vm_read32(addr);
     /* GCM PUT/GET/REF are a cross-thread producer/consumer handoff. ARM needs
      * explicit ordering so PUT cannot become visible before FIFO payloads. */
     if (ea >= 0x03002000u && ea <= 0x03002008u && !(ea & 3u))
-        v = __atomic_load_n((uint32_t*)(vm_base + ea), __ATOMIC_ACQUIRE);
+        v = __atomic_load_n((uint32_t*)(base + ea), __ATOMIC_ACQUIRE);
     else
-        memcpy(&v, vm_base + ea, 4);
+        memcpy(&v, base + ea, 4);
     return __builtin_bswap32(v);
 }
 static inline uint64_t ppu_vm_read64_fast(uint64_t addr) {
     uint32_t ea = (uint32_t)addr; uint64_t v;
-    if (ppu_vm_needs_slow_path(ea, 8)) return vm_read64(addr);
-    memcpy(&v, vm_base + ea, 8); return __builtin_bswap64(v);
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) return vm_read64(addr);
+    memcpy(&v, base + ea, 8); return __builtin_bswap64(v);
 }
 static inline void ppu_vm_write8_fast(uint64_t addr, uint8_t v) {
     uint32_t ea = (uint32_t)addr;
-    if (ppu_vm_needs_slow_path(ea, 1)) { vm_write8(addr, v); return; }
-    vm_base[ea] = v;
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) { vm_write8(addr, v); return; }
+    base[ea] = v;
 }
 static inline void ppu_vm_write16_fast(uint64_t addr, uint16_t v) {
     uint32_t ea = (uint32_t)addr;
-    if (ppu_vm_needs_slow_path(ea, 2)) { vm_write16(addr, v); return; }
-    v = __builtin_bswap16(v); memcpy(vm_base + ea, &v, 2);
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) { vm_write16(addr, v); return; }
+    v = __builtin_bswap16(v); memcpy(base + ea, &v, 2);
 }
 static inline void ppu_vm_write32_fast(uint64_t addr, uint32_t v) {
     uint32_t ea = (uint32_t)addr;
-    if (ppu_vm_needs_slow_path(ea, 4)) { vm_write32(addr, v); return; }
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) { vm_write32(addr, v); return; }
     v = __builtin_bswap32(v);
     if (ea >= 0x03002000u && ea <= 0x03002008u && !(ea & 3u))
-        __atomic_store_n((uint32_t*)(vm_base + ea), v, __ATOMIC_RELEASE);
+        __atomic_store_n((uint32_t*)(base + ea), v, __ATOMIC_RELEASE);
     else
-        memcpy(vm_base + ea, &v, 4);
+        memcpy(base + ea, &v, 4);
 }
 static inline void ppu_vm_write64_fast(uint64_t addr, uint64_t v) {
     uint32_t ea = (uint32_t)addr;
-    if (ppu_vm_needs_slow_path(ea, 8)) { vm_write64(addr, v); return; }
-    v = __builtin_bswap64(v); memcpy(vm_base + ea, &v, 8);
+    uint8_t* base = ppu_vm_fast_base;
+    if (!base) { vm_write64(addr, v); return; }
+    v = __builtin_bswap64(v); memcpy(base + ea, &v, 8);
 }
 #define vm_read8   ppu_vm_read8_fast
 #define vm_read16  ppu_vm_read16_fast

@@ -424,6 +424,10 @@ static int vm_oob(uint32_t a, uint32_t n)
 /* Read directly by the lifted-code inline accessors.  This is initialized
  * before any guest thread starts and remains immutable for the process. */
 extern "C" int g_vm_diag_enabled = 0;
+/* Generated fast accessors use a single lookup for their normal path.  A null
+ * value deliberately sends bounded test VMs and diagnostic runs through the
+ * full helpers.  Published once before any guest thread starts. */
+extern "C" uint8_t* ppu_vm_fast_base = nullptr;
 
 static void ppu_vm_diag_init(void)
 {
@@ -1042,6 +1046,7 @@ static void ydkj_ef_init_ok(ppu_context* ctx) {
 extern "C" void ppu_recomp_register(void)
 {
     ppu_vm_diag_init();
+    ppu_vm_fast_base = (!g_vm_diag_enabled && ppu_vm_size == 0) ? vm_base : nullptr;
     for (uint64_t i = 0; i < function_table_count; i++)
         ppu_register_function(function_table[i].addr, function_table[i].func);
     /* Override the mis-lifted optimized memmove with a correct native one. */

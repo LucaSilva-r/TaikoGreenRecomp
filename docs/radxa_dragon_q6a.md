@@ -185,11 +185,26 @@ different sprite path and retains its authored outline.
 The display advertises an exact 1920x1080 at 120 Hz CTA mode. The Radxa service
 requests it with `TAIKOS_OUTPUT_MODE=1920x1080@120`, ticks the guest with
 `TAIKO_VBLANK_HZ=120`, and enables the title's elapsed-time animation
-corrections with `TAIKO_ANIMATION_TIMING=1`. Light gameplay holds 120 FPS;
-dense note fields can still fall to 80--100 and eventually phase-lock at 60
-even though measured GPU rendering remains around 5.5--6.8 ms. Current
-profiling therefore focuses on the main guest producer, not storage or GPU
-execution.
+corrections with `TAIKO_ANIMATION_TIMING=1`. The initial 120 Hz profile showed
+light gameplay at 120 FPS but dense note fields at 80--100, sometimes
+phase-locked at 60, even though GPU rendering remained around 5.5--6.8 ms. A
+main-guest call-graph sample traced most of the generic VM-helper cost to the
+native SPURS skin job, not `sys_lwmutex` as first suspected.
+
+The 2026-08-28 CPU pass keeps a single runtime-published fast VM base for lifted
+loads/stores, validates complete skin-job source/destination ranges once,
+decodes the big-endian vertex float4s with NEON loads, and skips exclusive
+vblank/flip counter exchanges at HLE boundaries when the counters are already
+zero. The final heavy-costume song averaged 118.49 FPS across 108 measured
+seconds. Its 43 seconds at 150 or more draws averaged 118.57 FPS; 170-or-more
+draw peaks averaged 118.72 FPS while GPU render time stayed at 5.82 ms. Native
+skinning fell from about 5.5% to 3.0% of sampled main-thread cycles, and the
+previous 6.3% atomic-exchange hot spot disappeared from the sample. Remaining
+effect/animation transitions can lose several submissions for one or two
+seconds (the trace still shows mixed 8.33/16.67 ms intervals), but recover
+immediately; steady dense gameplay no longer locks to 60 FPS. Repeating the
+same heavy song after `perf record` exited felt and performed the same, so the
+99 Hz call-graph sampler was not responsible for the measured late-song drop.
 
 Rapid Song Select scrolling is not storage-bound on the validated system. A
 ten-second reproduction caused zero physical read bytes and zero major page

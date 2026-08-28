@@ -613,7 +613,16 @@ void ppu_gcm_pump(void)
         coalesce = (e && e[0] && e[0] != '0') ? 1 : 0;
     }
 
-    const int vpend = __atomic_exchange_n(&s_vblank_handler_pending, 0, __ATOMIC_ACQUIRE);
+    /* HLE boundaries vastly outnumber physical ticks.  An unconditional
+     * exchange takes exclusive ownership of the ticker's cache line even when
+     * there is nothing to deliver, bouncing it between the frame CPU and the
+     * guest CPU thousands of times per second.  A relaxed zero probe is enough
+     * to skip that work: a tick racing the probe stays pending for the next HLE
+     * boundary.  The exchange retains acquire ordering when work exists. */
+    int vpend = 0;
+    if (__atomic_load_n(&s_vblank_handler_pending, __ATOMIC_RELAXED) != 0)
+        vpend = __atomic_exchange_n(&s_vblank_handler_pending, 0,
+                                    __ATOMIC_ACQUIRE);
     if (trace && s_vblank_handler_opd && vpend) {
         static unsigned long long callbacks, tick_base, backlog_max;
         if (!callbacks)
@@ -646,8 +655,10 @@ void ppu_gcm_pump(void)
                                    __ATOMIC_RELEASE);
         }
     }
-    const int fpend = __atomic_exchange_n(&s_flip_handler_pending, 0,
-                                          __ATOMIC_ACQUIRE);
+    int fpend = 0;
+    if (__atomic_load_n(&s_flip_handler_pending, __ATOMIC_RELAXED) != 0)
+        fpend = __atomic_exchange_n(&s_flip_handler_pending, 0,
+                                    __ATOMIC_ACQUIRE);
     if (fpend != 0) {
         ydkj_restore_handler_opd(s_flip_handler_opd, s_flip_handler_code);
         if (s_flip_handler_opd) {

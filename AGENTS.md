@@ -1601,11 +1601,17 @@ lifted TUs), with all tracing/profile/capture switches unset. The normal
 `run-taiko.sh` no longer enables the old `RTT_SAVERT`, `RTT_SAVEA`, or
 `GCM2D_PROBE` Player Entry diagnostics.
 
-**Performance remains open.** The traced 8 FPS run is not representative—it
-hashed every job/vertex buffer and scanned indexed triangles—but the clean run
-is still slow enough to require a separate profiling pass. Do not enable
+**Performance is now bounded on the Q6A (2026-08-28).** The traced 8 FPS run was
+not representative—it hashed every job/vertex buffer and scanned indexed
+triangles. The clean 120 Hz profile found native skinning spending most of its
+time in per-word generic guest-memory wrappers. The job now validates each
+complete palette/source/destination range once, accesses the flat guest mapping
+directly, transforms four matrix output components together, and loads/swaps
+each big-endian source float4 with AArch64 NEON. In the final heavy-costume
+song, 150+-draw seconds averaged 118.57 FPS and skinning accounted for about
+3.0% of main-thread cycles. The GPU remained below budget. Do not enable
 `RSX_PROFILE`, `PPU_SAMPLE_PROFILE`, `TAIKO_VERTEX_RACE_TRACE`, batch capture,
-or RenderDoc when establishing the clean baseline.
+or RenderDoc when establishing a clean throughput baseline.
 
 RenderDoc workflow retained for future GPU bugs:
 

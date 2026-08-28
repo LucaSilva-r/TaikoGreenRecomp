@@ -25,6 +25,10 @@
  * TAIKO_VERTEX_JOB=0 disables the override and restores the stubbed path.
  */
 
+/* Skinning touches every source and destination word on the frame-producing
+ * PPU thread.  Use the same guarded inline VM path as lifted code; diagnostics
+ * and out-of-range accesses still fall back to the full runtime helpers. */
+#define PPU_RECOMP_FAST_VM 1
 #include "ppu_recomp.h"
 #include "taiko_skin.h"
 
@@ -37,6 +41,10 @@
 #include <cmath>
 #include <mutex>
 #include <thread>
+
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 namespace {
 
@@ -143,6 +151,65 @@ void write_float(uint32_t ea, float f)
     vm_write32(ea, bits);
 }
 
+bool direct_guest_range(uint32_t ea, uint64_t bytes)
+{
+    const uint64_t end = (uint64_t)ea + bytes;
+    return !g_vm_diag_enabled &&
+           end <= (uint64_t{1} << 32) &&
+           (!ppu_vm_size || end <= ppu_vm_size);
+}
+
+uint32_t read_be32_direct(const uint8_t* source)
+{
+    uint32_t bits;
+    std::memcpy(&bits, source, sizeof bits);
+    return __builtin_bswap32(bits);
+}
+
+float read_float_direct(const uint8_t* source)
+{
+    const uint32_t bits = read_be32_direct(source);
+    float value;
+    std::memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+void write_be32_direct(uint8_t* destination, uint32_t value)
+{
+    value = __builtin_bswap32(value);
+    std::memcpy(destination, &value, sizeof value);
+}
+
+void write_float_direct(uint8_t* destination, float value)
+{
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof bits);
+    write_be32_direct(destination, bits);
+}
+
+#if defined(__aarch64__)
+taiko_f32x4 read_be_f32x4_direct(const uint8_t* source)
+{
+    const uint8x16_t bytes = vrev32q_u8(vld1q_u8(source));
+    return vreinterpretq_f32_u8(bytes);
+}
+
+taiko_u32x4 read_be_u32x4_direct(const uint8_t* source)
+{
+    const uint8x16_t bytes = vrev32q_u8(vld1q_u8(source));
+    return vreinterpretq_u32_u8(bytes);
+}
+
+void write_be_f32x4_direct(uint8_t* destination, taiko_f32x4 value)
+{
+    /* The job's two output float4s keep their padding lane zero. */
+    value[3] = 0.0f;
+    const uint8x16_t bytes =
+        vrev32q_u8(vreinterpretq_u8_f32(value));
+    vst1q_u8(destination, bytes);
+}
+#endif
+
 void skin_vertex(uint32_t src, uint32_t dst,
                  const float* matrices, uint32_t matrix_count)
 {
@@ -167,6 +234,47 @@ void skin_vertex(uint32_t src, uint32_t dst,
     }
     vm_write32(dst + 12, 0);
     vm_write32(dst + 28, 0);
+}
+
+void skin_vertex_direct(const uint8_t* src, uint8_t* dst,
+                        const float* matrices, uint32_t matrix_count)
+{
+#if defined(__aarch64__)
+    /* Each source attribute is exactly one float4.  Load and byte-swap whole
+     * attributes so the hot loop needs four NEON loads/reversals instead of
+     * sixteen scalar loads, reversals, and scalar-to-vector moves. */
+    const taiko_f32x4 position = read_be_f32x4_direct(src);
+    const taiko_f32x4 normal = read_be_f32x4_direct(src + 16);
+    const taiko_u32x4 bones = read_be_u32x4_direct(src + 32);
+    const taiko_f32x4 weights = read_be_f32x4_direct(src + 48);
+    const taiko_skin_result result =
+        taiko_skin_vertex_vectors(position, normal, bones, weights,
+                                  matrices, matrix_count);
+    write_be_f32x4_direct(dst, result.position);
+    write_be_f32x4_direct(dst + 16, result.normal);
+#else
+    float pos[3], nrm[3], weight[4], out_pos[3], out_nrm[3];
+    uint32_t bone[4];
+
+    for (uint32_t c = 0; c < 3; c++) {
+        pos[c] = read_float_direct(src + c * 4);
+        nrm[c] = read_float_direct(src + 16 + c * 4);
+    }
+    for (uint32_t k = 0; k < 4; k++) {
+        bone[k] = read_be32_direct(src + 32 + k * 4);
+        weight[k] = read_float_direct(src + 48 + k * 4);
+    }
+
+    taiko_skin_vertex(pos, nrm, bone, weight, matrices, matrix_count,
+                      out_pos, out_nrm);
+
+    for (uint32_t c = 0; c < 3; c++) {
+        write_float_direct(dst + c * 4, out_pos[c]);
+        write_float_direct(dst + 16 + c * 4, out_nrm[c]);
+    }
+    write_be32_direct(dst + 12, 0);
+    write_be32_direct(dst + 28, 0);
+#endif
 }
 
 bool run_skin_job(uint32_t job)
@@ -224,8 +332,15 @@ bool run_skin_job(uint32_t job)
             segment_count >= kMaxDmaSegments)
             return false;
         segments[segment_count++] = {ea, size};
-        for (uint32_t i = 0; i < size; i += 4)
-            palette[(palette_bytes + i) / 4] = read_float(ea + i);
+        if (direct_guest_range(ea, size)) {
+            const uint8_t* source = vm_base + ea;
+            for (uint32_t i = 0; i < size; i += 4)
+                palette[(palette_bytes + i) / 4] =
+                    read_float_direct(source + i);
+        } else {
+            for (uint32_t i = 0; i < size; i += 4)
+                palette[(palette_bytes + i) / 4] = read_float(ea + i);
+        }
         palette_bytes += size;
     }
 
@@ -293,8 +408,25 @@ bool run_skin_job(uint32_t job)
         }
     }
 
-    for (uint32_t i = 0; i < count; i++)
-        skin_vertex(src + i * kSrcStride, dst + i * kDstStride, palette, matrix_count);
+    const uint64_t source_bytes = (uint64_t)count * kSrcStride;
+    const uint64_t output_bytes = (uint64_t)count * kDstStride;
+    if (direct_guest_range(src, source_bytes) &&
+        direct_guest_range(dst, output_bytes)) {
+        /* The source and destination arenas are immutable for the synchronous
+         * lifetime of this published job.  Validate each complete range once
+         * instead of repeating the diagnostics/bounds branch for all 22 words
+         * of every vertex. */
+        const uint8_t* source = vm_base + src;
+        uint8_t* output = vm_base + dst;
+        for (uint32_t i = 0; i < count; i++)
+            skin_vertex_direct(source + (uint64_t)i * kSrcStride,
+                               output + (uint64_t)i * kDstStride,
+                               palette, matrix_count);
+    } else {
+        for (uint32_t i = 0; i < count; i++)
+            skin_vertex(src + i * kSrcStride, dst + i * kDstStride,
+                        palette, matrix_count);
+    }
 
     /* A published descriptor only makes the descriptor itself immutable.  Its
      * DMA-list palette can be reused by the guest while our delayed host drain
