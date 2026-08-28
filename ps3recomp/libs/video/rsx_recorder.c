@@ -1188,7 +1188,9 @@ int rsx_recorder_install(rsx_backend* legacy,
     s_recorder.consumer = consumer;
     s_recorder.consumer_userdata = consumer_userdata;
     s_recorder.next_serial = 1;
-    s_recorder.profiling = getenv("RSX_FPS_LOG") != NULL;
+    const char* recorder_profile = getenv("RSX_RECORDER_PROFILE");
+    s_recorder.profiling = getenv("RSX_FPS_LOG") != NULL &&
+        (!recorder_profile || strcmp(recorder_profile, "0") != 0);
     rsx_render_batch_init(&s_recorder.batch, s_recorder.next_serial);
     rsx_state_init(&s_recorder.state);
     s_recorder.backend.userdata = &s_recorder;
