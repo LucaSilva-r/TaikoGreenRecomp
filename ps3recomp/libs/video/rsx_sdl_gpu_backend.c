@@ -254,6 +254,7 @@ typedef struct sdl_rsx_state {
     int kms_zero_copy;
     uint64_t kms_modifiers[SDL_RSX_KMS_MODIFIERS];
     unsigned kms_modifier_count;
+    int kms_cpu_overlay_safe;
     Uint64 perf_kms_render_ns;
     Uint64 perf_kms_download_ns;
     Uint64 perf_kms_wait_ns;
@@ -2214,7 +2215,9 @@ static void fps_overlay_set_value(double fps)
  * extra submission or a same-command-buffer visibility gamble. */
 static int upload_fps_overlay(SDL_GPUCommandBuffer* commands)
 {
-    if (s_sdl.kms_present || !s_sdl.perf_overlay ||
+    const int kms_gpu_overlay = s_sdl.kms_present && s_sdl.kms_zero_copy &&
+        !s_sdl.kms_cpu_overlay_safe;
+    if ((s_sdl.kms_present && !kms_gpu_overlay) || !s_sdl.perf_overlay ||
         !s_fps_overlay.cpu_version ||
         s_fps_overlay.gpu_version == s_fps_overlay.cpu_version)
         return 0;
@@ -2471,6 +2474,14 @@ static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
                                                 unsigned* y, unsigned* width,
                                                 unsigned* height)
 {
+    /* A dma-buf pitch describes rows only for a linear modifier.  Writing a
+     * Qualcomm/Adreno tiled export through this pointer corrupts unrelated
+     * tiles around the overlay.  Tiled zero-copy targets draw the same status
+     * and FPS textures as GPU quads before submission instead. */
+    if (s_sdl.kms_zero_copy && !s_sdl.kms_cpu_overlay_safe) {
+        *pitch = *x = *y = *width = *height = 0;
+        return NULL;
+    }
     int title_width = 0, title_height = 0;
     uint32_t version = 0;
     const uint32_t* title = g_rsx_overlay_frame
@@ -3476,6 +3487,16 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
         pending_clear = NULL;
     }
     if (s_sdl.kms_present) {
+        if (s_sdl.kms_zero_copy && !s_sdl.kms_cpu_overlay_safe) {
+            draw_overlay(commands, s_sdl.display,
+                         SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                         0, 0, SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                         SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+            draw_fps_overlay(commands, s_sdl.display,
+                             SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                             0, 0, SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                             SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+        }
         /* The KMS path owns a separate display-target ring tied to its readback
          * slots. The generic swapchain presentation ring must stay out of it. */
         s_sdl.presentation_override = NULL;
@@ -4514,6 +4535,10 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
                             SDL_GetError());
                     goto fail;
                 }
+                if (i == 0)
+                    s_sdl.kms_cpu_overlay_safe = modifier == 0;
+                else if (modifier != 0)
+                    s_sdl.kms_cpu_overlay_safe = 0;
                 if (rsx_kms_present_import_dmabuf(
                         i, fd, pitch, offset, modifier) != 0)
                     goto fail;
@@ -4522,7 +4547,10 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
         if (s_sdl.kms_zero_copy) {
             Uint64 wait_ns = 0;
             if (rsx_kms_present_acquire_dmabuf(0, &wait_ns) != 0) goto fail;
-            fprintf(stderr, "[SDL_GPU] zero-copy KMS dma-buf path active\n");
+            fprintf(stderr,
+                    "[SDL_GPU] zero-copy KMS dma-buf path active "
+                    "(%s overlays)\n",
+                    s_sdl.kms_cpu_overlay_safe ? "CPU" : "GPU");
         }
         s_sdl.display = s_sdl.kms_display[0];
 #endif
