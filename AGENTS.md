@@ -216,6 +216,15 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   reversed-cull expanded-mesh outline draws from preparation, uploads, and
   rendering. The worst-costume capture falls from 440 draws/2.79 MiB of
   vertices to 424 draws/1.02 MiB and settles around 56 FPS after heat soak.
+  F8 cycles normal, no-outline, and complete 3D-character-off modes at runtime;
+  character-off also bypasses native skin jobs. The startup environment still
+  selects the initial mode, so the Radxa's `TAIKO_GPU_CHARACTER_OUTLINE=0`
+  baseline starts at no-outline.
+- Direct keyboard input maps `D/F/J/K` to P1 and `Z/X/C/V` to P2, in
+  left-rim/left-centre/right-centre/right-rim order. F2 inserts a coin and F6
+  is service; F3--F5 remain audio-offset controls. Taiko packs both players in
+  the `0x1080` USIO frame (P1 bytes 32--39, P2 bytes 40--47); `0x1100` mirrors
+  that frame and is not a player-local report.
 - `PS3RECOMP_NULL_RSX=1` / `PS3RECOMP_NULL_AUDIO=1` — headless backends, used
   by `scripts/test-linux-headless.sh`.
 - Guest-side: `[WAIT]`, `[fs]`, `[taiko_usio]`, `[taiko_netstate]` lines in

@@ -146,7 +146,7 @@ struct UsioState {
     uint16_t staged_len{};
     uint16_t staged_pos{};
     std::array<std::array<uint8_t, 0x2000>, 2> sram{};
-    std::array<std::array<uint8_t, 0x60>, 2> last_frame{};
+    std::array<uint8_t, 0x60> last_frame{};
     bool last_frame_valid{};
     uint16_t coin_counter{};
     bool test_on{};
@@ -534,17 +534,25 @@ bool key_down(int vk)
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
-uint32_t keyboard_actions()
+uint32_t keyboard_actions(unsigned player)
 {
     uint32_t a = 0;
-    if (key_down('D')) a |= kHitSl;
-    if (key_down('F')) a |= kHitCl;
-    if (key_down('J')) a |= kHitCr;
-    if (key_down('K')) a |= kHitSr;
+    if (player == 0) {
+        if (key_down('D')) a |= kHitSl;
+        if (key_down('F')) a |= kHitCl;
+        if (key_down('J')) a |= kHitCr;
+        if (key_down('K')) a |= kHitSr;
+    } else {
+        if (key_down('Z')) a |= kHitSl;
+        if (key_down('X')) a |= kHitCl;
+        if (key_down('C')) a |= kHitCr;
+        if (key_down('V')) a |= kHitSr;
+    }
+    if (player != 0) return a;
     if (key_down(VK_RETURN)) a |= kEnter;
-    if (key_down(VK_F2)) a |= kService;
+    if (key_down(VK_F2)) a |= kCoin;
+    if (key_down(VK_F6)) a |= kService;
     if (key_down(VK_F1)) a |= kTest;
-    if (key_down('C')) a |= kCoin;
     if (key_down(VK_UP)) a |= kUp;
     if (key_down(VK_DOWN)) a |= kDown;
     return a;
@@ -615,7 +623,8 @@ DWORD WINAPI input_sampler_main(void*)
         }
 
         const uint32_t actions[2] = {
-            keyboard_actions() | controllers[0], controllers[1]};
+            keyboard_actions(0) | controllers[0],
+            keyboard_actions(1) | controllers[1]};
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         const uint64_t now_ns = ps3_host_monotonic_ns();
@@ -946,8 +955,8 @@ void build_input_frames()
     } else {
         /* Initialization/thread-creation fallback. It retains the old
          * behaviour, but normal play always uses the sampler above. */
-        actions[0] = controller_actions(0) | keyboard_actions();
-        actions[1] = controller_actions(1);
+        actions[0] = controller_actions(0) | keyboard_actions(0);
+        actions[1] = controller_actions(1) | keyboard_actions(1);
         rising[0] = actions[0] & ~g_usio.previous_action[0];
         rising[1] = actions[1] & ~g_usio.previous_action[1];
 #endif
@@ -1024,11 +1033,11 @@ void build_input_frames()
     if (level & kUp) digital |= 0x2000;
     if (level & kService) digital |= 0x4000;
 
+    auto& out = g_usio.last_frame;
+    out.fill(0);
+    write_le16(out, 0, digital);
+    write_le16(out, 16, g_usio.coin_counter);
     for (unsigned p = 0; p < 2; ++p) {
-        auto& out = g_usio.last_frame[p];
-        out.fill(0);
-        write_le16(out, 0, digital);
-        write_le16(out, 16, g_usio.coin_counter);
         for (unsigned i = 0; i < 4; ++i) {
             if (rising[p] & kHitBits[i])
                 g_usio.hit_cooldown[p][i] = hit_hold;
@@ -1039,20 +1048,20 @@ void build_input_frames()
                 value = (uint16_t)(hit_value * g_usio.hit_cooldown[p][i] / hit_hold);
                 --g_usio.hit_cooldown[p][i];
             }
-            /* Registers 0x1080 and 0x1100 are the P1 and P2 frames,
-             * respectively. Each frame uses the same sensor slots; they
-             * are not two players packed into one reply. */
-            write_le16(out, 32 + i * 2, value);
+            /* Taiko packs both drums into the same 0x60-byte report: P1 uses
+             * bytes 32..39 and P2 bytes 40..47. 0x1100 mirrors the last
+             * 0x1080 report; it is not a separate player-local frame. */
+            write_le16(out, 32 + p * 8 + i * 2, value);
         }
     }
     g_usio.last_frame_valid = true;
 }
 
-std::array<uint8_t, 0x60> build_input_frame(unsigned player, bool advance)
+std::array<uint8_t, 0x60> build_input_frame(bool advance)
 {
     if (advance || !g_usio.last_frame_valid)
         build_input_frames();
-    return g_usio.last_frame[std::min(player, 1u)];
+    return g_usio.last_frame;
 }
 
 void stage(const uint8_t* source, size_t source_len, uint16_t requested)
@@ -1166,13 +1175,12 @@ void handle_out(uint32_t buffer, int32_t length)
             } else if (reg == 0x1000) {
                 /* Cabinet-level snapshot for product 0x0900. Non-advancing:
                  * player register 0x1080 owns edge detection. */
-                const auto frame = build_input_frame(0, false);
+                const auto frame = build_input_frame(false);
                 stage(frame.data(), frame.size(), requested);
             } else if (reg == 0x1080 || reg == 0x1100) {
-                const unsigned player = (reg - 0x1080) / 0x80;
-                const auto frame = build_input_frame(player, reg == 0x1080);
-                /* Log the player-local sensor payload whenever a hit is
-                 * present so register routing can be verified from a log. */
+                const auto frame = build_input_frame(reg == 0x1080);
+                /* Log both packed player payloads whenever a hit is present
+                 * so register mirroring and P2 routing can be verified. */
                 {
                     bool any_hit = false;
                     for (size_t i = 32; i < 48; ++i)
@@ -1182,10 +1190,13 @@ void handle_out(uint32_t buffer, int32_t length)
                         --budget;
                         std::fprintf(stderr,
                                      "[usio_hit] reg=%04X requested=%u frame=0x%zX "
-                                     "p%u=%02X%02X %02X%02X %02X%02X %02X%02X\n",
-                                     reg, requested, frame.size(), player + 1,
+                                     "p1=%02X%02X %02X%02X %02X%02X %02X%02X "
+                                     "p2=%02X%02X %02X%02X %02X%02X %02X%02X\n",
+                                     reg, requested, frame.size(),
                                      frame[33], frame[32], frame[35], frame[34],
-                                     frame[37], frame[36], frame[39], frame[38]);
+                                     frame[37], frame[36], frame[39], frame[38],
+                                     frame[41], frame[40], frame[43], frame[42],
+                                     frame[45], frame[44], frame[47], frame[46]);
                     }
                 }
                 stage(frame.data(), frame.size(), requested);

@@ -139,6 +139,8 @@ extern void taiko_host_input_trace_snapshot(taiko_input_trace_marker* marker);
 extern int taiko_audio_offset_adjust_ms(int delta_ms);
 extern int taiko_audio_offset_get_ms(void);
 extern void taiko_overlay_set_status(const char* text, int expires_in);
+extern int taiko_character_mode_get(void);
+extern int taiko_character_mode_cycle(void);
 #endif
 
 enum {
@@ -936,6 +938,9 @@ static int is_character_outline_filter(const rsx_render_op* op)
 
 static int character_outline_enabled(void)
 {
+#ifndef RSX_SDL_REPLAY_STANDALONE
+    return taiko_character_mode_get() == 0;
+#else
     static int initialized;
     static int enabled = 1;
     if (!initialized) {
@@ -944,6 +949,23 @@ static int character_outline_enabled(void)
         initialized = 1;
     }
     return enabled;
+#endif
+}
+
+static int character_render_enabled(void)
+{
+#ifndef RSX_SDL_REPLAY_STANDALONE
+    return taiko_character_mode_get() != 2;
+#else
+    static int initialized;
+    static int enabled = 1;
+    if (!initialized) {
+        const char* value = getenv("TAIKO_CHARACTER_RENDER");
+        enabled = !(value && strcmp(value, "0") == 0);
+        initialized = 1;
+    }
+    return enabled;
+#endif
 }
 
 static int is_character_mesh_outline(const rsx_render_op* op)
@@ -1095,6 +1117,27 @@ static int character_composite_scissor(const rsx_render_op* op, int margin,
     result->w = end_x - x;
     result->h = end_y - y;
     return result->w > 0 && result->h > 0;
+}
+
+static int skip_character_render(const rsx_render_op* op)
+{
+    if (!character_render_enabled() && op &&
+        op->type == RSX_RENDER_OP_DRAW) {
+        const int offscreen_character =
+            op->color_count == 1 && !op->color[0].is_display &&
+            op->color[0].width == 600 && op->color[0].height == 600;
+        SDL_Rect composite_bound;
+        const int display_composite =
+            character_composite_scissor(op, 0, &composite_bound);
+        if (offscreen_character || display_composite) {
+            static int announced;
+            if (!announced++)
+                fprintf(stderr,
+                        "[SDL_GPU] complete character rendering disabled\n");
+            return 1;
+        }
+    }
+    return skip_character_mesh_outline(op);
 }
 
 static shader_entry* get_shader(const rsx_render_op* op,
@@ -3148,7 +3191,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
     for (unsigned i = 0; i < batch->operation_count; ++i)
         if (batch->operations[i].type == RSX_RENDER_OP_DRAW) {
             const rsx_render_op* op = &batch->operations[i];
-            if (skip_character_mesh_outline(op)) continue;
+            if (skip_character_render(op)) continue;
             ++draw_count;
             u64 aligned = (vertex_bytes + 15u) & ~(u64)15u;
             if (aligned > UINT32_MAX ||
@@ -3182,7 +3225,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
             resource_mark = now;
         }
         if (op->type != RSX_RENDER_OP_DRAW) continue;
-        if (skip_character_mesh_outline(op)) continue;
+        if (skip_character_render(op)) continue;
         get_pipeline(op);
         if (resource_trace) {
             Uint64 now = SDL_GetTicksNS();
@@ -3249,7 +3292,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW ||
-                    skip_character_mesh_outline(op) ||
+                    skip_character_render(op) ||
                     !op->data.draw.vertex_shader.size)
                     continue;
                 shader_entry* shader = get_shader(
@@ -3291,7 +3334,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW ||
-                    skip_character_mesh_outline(op) ||
+                    skip_character_render(op) ||
                     vertex_constant_offsets[i] == UINT32_MAX)
                     continue;
                 shader_entry* shader = get_shader(
@@ -3344,7 +3387,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
             for (unsigned i = 0; i < batch->operation_count; ++i) {
                 const rsx_render_op* op = &batch->operations[i];
                 if (op->type != RSX_RENDER_OP_DRAW ||
-                    skip_character_mesh_outline(op) ||
+                    skip_character_render(op) ||
                     !op->data.draw.vertex_data.size)
                     continue;
                 offset = (offset + 15u) & ~(u64)15u;
@@ -3427,7 +3470,7 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
             }
             pending_clear = op;
         } else if (op->type == RSX_RENDER_OP_DRAW) {
-            if (skip_character_mesh_outline(op)) continue;
+            if (skip_character_render(op)) continue;
             shader_entry* vertex_shader = get_shader(
                 op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
             int valid = get_pipeline(op) && vertex_shader && vertices &&
@@ -3656,14 +3699,24 @@ static unsigned keyboard_action(SDL_Scancode code)
     case SDL_SCANCODE_F: return TAIKO_HIT_CL;
     case SDL_SCANCODE_J: return TAIKO_HIT_CR;
     case SDL_SCANCODE_K: return TAIKO_HIT_SR;
+    case SDL_SCANCODE_Z: return TAIKO_HIT_SL;
+    case SDL_SCANCODE_X: return TAIKO_HIT_CL;
+    case SDL_SCANCODE_C: return TAIKO_HIT_CR;
+    case SDL_SCANCODE_V: return TAIKO_HIT_SR;
     case SDL_SCANCODE_RETURN: return TAIKO_ENTER;
     case SDL_SCANCODE_F1: return TAIKO_TEST;
-    case SDL_SCANCODE_F2: return TAIKO_SERVICE;
-    case SDL_SCANCODE_C: return TAIKO_COIN;
+    case SDL_SCANCODE_F2: return TAIKO_COIN;
+    case SDL_SCANCODE_F6: return TAIKO_SERVICE;
     case SDL_SCANCODE_UP: return TAIKO_UP;
     case SDL_SCANCODE_DOWN: return TAIKO_DOWN;
     default: return 0;
     }
+}
+
+static unsigned keyboard_player(SDL_Scancode code)
+{
+    return code == SDL_SCANCODE_Z || code == SDL_SCANCODE_X ||
+        code == SDL_SCANCODE_C || code == SDL_SCANCODE_V ? 1u : 0u;
 }
 
 #ifndef RSX_SDL_REPLAY_STANDALONE
@@ -3698,6 +3751,15 @@ static void change_audio_offset(int delta_ms, int display_only)
     fprintf(stderr, "[SDL_INPUT] audio offset %d ms %s\n", offset,
             display_only ? "displayed" : "saved (live gameplay slew)");
 }
+
+static void cycle_character_mode(void)
+{
+    const int mode = taiko_character_mode_cycle();
+    const char* status = mode == 0 ? "CHARACTER NORMAL" :
+        mode == 1 ? "CHARACTER NO OUTLINE" : "CHARACTER OFF";
+    taiko_overlay_set_status(status, 3);
+    fprintf(stderr, "[SDL_INPUT] %s\n", status);
+}
 #endif
 
 #if defined(__linux__)
@@ -3711,6 +3773,7 @@ enum {
     EVDEV_HOTKEY_AUDIO_SHOW = 1u << 4,
     EVDEV_HOTKEY_AUDIO_FINE_DOWN = 1u << 5,
     EVDEV_HOTKEY_AUDIO_FINE_UP = 1u << 6,
+    EVDEV_HOTKEY_CHARACTER_MODE = 1u << 7,
 };
 
 static int evdev_bit(const unsigned long* bits, unsigned code)
@@ -3735,15 +3798,20 @@ static SDL_Scancode evdev_scancode(unsigned code)
     case KEY_F: return SDL_SCANCODE_F;
     case KEY_J: return SDL_SCANCODE_J;
     case KEY_K: return SDL_SCANCODE_K;
+    case KEY_Z: return SDL_SCANCODE_Z;
+    case KEY_X: return SDL_SCANCODE_X;
+    case KEY_C: return SDL_SCANCODE_C;
+    case KEY_V: return SDL_SCANCODE_V;
     case KEY_ENTER: case KEY_KPENTER: return SDL_SCANCODE_RETURN;
     case KEY_F1: return SDL_SCANCODE_F1;
     case KEY_F2: return SDL_SCANCODE_F2;
     case KEY_F3: return SDL_SCANCODE_F3;
     case KEY_F4: return SDL_SCANCODE_F4;
     case KEY_F5: return SDL_SCANCODE_F5;
+    case KEY_F6: return SDL_SCANCODE_F6;
+    case KEY_F8: return SDL_SCANCODE_F8;
     case KEY_F9: return SDL_SCANCODE_F9;
     case KEY_F10: return SDL_SCANCODE_F10;
-    case KEY_C: return SDL_SCANCODE_C;
     case KEY_UP: return SDL_SCANCODE_UP;
     case KEY_DOWN: return SDL_SCANCODE_DOWN;
 #ifdef RSX_SDL_REPLAY_STANDALONE
@@ -3757,12 +3825,14 @@ static SDL_Scancode evdev_scancode(unsigned code)
     }
 }
 
-static unsigned evdev_keyboard_levels(unsigned keyboard)
+static unsigned evdev_keyboard_levels(unsigned keyboard, unsigned player)
 {
     unsigned levels = 0;
     for (unsigned code = 0; code <= KEY_MAX; ++code) {
         if (!evdev_bit(s_sdl.evdev_down[keyboard], code)) continue;
-        levels |= keyboard_action(evdev_scancode(code));
+        const SDL_Scancode scancode = evdev_scancode(code);
+        if (keyboard_player(scancode) == player)
+            levels |= keyboard_action(scancode);
     }
     return levels;
 }
@@ -3778,10 +3848,12 @@ static int evdev_shift_down(void)
 
 static void evdev_publish_levels(unsigned long long timestamp_ns)
 {
-    unsigned levels = 0;
+    unsigned levels[2] = {0, 0};
     for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
-        levels |= evdev_keyboard_levels(i);
-    taiko_host_input_update_levels(0, levels, timestamp_ns);
+        for (unsigned player = 0; player < 2; ++player)
+            levels[player] |= evdev_keyboard_levels(i, player);
+    for (unsigned player = 0; player < 2; ++player)
+        taiko_host_input_update_levels(player, levels[player], timestamp_ns);
 }
 
 static int evdev_has_drum_keys(const unsigned long* keys)
@@ -3790,7 +3862,9 @@ static int evdev_has_drum_keys(const unsigned long* keys)
      * key also admits drum-only firmwares which omit Enter/C, while rejecting
      * the Pi's power and HDMI-remote event nodes. */
     return evdev_bit(keys, KEY_D) || evdev_bit(keys, KEY_F) ||
-           evdev_bit(keys, KEY_J) || evdev_bit(keys, KEY_K);
+           evdev_bit(keys, KEY_J) || evdev_bit(keys, KEY_K) ||
+           evdev_bit(keys, KEY_Z) || evdev_bit(keys, KEY_X) ||
+           evdev_bit(keys, KEY_C) || evdev_bit(keys, KEY_V);
 }
 
 static void evdev_remove_keyboard(unsigned keyboard)
@@ -3885,6 +3959,12 @@ static void evdev_handle_key(unsigned keyboard,
                           __ATOMIC_RELEASE);
         return;
     }
+    if (down && scancode == SDL_SCANCODE_F8) {
+        __atomic_fetch_or(&s_sdl.evdev_hotkeys,
+                          EVDEV_HOTKEY_CHARACTER_MODE,
+                          __ATOMIC_RELEASE);
+        return;
+    }
     if (down && scancode == SDL_SCANCODE_F3) {
         __atomic_fetch_or(&s_sdl.evdev_hotkeys,
                           evdev_shift_down()
@@ -3918,9 +3998,10 @@ static void evdev_handle_key(unsigned keyboard,
         const double read_age_ms = now_ns >= timestamp_ns
             ? (double)(now_ns - timestamp_ns) / 1000000.0 : 0.0;
         fprintf(stderr,
-                "[SDL_INPUT-EVENT] event%d code=%u action=%03X down=%d "
+                "[SDL_INPUT-EVENT] event%d code=%u player=%u action=%03X down=%d "
                 "read_age=%.3fms\n",
-                s_sdl.evdev_indices[keyboard], code, action, down,
+                s_sdl.evdev_indices[keyboard], code,
+                keyboard_player(scancode) + 1u, action, down,
                 read_age_ms);
     }
     evdev_publish_levels(timestamp_ns);
@@ -4048,6 +4129,7 @@ static void evdev_poll_hotkeys(void)
     if (hotkeys & EVDEV_HOTKEY_AUDIO_FINE_DOWN) change_audio_offset(-1, 0);
     if (hotkeys & EVDEV_HOTKEY_AUDIO_FINE_UP) change_audio_offset(1, 0);
     if (hotkeys & EVDEV_HOTKEY_AUDIO_SHOW) change_audio_offset(0, 1);
+    if (hotkeys & EVDEV_HOTKEY_CHARACTER_MODE) cycle_character_mode();
 #endif
 }
 
@@ -4061,7 +4143,9 @@ static void evdev_close_keyboards(void)
     for (unsigned i = 0; i < s_sdl.evdev_keyboard_count; ++i)
         close(s_sdl.evdev_keyboards[i]);
     s_sdl.evdev_keyboard_count = 0;
-    taiko_host_input_update_levels(0, 0, sdl_host_monotonic_ns());
+    const unsigned long long now_ns = sdl_host_monotonic_ns();
+    taiko_host_input_update_levels(0, 0, now_ns);
+    taiko_host_input_update_levels(1, 0, now_ns);
 }
 #else
 static void evdev_close_keyboards(void) {}
@@ -4141,6 +4225,10 @@ static void handle_event(const SDL_Event* event)
             arm_capture_hotkey();
             return;
         }
+        if (event->key.down && event->key.scancode == SDL_SCANCODE_F8) {
+            cycle_character_mode();
+            return;
+        }
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F3) {
             change_audio_offset((event->key.mod & SDL_KMOD_SHIFT) ? -1 : -5,
                                 0);
@@ -4157,10 +4245,11 @@ static void handle_event(const SDL_Event* event)
         }
 #endif
         unsigned action = keyboard_action(event->key.scancode);
+        const unsigned player = keyboard_player(event->key.scancode);
         if (event->key.down)
-            taiko_host_input_press(0, action, event->key.timestamp);
+            taiko_host_input_press(player, action, event->key.timestamp);
         else
-            taiko_host_input_release(0, action);
+            taiko_host_input_release(player, action);
         return;
     }
     if (event->type == SDL_EVENT_GAMEPAD_ADDED) {

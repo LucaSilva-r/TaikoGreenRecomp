@@ -361,14 +361,21 @@ audio, guest, or render threads. The shipping mappings are:
 
 | Key | Action |
 |---|---|
-| `D F J K` | left rim, left centre, right centre, right rim |
-| `C` | coin |
+| `D F J K` | P1 left rim, left centre, right centre, right rim |
+| `Z X C V` | P2 left rim, left centre, right centre, right rim |
+| F2 | coin |
 | Enter | confirm/start |
-| F1 / F2 | test / service |
+| F1 / F6 | test / service |
 | Up / Down | menu navigation |
 | F3 / F4 | audio offset -/+ 5 ms; hold Shift for 1 ms |
 | F5 | display the current audio offset without changing it |
+| F8 | character mode: normal, no outline, or no 3D character |
 | F10 | arm the configured RSX capture |
+
+Taiko's 0x60-byte USIO report at register `0x1080` packs P1 sensors into
+bytes 32--39 and P2 into bytes 40--47. Register `0x1100` mirrors that report;
+it is not a separate P2 frame. Keeping the players in separate reports makes
+the host input latch look correct while Green silently ignores every P2 hit.
 
 Live validation simultaneously opened the Lenovo keyboard on
 `/dev/input/event0` and ITAiko drum on `/dev/input/event3`. Kernel-read latency

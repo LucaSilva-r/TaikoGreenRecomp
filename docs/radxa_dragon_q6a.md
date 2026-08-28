@@ -182,6 +182,18 @@ FPS, so the service keeps `TAIKO_GPU_CHARACTER_OUTLINE=0`. This affects the
 centered/600x600 character chain; the small top-left gameplay Don-chan uses a
 different sprite path and retains its authored outline.
 
+F8 cycles this chain at runtime through normal, no outline, and no 3D
+character rendering. The last mode also bypasses the native skin jobs, making
+it a clean CPU/GPU A/B without a reboot. The service's outline environment
+setting selects the initial no-outline baseline, so its first F8 press selects
+character-off. A short status pill shows every transition.
+
+The direct-KMS keyboard mapping uses `D/F/J/K` for P1 and `Z/X/C/V` for P2 in
+left-rim/left-centre/right-centre/right-rim order. Coin is F2; service moved to
+F6 because F3--F5 are the live audio-offset controls. Both players are packed
+into the title's single `0x1080` USIO sensor report (P1 at bytes 32--39, P2 at
+40--47); `0x1100` mirrors the same frame.
+
 The display advertises an exact 1920x1080 at 120 Hz CTA mode. The Radxa service
 requests it with `TAIKOS_OUTPUT_MODE=1920x1080@120`, ticks the guest with
 `TAIKO_VBLANK_HZ=120`, and enables the title's elapsed-time animation

@@ -81,6 +81,32 @@ constexpr uint32_t kMatrixStride = 64;
 constexpr uint32_t kMaxMatrixBytes = 16 * 1024;   /* 256 bones; Green uses 35 */
 constexpr uint32_t kMaxDmaSegments = 8;
 
+enum CharacterMode {
+    kCharacterNormal = 0,
+    kCharacterNoOutline = 1,
+    kCharacterOff = 2,
+};
+
+std::atomic<int> g_character_mode{-1};
+
+int character_mode()
+{
+    int mode = g_character_mode.load(std::memory_order_acquire);
+    if (mode >= kCharacterNormal && mode <= kCharacterOff) return mode;
+
+    const char* render = std::getenv("TAIKO_CHARACTER_RENDER");
+    const char* outline = std::getenv("TAIKO_GPU_CHARACTER_OUTLINE");
+    const int initial = render && std::strcmp(render, "0") == 0
+        ? kCharacterOff
+        : outline && std::strcmp(outline, "0") == 0
+        ? kCharacterNoOutline : kCharacterNormal;
+    int uninitialized = -1;
+    g_character_mode.compare_exchange_strong(
+        uninitialized, initial, std::memory_order_release,
+        std::memory_order_relaxed);
+    return g_character_mode.load(std::memory_order_acquire);
+}
+
 extern "C" int rsx_dbg_capture_left(void);
 
 uint32_t hash_words(uint32_t hash, uint32_t ea, uint32_t bytes)
@@ -636,7 +662,9 @@ std::mutex g_drain_lock;
 
 void submit_job(uint32_t job)
 {
+    if (character_mode() == kCharacterOff) return;
     std::lock_guard<std::mutex> guard(g_drain_lock);
+    if (character_mode() == kCharacterOff) return;
     run_skin_job(job);
 }
 
@@ -710,6 +738,28 @@ extern "C" void (*g_spurs_job_chain_drain)(void);
 extern "C" void (*g_spurs_job_submit)(uint32_t job);
 extern "C" void (*g_spurs_job_output_probe)(uint32_t ea);
 
+extern "C" int taiko_character_mode_get(void)
+{
+    return character_mode();
+}
+
+extern "C" int taiko_character_mode_cycle(void)
+{
+    int current = character_mode();
+    for (;;) {
+        const int next = (current + 1) % 3;
+        if (g_character_mode.compare_exchange_weak(
+                current, next, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            const char* name = next == kCharacterNormal ? "normal" :
+                next == kCharacterNoOutline ? "no outline" : "disabled";
+            std::fprintf(stderr, "[taiko_vertex_job] character mode: %s\n",
+                         name);
+            return next;
+        }
+    }
+}
+
 namespace {
 
 __attribute__((constructor))
@@ -720,6 +770,10 @@ void configure_taiko_vertex_job()
         std::fprintf(stderr, "[taiko_vertex_job] disabled by TAIKO_VERTEX_JOB=0\n");
         return;
     }
+    const int mode = character_mode();
+    std::fprintf(stderr, "[taiko_vertex_job] initial character mode: %s\n",
+                 mode == kCharacterNormal ? "normal" :
+                 mode == kCharacterNoOutline ? "no outline" : "disabled");
     g_spurs_job_chain_runner = run_job_chain;
     g_spurs_job_chain_drain = flush_job_chain;
     g_spurs_job_submit = submit_job;
