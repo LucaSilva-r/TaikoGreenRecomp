@@ -2,8 +2,9 @@
 
 The Radxa Dragon Q6A uses the same generic AArch64 TaikoRecomp binary and game
 layout as the Raspberry Pi appliance. Live validation on 2026-08-27 used
-Armbian 26.8.3 / Debian 13 with the QCS6490 kernel, Mesa Turnip on the Adreno
-643, and a 1920x1080 60 Hz HDMI output.
+Armbian 26.8.1 / Debian 13 with the QCS6490 kernel, Mesa Turnip on the Adreno
+643, and a 1920x1080 HDMI output. The initial migration used 60 Hz; the current
+gameplay/profile configuration uses the display's exact 120 Hz CTA mode.
 
 The primary service drives DRM/KMS directly. Cage is installed only as a
 disabled compositor fallback; it is not in the normal frame path.
@@ -43,10 +44,13 @@ The runtime uses the same paths as the Pi:
 Install `deploy/taikos/taiko-recomp-session` as
 `/usr/local/bin/taiko-recomp-session` and
 `deploy/taikos/taiko-recomp-graphical-radxa.service` as
-`/etc/systemd/system/taikos.service`. The unit intentionally omits the Pi's
-V3DV upload-fence workarounds and VC4 zero-copy setting. It starts on the
-portable atomic KMS path; any Turnip/MSM zero-copy optimization should be
-enabled only after a visual and stability A/B test.
+`/etc/systemd/system/taikos.service`. The unit enables atomic direct KMS and
+dma-buf zero-copy scanout. Turnip exports the target with Qualcomm's tiled
+modifier (`0x500000000000001`), so the renderer draws the status/PIN and
+optional FPS overlays as GPU quads. Never write a CPU-linear badge into this
+export: doing so corrupts tiles along the top edge. The backend detects the
+modifier and only uses its CPU overlay path for linear exports. The unit still
+omits the Pi-only V3DV separate-upload/fence-wait workarounds.
 
 The optional Cage unit is `deploy/taikos/taiko-recomp-cage.service`. Install it
 as `/etc/systemd/system/taikos-cage.service`, but do not enable both services.
@@ -60,6 +64,12 @@ sudo systemctl enable --now taikos.service
 sudo systemctl disable --now taikos.service
 sudo systemctl enable --now taikos-cage.service
 ```
+
+On the validated QCS6490 kernel, stopping or restarting a running direct-KMS
+Vulkan session can reset the whole board during teardown. Use
+`sudo systemctl enable taikos.service` followed by `sudo reboot` when applying
+runtime or binary changes. A normal boot is reliable; this warning concerns
+live service teardown.
 
 ## Editable game-data link
 
@@ -87,8 +97,9 @@ vulkaninfo --summary
 ```
 
 The startup log must select Vulkan/Turnip and `/dev/dri/card1`, establish an
-atomic 1920x1080@60 KMS output, and avoid llvmpipe. Keep the Pi intact until the
-Radxa reaches attract mode, accepts drum input, and produces HDMI audio.
+atomic 1920x1080@120 KMS output, print `zero-copy KMS dma-buf path active (GPU
+overlays)`, and avoid llvmpipe. Keep the Pi intact until the Radxa reaches
+attract mode, accepts drum input, and produces HDMI audio.
 
 The initial live migration confirmed that `taiko_boot` owned a 1280x720 XB24
 framebuffer scaled by the MSM display plane to 1920x1080@60, opened Turnip's
@@ -131,8 +142,11 @@ xruns. Pi and desktop builds continue using SDL unless this variable is set.
 Install `deploy/taikos/taiko-recomp-profiling.conf` as
 `/etc/systemd/system/taikos.service.d/profiling.conf`, and install
 `taiko-profile-sampler` plus its service from the same directory. After the
-next reboot, `[RSXFPS]`, `[RSXREC]`, and `[PRESENTPACE]` report application
-timings once per second. `[TAIKO-SYS]` independently records process CPU/RSS,
+next reboot, `[RSXFPS]` and `[PRESENTPACE]` report application timings once per
+second. The binary also supports the deeper `[RSXREC]` breakdown, but for the
+least intrusive steady measurement the drop-in sets `RSX_RECORDER_PROFILE=0`;
+this removes its per-draw timer reads.
+`[TAIKO-SYS]` independently records process CPU/RSS,
 GPU target/current frequency, CPU-cluster frequencies, and CPU/GPU temperature
 once per second. Correlate them with:
 
@@ -144,9 +158,38 @@ journalctl -b -u taikos.service -u taiko-profile-sampler.service \
 The default profiling drop-in does not enable `RSX_RESOURCE_TRACE`: that mode
 takes timestamps inside the per-operation preparation loop and can perturb a
 heavy Song Select frame. Enable it only for a short follow-up run if the first
-trace shows high `prep` time. Do not read `/sys/kernel/debug/dri/*/gpu` or
-`perf` while the game is running on this kernel; a live debugfs snapshot was
-followed by `VK_ERROR_DEVICE_LOST` and an automatic service restart.
+trace shows high `prep` time. Do not read the DRM debugfs `gpu` or `perf`
+nodes under `/sys/kernel/debug/dri/` while the game is running on this kernel;
+a live debugfs snapshot was followed by `VK_ERROR_DEVICE_LOST` and an automatic
+service restart. Linux `perf record` sampling is separate and has been safe.
+
+The QCS6490's heterogeneous scheduler must keep the frame-critical pipeline on
+the fast cluster. A live A/B in Song Select isolated the SDL renderer on CPU 4,
+the frame/FIFO driver on 5, `NU::Draw::RequestManager` on 6, and the initial
+guest plus its light VSync worker on prime CPU 7. Rapid category scrolling then
+held 59.98--60.03 FPS; before the change, the draw manager could land on an
+efficiency core and the same scene alternated between 30 and 60 FPS even while
+SDL rendering used only 5--9 ms. The Radxa service carries this policy through
+the `TAIKO_CPU_*_AFFINITY` variables. These are thread-role affinities applied
+inside the runtime, not a process-wide `CPUAffinity=` setting (which would pin
+Vulkan, audio, and every guest worker to the same small mask).
+
+With those roles isolated, the 366--376-draw Song Select baseline spent about
+5.5--5.8 ms rendering and 4.3--4.5 ms waiting for the GPU/KMS render fence. The
+known worst costume's complete model outline adds 16 draws and roughly 1.77
+MiB of dynamic vertices. At 120 Hz that path can phase-lock the title at 60
+FPS, so the service keeps `TAIKO_GPU_CHARACTER_OUTLINE=0`. This affects the
+centered/600x600 character chain; the small top-left gameplay Don-chan uses a
+different sprite path and retains its authored outline.
+
+The display advertises an exact 1920x1080 at 120 Hz CTA mode. The Radxa service
+requests it with `TAIKOS_OUTPUT_MODE=1920x1080@120`, ticks the guest with
+`TAIKO_VBLANK_HZ=120`, and enables the title's elapsed-time animation
+corrections with `TAIKO_ANIMATION_TIMING=1`. Light gameplay holds 120 FPS;
+dense note fields can still fall to 80--100 and eventually phase-lock at 60
+even though measured GPU rendering remains around 5.5--6.8 ms. Current
+profiling therefore focuses on the main guest producer, not storage or GPU
+execution.
 
 Rapid Song Select scrolling is not storage-bound on the validated system. A
 ten-second reproduction caused zero physical read bytes and zero major page
@@ -154,8 +197,8 @@ faults; cached reads accounted for about 24 MB. With the default governors,
 however, the GPU remained at 315 MHz and CPU-cluster frequencies oscillated
 while the producer alternated between 16.7 and 33.3 ms submission intervals.
 Holding the GPU at its advertised 812 MHz reduced KMS render wait from about
-7.6 to 4.6 ms. Selecting the CPU `performance` governor as well made the same
-375-draw scrolling workload hold 59--60 FPS, with CPU/GPU temperatures around
-50/45 degrees C. Install and enable `taiko-performance.service` plus its helper
-from `deploy/taikos/`; it selects only frequencies advertised by the kernel and
-does not overclock the board.
+7.6 to 4.6 ms, but neither that nor the CPU `performance` governor eliminated
+the producer's 30 FPS mode; role affinity did. Keep the frequency policy as
+headroom for the 366--376-draw scrolling workload. Install and enable
+`taiko-performance.service` plus its helper from `deploy/taikos/`; it selects
+only frequencies advertised by the kernel and does not overclock the board.

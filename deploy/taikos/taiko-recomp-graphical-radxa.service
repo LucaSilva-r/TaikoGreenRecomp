@@ -35,11 +35,14 @@ Environment=SDL_AUDIODRIVER=alsa
 # backend mixer and SDL's default playback PCM explicitly.
 Environment=SDL_AUDIO_ALSA_DEFAULT_PLAYBACK_DEVICE=plughw:CARD=QCS6490RadxaDra,DEV=1
 Environment=TAIKO_AUDIO_ALSA_DIRECT_DEVICE=hw:CARD=QCS6490RadxaDra,DEV=1
-Environment=TAIKOS_OUTPUT_MODE=1920x1080@60
+Environment=TAIKOS_OUTPUT_MODE=1920x1080@120
+Environment=TAIKO_VBLANK_HZ=120
+Environment=TAIKO_ANIMATION_TIMING=1
 Environment=TAIKO_GPU_DRIVER=vulkan
 Environment=VK_LOADER_DRIVERS_DISABLE=*lvp*
 Environment=TAIKO_KMS_PRESENT=1
 Environment=TAIKO_KMS_ATOMIC=1
+Environment=TAIKO_KMS_ZERO_COPY=1
 Environment=PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs
 Environment=PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38
 Environment=FLOW_NOSPILL=1
@@ -49,15 +52,33 @@ Environment=TAIKO_AUDIO_SPU=1
 # ALSA sink instead uses the Q6A HDMI PCM's 960-frame period and 3840-frame
 # hardware buffer.
 Environment=TAIKO_AUDIO_PREBUFFER_BLOCKS=12
-# Preserve the Pi appliance's safe character-filter settings initially. The
-# Q6A can restore the outline after its baseline has been validated.
+# Keep the safe transform-derived character bound. Disable the complete
+# Don-chan model outline for the 120 Hz gameplay A/B: the heavy costume expands
+# each frame by roughly 1.7 MiB of vertices and can phase-lock Green at 60 Hz.
 Environment=TAIKO_GPU_CHARACTER_FILTER_SCISSOR=0
 Environment=TAIKO_GPU_CHARACTER_OUTLINE=0
-Environment=TAIKO_PERF_OVERLAY=1
+# QCS6490 has four efficiency cores (0-3), three performance cores (4-6), and
+# one prime core (7). Linux otherwise migrates the heavily active guest draw
+# manager onto an efficiency core, making the frame handshake miss every other
+# vblank and lock Song Select to 30 FPS despite a 5-6 ms renderer. Keep the
+# measured critical pipeline one-thread-per-fast-core; ordinary PPU/SPU work
+# remains free to use the whole SoC, while audio and preview decode stay off the
+# frame cores.
+Environment=TAIKO_CPU_RENDER_AFFINITY=4
+Environment=TAIKO_CPU_FRAME_AFFINITY=5
+Environment=TAIKO_CPU_DRAW_AFFINITY=6
+Environment=TAIKO_CPU_MAIN_AFFINITY=7
+Environment=TAIKO_CPU_VSYNC_AFFINITY=7
+Environment=TAIKO_CPU_PPU_AFFINITY=0-7
+Environment=TAIKO_CPU_SPU_AFFINITY=0-7
+Environment=TAIKO_CPU_AUDIO_AFFINITY=0-3
+Environment=TAIKO_CPU_PREVIEW_AFFINITY=0-3
+Environment=TAIKO_PERF_OVERLAY=0
 Environment=RSX_BATCH_CAPTURE_HOTKEY=/var/lib/taikos/recomp/rsx_capture_f10.rsxb
 Environment=RSX_BATCH_CAPTURE_HOTKEY_FRAMES=4
-# Pi-only V3DV upload-fence workarounds and VC4 zero-copy scanout are omitted.
-# Turnip/MSM should first be validated on the portable atomic KMS path.
+# Turnip exports Qualcomm-tiled scanout dma-bufs, so the renderer draws status,
+# PIN and optional FPS overlays as GPU quads. The backend reserves CPU overlay
+# writes for linear exports. Pi-only V3DV upload-fence workarounds are omitted.
 ExecStartPre=/usr/bin/amixer -q -c 0 cset "name=RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia2" 0
 ExecStartPre=/usr/bin/amixer -q -c 0 cset "name=DISPLAY_PORT_RX_0 Audio Mixer MultiMedia2" 1
 ExecStart=/usr/local/bin/taiko-recomp-session
