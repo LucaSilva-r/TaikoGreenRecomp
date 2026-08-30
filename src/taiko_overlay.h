@@ -24,14 +24,47 @@ void taiko_overlay_show_entry_menu(int selection);
 void taiko_overlay_show_entry_progress(const char* player_name);
 void taiko_overlay_show_baid_wait(void);
 void taiko_overlay_show_song_select(const char* player_name);
+
+enum { TAIKO_OVERLAY_SONG_ROW_COUNT = 9 };
+
+enum taiko_overlay_browser_level {
+    TAIKO_OVERLAY_BROWSER_CATEGORIES = 0,
+    TAIKO_OVERLAY_BROWSER_SONGS = 1,
+};
+
+enum taiko_overlay_song_row_kind {
+    TAIKO_OVERLAY_ROW_SONG = 0,
+    TAIKO_OVERLAY_ROW_CATEGORY = 1,
+    TAIKO_OVERLAY_ROW_EXIT = 2,
+};
+
+typedef struct taiko_overlay_song_row {
+    const char* title;
+    const char* genre;
+    unsigned catalog_index;
+    int selected;
+    int kind;
+} taiko_overlay_song_row;
+
 void taiko_overlay_show_song_browser(const char* player_name,
                                      const char* music_id,
                                      const char* title,
                                      const char* genre,
                                      uint32_t unique_id,
                                      unsigned index,
-                                     unsigned total,
-                                     const char* difficulty);
+                                     unsigned match_total,
+                                     unsigned catalog_total,
+                                     const char* category,
+                                     unsigned category_index,
+                                     unsigned category_total,
+                                     const char* difficulty,
+                                     uint8_t difficulty_mask,
+                                     const char* query,
+                                     int search_active,
+                                     int browser_level,
+                                     int selection_is_exit,
+                                     const taiko_overlay_song_row* rows,
+                                     unsigned row_count);
 void taiko_overlay_hide_host_screen(void);
 void taiko_overlay_clear(void);
 

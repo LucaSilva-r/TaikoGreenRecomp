@@ -15,12 +15,18 @@
 #include "taiko_host_input.h"
 #include "taiko_overlay.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
 
 extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
                                         uint64_t a0, uint64_t a1,
@@ -93,6 +99,22 @@ std::atomic<unsigned> g_selection{0};
 std::atomic<unsigned> g_song_selection{0};
 std::atomic<unsigned> g_song_difficulty{TAIKO_DIFFICULTY_ONI};
 std::atomic<bool> g_song_launch_requested{false};
+std::atomic<bool> g_song_search_active{false};
+std::mutex g_song_browser_lock;
+std::vector<unsigned> g_song_matches;
+struct SongBrowserEntry {
+    bool exit_category;
+    unsigned catalog_index;
+    unsigned song_position;
+};
+std::vector<SongBrowserEntry> g_song_entries;
+std::string g_song_query;
+unsigned g_song_browser_position = 0;
+unsigned g_song_category = 0;
+enum class SongBrowserLevel { Categories, Songs };
+SongBrowserLevel g_song_browser_level = SongBrowserLevel::Categories;
+bool g_song_global_search = false;
+std::atomic<uint32_t> g_random_state{0x6D2B79F5u};
 std::array<std::atomic<uint32_t>, 2> g_raw_levels{};
 uint32_t g_controller = 0;
 uint32_t g_toc = 0;
@@ -100,6 +122,23 @@ unsigned g_finish_delay = 0;
 unsigned g_finish_stage = 0;
 unsigned g_finish_timeout = 0;
 const char* g_session_label = "P1";
+
+struct SongCategory {
+    const char* label;
+    const char* genre;
+};
+
+constexpr std::array<SongCategory, 9> kSongCategories{{
+    {"J-POP", "J-POP"},
+    {"ANIME", "アニメ"},
+    {"VOCALOID", "ボーカロイド"},
+    {"VARIETY", "バラエティ"},
+    {"CLASSICAL", "クラシック"},
+    {"GAME MUSIC", "ゲームミュージック"},
+    {"NAMCO ORIGINAL", "ナムコオリジナル"},
+    {"MEDLEY", "メドレー"},
+    {"CHILDREN'S SONGS", "童謡"},
+}};
 
 bool enabled()
 {
@@ -146,6 +185,130 @@ unsigned cycle_difficulty(const TaikoCatalogSong& song,
     return current;
 }
 
+std::string searchable_text(const TaikoCatalogSong& song)
+{
+    std::string value;
+    value.reserve(song.title.size() + song.original_title.size() +
+                  song.genre.size() + song.music_id.size() + 4);
+    value.append(song.title).push_back(' ');
+    value.append(song.original_title).push_back(' ');
+    value.append(song.genre).push_back(' ');
+    value.append(taiko_catalog_genre_name(song.genre)).push_back(' ');
+    value.append(song.music_id);
+    for (char& character : value) {
+        const unsigned char byte = static_cast<unsigned char>(character);
+        if (byte < 0x80) character = static_cast<char>(std::tolower(byte));
+    }
+    return value;
+}
+
+bool song_matches_query(const TaikoCatalogSong& song, std::string query)
+{
+    for (char& character : query) {
+        const unsigned char byte = static_cast<unsigned char>(character);
+        if (byte < 0x80) character = static_cast<char>(std::tolower(byte));
+    }
+    const std::string haystack = searchable_text(song);
+    std::size_t position = 0;
+    while (position < query.size()) {
+        while (position < query.size() &&
+               std::isspace(static_cast<unsigned char>(query[position])))
+            ++position;
+        const std::size_t begin = position;
+        while (position < query.size() &&
+               !std::isspace(static_cast<unsigned char>(query[position])))
+            ++position;
+        if (position > begin &&
+            haystack.find(query.substr(begin, position - begin)) ==
+                std::string::npos)
+            return false;
+    }
+    return true;
+}
+
+std::string title_sort_key(const std::string& title)
+{
+    std::string key;
+    key.reserve(title.size());
+    for (std::size_t index = 0; index < title.size();) {
+        const unsigned char byte = static_cast<unsigned char>(title[index]);
+        uint32_t codepoint = byte;
+        std::size_t length = 1;
+        if ((byte & 0xE0u) == 0xC0u && index + 1 < title.size()) {
+            codepoint = ((byte & 0x1Fu) << 6) |
+                (static_cast<unsigned char>(title[index + 1]) & 0x3Fu);
+            length = 2;
+        } else if ((byte & 0xF0u) == 0xE0u && index + 2 < title.size()) {
+            codepoint = ((byte & 0x0Fu) << 12) |
+                ((static_cast<unsigned char>(title[index + 1]) & 0x3Fu) << 6) |
+                (static_cast<unsigned char>(title[index + 2]) & 0x3Fu);
+            length = 3;
+        } else if ((byte & 0xF8u) == 0xF0u && index + 3 < title.size()) {
+            codepoint = ((byte & 0x07u) << 18) |
+                ((static_cast<unsigned char>(title[index + 1]) & 0x3Fu) << 12) |
+                ((static_cast<unsigned char>(title[index + 2]) & 0x3Fu) << 6) |
+                (static_cast<unsigned char>(title[index + 3]) & 0x3Fu);
+            length = 4;
+        }
+        if (codepoint >= 0xFF01 && codepoint <= 0xFF5E)
+            codepoint -= 0xFEE0;
+        else if (codepoint == 0x3000)
+            codepoint = ' ';
+        if (codepoint < 0x80) {
+            const unsigned char ascii = static_cast<unsigned char>(codepoint);
+            if (std::isalnum(ascii))
+                key.push_back(static_cast<char>(std::tolower(ascii)));
+            else if (ascii == ' ' && !key.empty() && key.back() != ' ')
+                key.push_back(' ');
+        } else {
+            key.append(title, index, length);
+        }
+        index += length;
+    }
+    return key;
+}
+
+void rebuild_song_matches_locked(unsigned preferred_catalog_index)
+{
+    g_song_matches.clear();
+    g_song_entries.clear();
+    const std::size_t count = taiko_catalog_count();
+    for (std::size_t index = 0; index < count; ++index) {
+        const TaikoCatalogSong* song = taiko_catalog_song(index);
+        const SongCategory& category = kSongCategories[g_song_category];
+        if (song && (g_song_global_search || song->genre == category.genre) &&
+            song_matches_query(*song, g_song_query))
+            g_song_matches.push_back(static_cast<unsigned>(index));
+    }
+    std::stable_sort(g_song_matches.begin(), g_song_matches.end(),
+                     [](unsigned left, unsigned right) {
+        const TaikoCatalogSong* a = taiko_catalog_song(left);
+        const TaikoCatalogSong* b = taiko_catalog_song(right);
+        if (!a || !b) return left < right;
+        const std::string a_key = title_sort_key(a->title);
+        const std::string b_key = title_sort_key(b->title);
+        if (a_key != b_key) return a_key < b_key;
+        return a->music_id < b->music_id;
+    });
+    g_song_browser_position = 0;
+    for (unsigned position = 0; position < g_song_matches.size(); ++position) {
+        g_song_entries.push_back(
+            {false, g_song_matches[position], position});
+        if ((position + 1) % 10 == 0 ||
+            position + 1 == g_song_matches.size())
+            g_song_entries.push_back({true, 0, position});
+    }
+    const auto existing = std::find_if(
+        g_song_entries.begin(), g_song_entries.end(),
+        [preferred_catalog_index](const SongBrowserEntry& entry) {
+            return !entry.exit_category &&
+                   entry.catalog_index == preferred_catalog_index;
+        });
+    if (existing != g_song_entries.end())
+        g_song_browser_position = static_cast<unsigned>(
+            existing - g_song_entries.begin());
+}
+
 void show_current_song()
 {
     const std::size_t count = taiko_catalog_count();
@@ -153,8 +316,129 @@ void show_current_song()
         taiko_overlay_show_song_select(g_session_label);
         return;
     }
-    unsigned selection = g_song_selection.load(std::memory_order_acquire);
-    selection %= static_cast<unsigned>(count);
+
+    std::array<std::string, TAIKO_OVERLAY_SONG_ROW_COUNT> row_titles;
+    std::array<std::string, TAIKO_OVERLAY_SONG_ROW_COUNT> row_genres;
+    std::array<taiko_overlay_song_row, TAIKO_OVERLAY_SONG_ROW_COUNT> rows{};
+    std::string query;
+    unsigned category_index = 0;
+    bool category_browser = false;
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        category_browser =
+            g_song_browser_level == SongBrowserLevel::Categories;
+        category_index = g_song_category %
+            static_cast<unsigned>(kSongCategories.size());
+    }
+    if (category_browser) {
+        for (unsigned row = 0; row < kSongCategories.size(); ++row) {
+            unsigned category_song_count = 0;
+            for (std::size_t index = 0; index < count; ++index) {
+                const TaikoCatalogSong* song = taiko_catalog_song(index);
+                if (song && song->genre == kSongCategories[row].genre)
+                    ++category_song_count;
+            }
+            row_titles[row] = kSongCategories[row].label;
+            row_genres[row] = kSongCategories[row].label;
+            rows[row].title = row_titles[row].c_str();
+            rows[row].genre = row_genres[row].c_str();
+            rows[row].catalog_index = category_song_count;
+            rows[row].selected = row == category_index;
+            rows[row].kind = TAIKO_OVERLAY_ROW_CATEGORY;
+        }
+        taiko_overlay_show_song_browser(
+            g_session_label, "", kSongCategories[category_index].label,
+            "CATEGORY FOLDER", rows[category_index].catalog_index,
+            category_index, static_cast<unsigned>(kSongCategories.size()),
+            static_cast<unsigned>(count), "CATEGORIES", category_index,
+            static_cast<unsigned>(kSongCategories.size()), "", 0, "", 0,
+            TAIKO_OVERLAY_BROWSER_CATEGORIES, 0, rows.data(),
+            static_cast<unsigned>(kSongCategories.size()));
+        return;
+    }
+
+    unsigned selection = 0;
+    unsigned match_position = 0;
+    unsigned match_total = 0;
+    unsigned row_count = 0;
+    bool selection_is_exit = false;
+    std::string browser_category;
+    unsigned browser_category_index = 0;
+    unsigned browser_category_total = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        query = g_song_query;
+        browser_category = g_song_global_search
+            ? "SEARCH RESULTS" : kSongCategories[g_song_category].label;
+        browser_category_index = g_song_global_search ? 0 : g_song_category;
+        browser_category_total = g_song_global_search
+            ? 0 : static_cast<unsigned>(kSongCategories.size());
+        match_total = static_cast<unsigned>(g_song_matches.size());
+        if (!match_total || g_song_entries.empty()) {
+            taiko_overlay_show_song_browser(
+                g_session_label, "", "", "", 0, 0, 0,
+                static_cast<unsigned>(count),
+                browser_category.c_str(), browser_category_index,
+                browser_category_total, "?", 0,
+                query.c_str(),
+                g_song_search_active.load(std::memory_order_acquire),
+                TAIKO_OVERLAY_BROWSER_SONGS, 0, nullptr, 0);
+            return;
+        }
+        const unsigned entry_total =
+            static_cast<unsigned>(g_song_entries.size());
+        g_song_browser_position %= entry_total;
+        const SongBrowserEntry& current =
+            g_song_entries[g_song_browser_position];
+        selection_is_exit = current.exit_category;
+        match_position = current.song_position;
+        if (!selection_is_exit) selection = current.catalog_index;
+
+        row_count = std::min<unsigned>(TAIKO_OVERLAY_SONG_ROW_COUNT,
+                                       entry_total);
+        unsigned first = g_song_browser_position > row_count / 2
+            ? g_song_browser_position - row_count / 2 : 0;
+        if (first + row_count > entry_total) first = entry_total - row_count;
+        for (unsigned row = 0; row < row_count; ++row) {
+            const SongBrowserEntry& entry = g_song_entries[first + row];
+            if (entry.exit_category) {
+                row_titles[row] = "BACK TO CATEGORIES";
+                row_genres[row] = browser_category;
+                rows[row].title = row_titles[row].c_str();
+                rows[row].genre = row_genres[row].c_str();
+                rows[row].catalog_index = entry.song_position / 10 + 1;
+                rows[row].selected =
+                    first + row == g_song_browser_position;
+                rows[row].kind = TAIKO_OVERLAY_ROW_EXIT;
+                continue;
+            }
+            const unsigned catalog_index = entry.catalog_index;
+            const TaikoCatalogSong* visible =
+                taiko_catalog_song(catalog_index);
+            if (!visible) continue;
+            row_titles[row] = visible->title;
+            row_genres[row] = taiko_catalog_genre_name(visible->genre);
+            rows[row].title = row_titles[row].c_str();
+            rows[row].genre = row_genres[row].c_str();
+            rows[row].catalog_index = entry.song_position;
+            rows[row].selected = first + row == g_song_browser_position;
+            rows[row].kind = TAIKO_OVERLAY_ROW_SONG;
+        }
+    }
+
+    if (selection_is_exit) {
+        taiko_overlay_show_song_browser(
+            g_session_label, "", "BACK TO CATEGORIES",
+            browser_category.c_str(), 0, match_position,
+            match_total, static_cast<unsigned>(count),
+            browser_category.c_str(), browser_category_index,
+            browser_category_total, "", 0,
+            query.c_str(),
+            g_song_search_active.load(std::memory_order_acquire),
+            TAIKO_OVERLAY_BROWSER_SONGS, 1, rows.data(), row_count);
+        return;
+    }
+
     const TaikoCatalogSong* song = taiko_catalog_song(selection);
     if (!song) return;
     unsigned difficulty = g_song_difficulty.load(std::memory_order_acquire);
@@ -163,18 +447,177 @@ void show_current_song()
     g_song_difficulty.store(difficulty, std::memory_order_release);
     taiko_overlay_show_song_browser(
         g_session_label, song->music_id.c_str(), song->title.c_str(),
-        song->genre.c_str(), song->unique_id, selection,
-        static_cast<unsigned>(count),
-        taiko_catalog_difficulty_name(difficulty));
+        taiko_catalog_genre_name(song->genre), song->unique_id, match_position,
+        match_total, static_cast<unsigned>(count),
+        browser_category.c_str(), browser_category_index,
+        browser_category_total,
+        taiko_catalog_difficulty_name(difficulty), song->difficulty_mask,
+        query.c_str(),
+        g_song_search_active.load(std::memory_order_acquire),
+        TAIKO_OVERLAY_BROWSER_SONGS, 0, rows.data(), row_count);
 }
 
 void enter_song_select_shell()
 {
     g_song_launch_requested.store(false, std::memory_order_release);
-    g_song_selection.store(0, std::memory_order_release);
-    g_song_difficulty.store(TAIKO_DIFFICULTY_ONI, std::memory_order_release);
     (void)taiko_catalog_load();
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        g_song_query.clear();
+        g_song_browser_level = SongBrowserLevel::Categories;
+        g_song_global_search = false;
+        g_song_browser_position = 0;
+    }
+    g_song_search_active.store(false, std::memory_order_release);
     show_current_song();
+}
+
+void change_song_category(int direction)
+{
+    const unsigned count = static_cast<unsigned>(kSongCategories.size());
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level != SongBrowserLevel::Categories) return;
+        int next = static_cast<int>(g_song_category) + direction;
+        next %= static_cast<int>(count);
+        if (next < 0) next += static_cast<int>(count);
+        g_song_category = static_cast<unsigned>(next);
+    }
+    show_current_song();
+}
+
+void move_song_selection(int delta)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level == SongBrowserLevel::Categories) {
+            const int count = static_cast<int>(kSongCategories.size());
+            int next = static_cast<int>(g_song_category) + delta;
+            next %= count;
+            if (next < 0) next += count;
+            g_song_category = static_cast<unsigned>(next);
+        } else {
+            const int count = static_cast<int>(g_song_entries.size());
+            if (!count) return;
+            int next = static_cast<int>(g_song_browser_position) + delta;
+            next %= count;
+            if (next < 0) next += count;
+            g_song_browser_position = static_cast<unsigned>(next);
+        }
+    }
+    show_current_song();
+}
+
+void select_song_endpoint(bool last)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level == SongBrowserLevel::Categories) {
+            g_song_category = last
+                ? static_cast<unsigned>(kSongCategories.size() - 1) : 0;
+        } else {
+            if (g_song_entries.empty()) return;
+            g_song_browser_position = last
+                ? static_cast<unsigned>(g_song_entries.size() - 1) : 0;
+        }
+    }
+    show_current_song();
+}
+
+void select_random_song()
+{
+    uint32_t state = g_random_state.load(std::memory_order_relaxed);
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    g_random_state.store(state, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level != SongBrowserLevel::Songs ||
+            g_song_matches.empty()) return;
+        const unsigned catalog_index = g_song_matches[
+            state % static_cast<unsigned>(g_song_matches.size())];
+        const auto entry = std::find_if(
+            g_song_entries.begin(), g_song_entries.end(),
+            [catalog_index](const SongBrowserEntry& candidate) {
+                return !candidate.exit_category &&
+                       candidate.catalog_index == catalog_index;
+            });
+        if (entry != g_song_entries.end())
+            g_song_browser_position = static_cast<unsigned>(
+                entry - g_song_entries.begin());
+    }
+    show_current_song();
+}
+
+void change_song_difficulty(int direction)
+{
+    unsigned selection = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level != SongBrowserLevel::Songs ||
+            g_song_entries.empty() ||
+            g_song_entries[g_song_browser_position].exit_category)
+            return;
+        selection = g_song_entries[g_song_browser_position].catalog_index;
+    }
+    const TaikoCatalogSong* song = taiko_catalog_song(selection);
+    if (!song) return;
+    const unsigned current =
+        g_song_difficulty.load(std::memory_order_relaxed);
+    g_song_difficulty.store(cycle_difficulty(*song, current, direction),
+                            std::memory_order_release);
+    show_current_song();
+}
+
+void request_song_launch()
+{
+    unsigned selection = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level != SongBrowserLevel::Songs ||
+            g_song_entries.empty() ||
+            g_song_entries[g_song_browser_position].exit_category)
+            return;
+        selection = g_song_entries[g_song_browser_position].catalog_index;
+    }
+    const TaikoCatalogSong* song = taiko_catalog_song(selection);
+    if (!song || g_song_launch_requested.exchange(
+                     true, std::memory_order_acq_rel))
+        return;
+    std::fprintf(stderr,
+                 "[taiko_frontend] launch requested id=%s difficulty=%u\n",
+                 song->music_id.c_str(),
+                 g_song_difficulty.load(std::memory_order_relaxed));
+    show_current_song();
+}
+
+void activate_browser_selection()
+{
+    bool launch_song = false;
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level == SongBrowserLevel::Categories) {
+            g_song_browser_level = SongBrowserLevel::Songs;
+            g_song_global_search = false;
+            g_song_query.clear();
+            rebuild_song_matches_locked(
+                g_song_selection.load(std::memory_order_acquire));
+            g_song_search_active.store(false, std::memory_order_release);
+        } else if (!g_song_entries.empty() &&
+                   g_song_entries[g_song_browser_position].exit_category) {
+            g_song_browser_level = SongBrowserLevel::Categories;
+            g_song_global_search = false;
+            g_song_query.clear();
+            g_song_search_active.store(false, std::memory_order_release);
+        } else {
+            launch_song = true;
+        }
+    }
+    if (launch_song)
+        request_song_launch();
+    else
+        show_current_song();
 }
 
 void handle_rising(unsigned player, uint32_t rising)
@@ -185,30 +628,19 @@ void handle_rising(unsigned player, uint32_t rising)
         if (g_song_launch_requested.load(std::memory_order_acquire)) return;
         const std::size_t count = taiko_catalog_count();
         if (!count) return;
-        unsigned selection = g_song_selection.load(std::memory_order_relaxed);
-        if (rising & (TAIKO_ACTION_HIT_SL | TAIKO_ACTION_UP))
-            selection = selection ? selection - 1 :
-                        static_cast<unsigned>(count - 1);
-        else if (rising & (TAIKO_ACTION_HIT_SR | TAIKO_ACTION_DOWN))
-            selection = (selection + 1) % static_cast<unsigned>(count);
-        g_song_selection.store(selection, std::memory_order_release);
+        if (rising & TAIKO_ACTION_UP)
+            move_song_selection(-TAIKO_OVERLAY_SONG_ROW_COUNT + 1);
+        else if (rising & TAIKO_ACTION_DOWN)
+            move_song_selection(TAIKO_OVERLAY_SONG_ROW_COUNT - 1);
+        else if (rising & TAIKO_ACTION_HIT_SL)
+            move_song_selection(-1);
+        else if (rising & TAIKO_ACTION_HIT_SR)
+            move_song_selection(1);
 
-        const TaikoCatalogSong* song = taiko_catalog_song(selection);
-        if (song && (rising & TAIKO_ACTION_HIT_CL)) {
-            const unsigned current =
-                g_song_difficulty.load(std::memory_order_relaxed);
-            g_song_difficulty.store(
-                cycle_difficulty(*song, current, -1),
-                std::memory_order_release);
-        } else if (song && (rising & TAIKO_ACTION_HIT_CR)) {
-            g_song_launch_requested.store(true, std::memory_order_release);
-            std::fprintf(stderr,
-                         "[taiko_frontend] launch requested id=%s "
-                         "difficulty=%u\n",
-                         song->music_id.c_str(),
-                         g_song_difficulty.load(std::memory_order_relaxed));
-        }
-        show_current_song();
+        if (rising & TAIKO_ACTION_HIT_CL)
+            change_song_difficulty(-1);
+        else if (rising & (TAIKO_ACTION_HIT_CR | TAIKO_ACTION_ENTER))
+            activate_browser_selection();
         return;
     }
     if (phase != Phase::LoginMenu) return;
@@ -414,6 +846,149 @@ extern "C" uint32_t taiko_frontend_filter_levels(unsigned player,
     if (!frontend_owns_input()) return levels;
     handle_rising(player, levels & ~previous);
     return 0;
+}
+
+extern "C" int taiko_frontend_browser_command(unsigned command)
+{
+    if (g_phase.load(std::memory_order_acquire) != Phase::SongSelect ||
+        g_song_launch_requested.load(std::memory_order_acquire))
+        return 0;
+
+    switch (command) {
+    case TAIKO_BROWSER_SEARCH_TOGGLE: {
+        bool start_global_search = false;
+        {
+            std::lock_guard<std::mutex> lock(g_song_browser_lock);
+            if (g_song_browser_level == SongBrowserLevel::Categories) {
+                g_song_browser_level = SongBrowserLevel::Songs;
+                g_song_global_search = true;
+                g_song_query.clear();
+                rebuild_song_matches_locked(
+                    g_song_selection.load(std::memory_order_acquire));
+                start_global_search = true;
+            }
+        }
+        g_song_search_active.store(
+            start_global_search ||
+                !g_song_search_active.load(std::memory_order_relaxed),
+            std::memory_order_release);
+        show_current_song();
+        break;
+    }
+    case TAIKO_BROWSER_SEARCH_CLEAR: {
+        const unsigned selected =
+            g_song_selection.load(std::memory_order_acquire);
+        {
+            std::lock_guard<std::mutex> lock(g_song_browser_lock);
+            if (g_song_browser_level == SongBrowserLevel::Categories)
+                return 0;
+            if (g_song_search_active.load(std::memory_order_relaxed) ||
+                !g_song_query.empty()) {
+                g_song_query.clear();
+                rebuild_song_matches_locked(selected);
+            } else {
+                g_song_browser_level = SongBrowserLevel::Categories;
+                g_song_global_search = false;
+            }
+        }
+        g_song_search_active.store(false, std::memory_order_release);
+        show_current_song();
+        break;
+    }
+    case TAIKO_BROWSER_SEARCH_BACKSPACE: {
+        if (!g_song_search_active.load(std::memory_order_acquire)) return 0;
+        const unsigned selected =
+            g_song_selection.load(std::memory_order_acquire);
+        {
+            std::lock_guard<std::mutex> lock(g_song_browser_lock);
+            if (!g_song_query.empty()) {
+                std::size_t start = g_song_query.size() - 1;
+                while (start > 0 &&
+                       (static_cast<unsigned char>(g_song_query[start]) &
+                        0xC0u) == 0x80u)
+                    --start;
+                g_song_query.erase(start);
+            }
+            rebuild_song_matches_locked(selected);
+        }
+        show_current_song();
+        break;
+    }
+    case TAIKO_BROWSER_PREVIOUS:
+        move_song_selection(-1);
+        break;
+    case TAIKO_BROWSER_NEXT:
+        move_song_selection(1);
+        break;
+    case TAIKO_BROWSER_PREVIOUS_PAGE:
+        move_song_selection(-TAIKO_OVERLAY_SONG_ROW_COUNT + 1);
+        break;
+    case TAIKO_BROWSER_NEXT_PAGE:
+        move_song_selection(TAIKO_OVERLAY_SONG_ROW_COUNT - 1);
+        break;
+    case TAIKO_BROWSER_FIRST:
+        select_song_endpoint(false);
+        break;
+    case TAIKO_BROWSER_LAST:
+        select_song_endpoint(true);
+        break;
+    case TAIKO_BROWSER_RANDOM:
+        select_random_song();
+        break;
+    case TAIKO_BROWSER_CATEGORY_PREVIOUS:
+        change_song_category(-1);
+        break;
+    case TAIKO_BROWSER_CATEGORY_NEXT:
+        change_song_category(1);
+        break;
+    case TAIKO_BROWSER_DIFFICULTY_PREVIOUS:
+        change_song_difficulty(-1);
+        break;
+    case TAIKO_BROWSER_DIFFICULTY_NEXT:
+        change_song_difficulty(1);
+        break;
+    case TAIKO_BROWSER_PLAY:
+        if (g_song_search_active.exchange(false, std::memory_order_acq_rel))
+            show_current_song();
+        else
+            activate_browser_selection();
+        break;
+    default:
+        return 0;
+    }
+    return 1;
+}
+
+extern "C" int taiko_frontend_browser_text(const char* text)
+{
+    if (!text || !text[0] ||
+        g_phase.load(std::memory_order_acquire) != Phase::SongSelect ||
+        !g_song_search_active.load(std::memory_order_acquire) ||
+        g_song_launch_requested.load(std::memory_order_acquire))
+        return 0;
+
+    const unsigned selected =
+        g_song_selection.load(std::memory_order_acquire);
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if (g_song_browser_level != SongBrowserLevel::Songs) return 0;
+        constexpr std::size_t maximum_query_bytes = 120;
+        const std::string_view incoming(text);
+        if (g_song_query.size() + incoming.size() <= maximum_query_bytes)
+            g_song_query.append(incoming);
+        rebuild_song_matches_locked(selected);
+    }
+    show_current_song();
+    return 1;
+}
+
+extern "C" int taiko_frontend_browser_captures_text(void)
+{
+    std::lock_guard<std::mutex> lock(g_song_browser_lock);
+    return g_phase.load(std::memory_order_acquire) == Phase::SongSelect &&
+           g_song_browser_level == SongBrowserLevel::Songs &&
+           g_song_search_active.load(std::memory_order_acquire) &&
+           !g_song_launch_requested.load(std::memory_order_acquire);
 }
 
 extern "C" void taiko_frontend_guest_tick(ppu_context* ctx)

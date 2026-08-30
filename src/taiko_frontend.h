@@ -25,6 +25,34 @@ uint32_t taiko_frontend_filter_levels(unsigned player, uint32_t levels,
                                       uint64_t timestamp_ns)
     TAIKO_FRONTEND_OPTIONAL;
 
+/* Desktop/kiosk browser controls which do not map cleanly to cabinet USIO.
+ * These remain host-only and are accepted only while the Song Select shell
+ * owns the screen. */
+enum taiko_frontend_browser_command {
+    TAIKO_BROWSER_SEARCH_TOGGLE = 1,
+    TAIKO_BROWSER_SEARCH_CLEAR,
+    TAIKO_BROWSER_SEARCH_BACKSPACE,
+    TAIKO_BROWSER_PREVIOUS,
+    TAIKO_BROWSER_NEXT,
+    TAIKO_BROWSER_PREVIOUS_PAGE,
+    TAIKO_BROWSER_NEXT_PAGE,
+    TAIKO_BROWSER_FIRST,
+    TAIKO_BROWSER_LAST,
+    TAIKO_BROWSER_RANDOM,
+    TAIKO_BROWSER_CATEGORY_PREVIOUS,
+    TAIKO_BROWSER_CATEGORY_NEXT,
+    TAIKO_BROWSER_DIFFICULTY_PREVIOUS,
+    TAIKO_BROWSER_DIFFICULTY_NEXT,
+    TAIKO_BROWSER_PLAY,
+};
+
+int taiko_frontend_browser_command(unsigned command)
+    TAIKO_FRONTEND_OPTIONAL;
+int taiko_frontend_browser_text(const char* text)
+    TAIKO_FRONTEND_OPTIONAL;
+int taiko_frontend_browser_captures_text(void)
+    TAIKO_FRONTEND_OPTIONAL;
+
 /* Called at the verified Player Entry dispatcher boundary on the main PPU
  * thread. Host/UI threads only enqueue intent; all guest calls happen here. */
 void taiko_frontend_guest_tick(struct ppu_context* ctx);

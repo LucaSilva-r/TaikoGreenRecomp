@@ -37,6 +37,9 @@ enum {
 
 static const uint32_t COLOR_TEXT = 0xFFFFFFFFu;      /* fill */
 static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
+#define RGB_COLOUR(red, green, blue) \
+    (0xFF000000u | ((uint32_t)(blue) << 16) | \
+     ((uint32_t)(green) << 8) | (uint32_t)(red))
 enum { TEXT_OUTLINE_RADIUS = 3 };
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -54,9 +57,27 @@ static char     g_song_id[32];
 static char     g_song_title[256];
 static char     g_song_genre[128];
 static char     g_song_difficulty[32];
+static char     g_song_query[128];
 static uint32_t g_song_unique_id;
 static unsigned g_song_index;
-static unsigned g_song_total;
+static unsigned g_song_match_total;
+static unsigned g_song_catalog_total;
+static char     g_song_category[64];
+static unsigned g_song_category_index;
+static unsigned g_song_category_total;
+static uint8_t  g_song_difficulty_mask;
+static int      g_song_search_active;
+static int      g_song_browser_level;
+static int      g_song_selection_is_exit;
+typedef struct song_row_storage {
+    char title[256];
+    char genre[128];
+    unsigned catalog_index;
+    int selected;
+    int kind;
+} song_row_storage;
+static song_row_storage g_song_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
+static unsigned g_song_row_count;
 static long     g_deadline;
 static int      g_drawn_remaining = -1;
 
@@ -310,6 +331,23 @@ static void draw_text_fit(const char* text, int preferred_pixels,
     draw_text_at(text, pixels, centre_x, centre_y);
 }
 
+static void draw_text_left_fit(const char* text, int preferred_pixels,
+                               int maximum_width, int left, int centre_y)
+{
+    int pixels = preferred_pixels;
+    while (pixels > 15 && text_width(text, pixels) > maximum_width)
+        pixels -= 2;
+    draw_text_at(text, pixels, left + text_width(text, pixels) / 2,
+                 centre_y);
+}
+
+static void draw_text_right(const char* text, int pixels, int right,
+                            int centre_y)
+{
+    draw_text_at(text, pixels, right - text_width(text, pixels) / 2,
+                 centre_y);
+}
+
 static void fill_rect(int left, int top, int right, int bottom, uint32_t colour)
 {
     if (left < 0) left = 0;
@@ -319,6 +357,46 @@ static void fill_rect(int left, int top, int right, int bottom, uint32_t colour)
     for (int y = top; y < bottom; ++y)
         for (int x = left; x < right; ++x)
             g_pixels[(size_t)y * g_width + x] = colour;
+}
+
+static void fill_rounded_rect(int left, int top, int right, int bottom,
+                              int radius, uint32_t colour)
+{
+    if (radius <= 0) {
+        fill_rect(left, top, right, bottom, colour);
+        return;
+    }
+    fill_rect(left + radius, top, right - radius, bottom, colour);
+    fill_rect(left, top + radius, right, bottom - radius, colour);
+    const int radius_squared = radius * radius;
+    for (int y = 0; y < radius; ++y) {
+        for (int x = 0; x < radius; ++x) {
+            const int dx = radius - x - 1;
+            const int dy = radius - y - 1;
+            if (dx * dx + dy * dy > radius_squared) continue;
+            put_pixel(left + x, top + y, colour, 255);
+            put_pixel(right - x - 1, top + y, colour, 255);
+            put_pixel(left + x, bottom - y - 1, colour, 255);
+            put_pixel(right - x - 1, bottom - y - 1, colour, 255);
+        }
+    }
+}
+
+static uint32_t genre_colour(const char* genre)
+{
+    static const uint32_t palette[] = {
+        RGB_COLOUR(0xF0, 0x6A, 0x9B), RGB_COLOUR(0x6B, 0xC6, 0xE8),
+        RGB_COLOUR(0x9B, 0x7B, 0xE8), RGB_COLOUR(0x62, 0xC7, 0xA5),
+        RGB_COLOUR(0xF2, 0x9D, 0x50), RGB_COLOUR(0xDF, 0x6B, 0x6B),
+        RGB_COLOUR(0x78, 0xA7, 0xF2),
+    };
+    uint32_t hash = 2166136261u;
+    for (const unsigned char* cursor = (const unsigned char*)genre;
+         cursor && *cursor; ++cursor) {
+        hash ^= *cursor;
+        hash *= 16777619u;
+    }
+    return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
 }
 
 static void render_host(void)
@@ -378,35 +456,188 @@ static void render_host(void)
         return;
     }
 
-    draw_text_at("SONG SELECT", 60, HOST_WIDTH / 2, 82);
-    if (!g_song_total) {
-        draw_text_at("CATALOG UNAVAILABLE", 46, HOST_WIDTH / 2, 350);
-        draw_text_at("CHECK PS3_VFS_ROOT AND MUSICINFO.XML", 28,
-                     HOST_WIDTH / 2, 430);
+    /* Song Select borrows osu!lazer's high-level composition: persistent
+     * details on the left, search above a dense right-side carousel, and the
+     * selected card pulled toward the centre. It stays deliberately static --
+     * this surface is CPU-rasterized only when input changes. */
+    fill_rect(0, 0, g_width, g_height, RGB_COLOUR(0x10, 0x18, 0x25));
+    fill_rect(0, 0, 570, 660, RGB_COLOUR(0x19, 0x28, 0x3A));
+    fill_rect(570, 0, g_width, 660, RGB_COLOUR(0x11, 0x1B, 0x29));
+    fill_rect(0, 0, 570, 7, RGB_COLOUR(0xF0, 0x6A, 0x9B));
+    fill_rect(570, 0, g_width, 7, RGB_COLOUR(0x6B, 0xC6, 0xE8));
+    for (int y = 0; y < 660; y += 80)
+        fill_rect(570, y, g_width, y + 1, RGB_COLOUR(0x1D, 0x2A, 0x3A));
+
+    draw_text_left_fit(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
+                           ? "CATEGORY SELECT" : "SONG SELECT",
+                       39, 440, 34, 49);
+    draw_text_left_fit("TAIKO GREEN / HOST LIBRARY", 17, 480, 35, 82);
+    char category[112];
+    if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES)
+        snprintf(category, sizeof(category), "CHOOSE A GENRE FOLDER");
+    else if (!g_song_category_total)
+        snprintf(category, sizeof(category), "[ SEARCH RESULTS ]");
+    else
+        snprintf(category, sizeof(category), "[ %s ]  FOLDER %u/%u",
+                 g_song_category[0] ? g_song_category : "SONGS",
+                 g_song_category_index + 1, g_song_category_total);
+    draw_text_left_fit(category, 17, 370, 35, 108);
+    draw_text_right(g_player_name, 13, 535, 108);
+
+    fill_rounded_rect(625, 24, 1248, 91, 12,
+                      g_song_search_active
+                          ? RGB_COLOUR(0x35, 0x5D, 0x78)
+                          : RGB_COLOUR(0x25, 0x37, 0x4A));
+    fill_rect(625, 87, 1248, 91,
+              g_song_search_active
+                  ? RGB_COLOUR(0xF0, 0x6A, 0x9B)
+                  : RGB_COLOUR(0x6B, 0xC6, 0xE8));
+    char search[192];
+    if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES)
+        snprintf(search, sizeof(search),
+                 "TAB / CTRL+F  SEARCH ALL SONGS");
+    else if (g_song_query[0])
+        snprintf(search, sizeof(search), "SEARCH: %s%s", g_song_query,
+                 g_song_search_active ? "_" : "");
+    else
+        snprintf(search, sizeof(search), "%s",
+                 g_song_search_active ? "TYPE TO FILTER..._"
+                                      : "TAB / CTRL+F TO SEARCH");
+    draw_text_left_fit(search, 23, 390, 648, 56);
+    char result_count[80];
+    if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES)
+        snprintf(result_count, sizeof(result_count), "%u CATEGORIES",
+                 g_song_match_total);
+    else
+        snprintf(result_count, sizeof(result_count), "%u SONGS",
+                 g_song_match_total);
+    draw_text_right(result_count, 18, 1224, 58);
+
+    if (!g_song_catalog_total) {
+        draw_text_at("CATALOG UNAVAILABLE", 42, 900, 320);
+        draw_text_at("CHECK PS3_VFS_ROOT AND MUSICINFO.XML", 23, 900, 375);
         return;
     }
 
-    char counter[64];
-    snprintf(counter, sizeof(counter), "%u / %u", g_song_index + 1,
-             g_song_total);
-    draw_text_at(counter, 27, 1120, 205);
-    draw_text_fit(g_song_genre, 30, 900, HOST_WIDTH / 2, 205);
+    if (!g_song_match_total &&
+        g_song_browser_level == TAIKO_OVERLAY_BROWSER_SONGS) {
+        draw_text_at("NO MATCHES", 43, 910, 313);
+        draw_text_at("BACKSPACE TO EDIT OR ESC TO CLEAR", 22, 910, 369);
+    } else {
+        fill_rounded_rect(28, 125, 537, 379, 14,
+                          RGB_COLOUR(0x23, 0x37, 0x4B));
+        fill_rect(28, 125, 36, 379,
+                  genre_colour(g_song_browser_level ==
+                                       TAIKO_OVERLAY_BROWSER_CATEGORIES
+                                   ? g_song_title : g_song_genre));
+        if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES) {
+            draw_text_left_fit(g_song_title, 47, 445, 57, 205);
+            char folder_count[80];
+            snprintf(folder_count, sizeof(folder_count), "%u SONGS",
+                     g_song_unique_id);
+            draw_text_left_fit(folder_count, 26, 450, 57, 292);
+            draw_text_left_fit("ENTER OR RIGHT CENTRE  OPEN", 19, 490,
+                               34, 455);
+            draw_text_left_fit("RIM / WHEEL  CHOOSE CATEGORY", 17, 490,
+                               34, 495);
+        } else if (g_song_selection_is_exit) {
+            draw_text_left_fit(g_song_genre, 21, 450, 57, 160);
+            draw_text_left_fit("BACK TO CATEGORIES", 39, 445, 57, 225);
+            draw_text_left_fit("RETURN TO THE FOLDER LIST", 21, 450,
+                               57, 303);
+            draw_text_left_fit("ENTER OR RIGHT CENTRE  EXIT", 19, 490,
+                               34, 455);
+        } else {
+            draw_text_left_fit(g_song_genre[0] ? g_song_genre : "OTHER", 21,
+                               450, 57, 160);
+            draw_text_left_fit(g_song_title, 41, 445, 57, 225);
 
-    fill_rect(110, 245, 1170, 485, 0xFF3A3024u);
-    draw_text_fit(g_song_title, 52, 980, HOST_WIDTH / 2, 335);
-    char identity[160];
-    snprintf(identity, sizeof(identity), "MUSIC ID: %s     UNIQUE ID: %u",
-             g_song_id, g_song_unique_id);
-    draw_text_fit(identity, 25, 980, HOST_WIDTH / 2, 430);
+            char identity[160];
+            snprintf(identity, sizeof(identity), "ID  %s     UNIQUE  %u",
+                     g_song_id, g_song_unique_id);
+            draw_text_left_fit(identity, 19, 450, 57, 303);
+            char position[80];
+            snprintf(position, sizeof(position), "SONG %u OF %u",
+                     g_song_index + 1, g_song_match_total);
+            draw_text_left_fit(position, 19, 450, 57, 345);
 
-    char difficulty[96];
-    snprintf(difficulty, sizeof(difficulty), "DIFFICULTY: %s",
-             g_song_difficulty);
-    draw_text_at(difficulty, 36, HOST_WIDTH / 2, 535);
-    draw_text_at("RIM: SONG     LEFT CENTRE: DIFFICULTY     RIGHT CENTRE: PLAY",
-                 23, HOST_WIDTH / 2, 620);
-    draw_text_at("SELECTION IS COMMITTED THROUGH THE NATIVE GAME MANAGER",
-                 20, HOST_WIDTH / 2, 675);
+            draw_text_left_fit("DIFFICULTY", 21, 460, 34, 420);
+            static const char* difficulty_names[] = {
+                "EASY", "NORMAL", "HARD", "ONI", "URA"
+            };
+            for (unsigned difficulty = 0; difficulty < 5; ++difficulty) {
+                const int left = 28 + (int)difficulty * 102;
+                const int available =
+                    (g_song_difficulty_mask & (1u << difficulty)) != 0;
+                const int selected = strcmp(
+                    g_song_difficulty, difficulty_names[difficulty]) == 0;
+                const uint32_t colour = !available
+                    ? RGB_COLOUR(0x20, 0x2A, 0x36)
+                    : selected ? RGB_COLOUR(0xE6, 0x5B, 0x91)
+                               : RGB_COLOUR(0x34, 0x4A, 0x60);
+                fill_rounded_rect(left, 446, left + 92, 493, 9, colour);
+                draw_text_at(difficulty_names[difficulty], 16,
+                             left + 46, 469);
+            }
+
+            draw_text_left_fit("LEFT / RIGHT  CHANGE DIFFICULTY", 17, 490,
+                               34, 530);
+            draw_text_left_fit("ENTER OR RIGHT CENTRE  PLAY", 19, 490,
+                               34, 565);
+            draw_text_left_fit("R  RANDOM SONG", 17, 490, 34, 600);
+        }
+
+        const int first_y = 111;
+        const int row_step = 59;
+        for (unsigned row = 0; row < g_song_row_count; ++row) {
+            const song_row_storage* item = &g_song_rows[row];
+            const int top = first_y + (int)row * row_step;
+            const int left = item->selected ? 594 : 628;
+            const uint32_t colour = item->kind == TAIKO_OVERLAY_ROW_EXIT
+                ? (item->selected ? RGB_COLOUR(0xD8, 0x58, 0x70)
+                                  : RGB_COLOUR(0x4B, 0x2A, 0x38))
+                : item->selected ? genre_colour(item->genre)
+                                 : RGB_COLOUR(0x29, 0x3A, 0x4D);
+            fill_rounded_rect(left, top, 1252, top + 53, 10, colour);
+            if (!item->selected)
+                fill_rect(left, top, left + 5, top + 53,
+                          genre_colour(item->genre));
+            if (item->kind == TAIKO_OVERLAY_ROW_CATEGORY) {
+                draw_text_left_fit(item->title, item->selected ? 28 : 25,
+                                   item->selected ? 470 : 450,
+                                   left + 18, top + 27);
+            } else {
+                draw_text_left_fit(item->title, item->selected ? 22 : 19,
+                                   item->selected ? 470 : 450,
+                                   left + 18, top + 19);
+                draw_text_left_fit(
+                    item->kind == TAIKO_OVERLAY_ROW_EXIT
+                        ? "RETURN TO THE CATEGORY LIST" : item->genre,
+                    15, 350, left + 19, top + 40);
+            }
+            char number[24];
+            if (item->kind == TAIKO_OVERLAY_ROW_CATEGORY)
+                snprintf(number, sizeof(number), "%u SONGS",
+                         item->catalog_index);
+            else if (item->kind == TAIKO_OVERLAY_ROW_EXIT)
+                snprintf(number, sizeof(number), "EXIT");
+            else
+                snprintf(number, sizeof(number), "%03u",
+                         item->catalog_index + 1);
+            draw_text_right(number, 17, 1231, top + 27);
+        }
+    }
+
+    fill_rect(0, 660, g_width, g_height, RGB_COLOUR(0x0B, 0x11, 0x1B));
+    draw_text_left_fit("RIM / WHEEL  BROWSE", 18, 290, 30, 690);
+    draw_text_at(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
+                     ? "ENTER  OPEN FOLDER"
+                     : "UP/DOWN  BROWSE     PAGEUP/DOWN  SKIP",
+                 16, 655, 690);
+    draw_text_right(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
+                        ? "9 ORIGINAL CATEGORIES"
+                        : "ESC  BACK / CLEAR FILTER",
+                    17, 1245, 690);
 }
 
 static void render(int remaining)
@@ -522,7 +753,16 @@ void taiko_overlay_show_song_select(const char* player_name)
     pthread_mutex_lock(&g_lock);
     snprintf(g_player_name, sizeof(g_player_name), "%s",
              player_name && player_name[0] ? player_name : "P1");
-    g_song_total = 0;
+    g_song_match_total = 0;
+    g_song_catalog_total = 0;
+    snprintf(g_song_category, sizeof(g_song_category), "ALL SONGS");
+    g_song_category_index = 0;
+    g_song_category_total = 1;
+    g_song_row_count = 0;
+    g_song_query[0] = '\0';
+    g_song_search_active = 0;
+    g_song_browser_level = TAIKO_OVERLAY_BROWSER_CATEGORIES;
+    g_song_selection_is_exit = 0;
     g_mode = 5;
     g_visible = 1;
     g_deadline = 0;
@@ -537,8 +777,19 @@ void taiko_overlay_show_song_browser(const char* player_name,
                                      const char* genre,
                                      uint32_t unique_id,
                                      unsigned index,
-                                     unsigned total,
-                                     const char* difficulty)
+                                     unsigned match_total,
+                                     unsigned catalog_total,
+                                     const char* category,
+                                     unsigned category_index,
+                                     unsigned category_total,
+                                     const char* difficulty,
+                                     uint8_t difficulty_mask,
+                                     const char* query,
+                                     int search_active,
+                                     int browser_level,
+                                     int selection_is_exit,
+                                     const taiko_overlay_song_row* rows,
+                                     unsigned row_count)
 {
     pthread_mutex_lock(&g_lock);
     snprintf(g_player_name, sizeof(g_player_name), "%s",
@@ -550,7 +801,29 @@ void taiko_overlay_show_song_browser(const char* player_name,
              difficulty ? difficulty : "?");
     g_song_unique_id = unique_id;
     g_song_index = index;
-    g_song_total = total;
+    g_song_match_total = match_total;
+    g_song_catalog_total = catalog_total;
+    snprintf(g_song_category, sizeof(g_song_category), "%s",
+             category ? category : "ALL SONGS");
+    g_song_category_index = category_index;
+    g_song_category_total = category_total;
+    g_song_difficulty_mask = difficulty_mask;
+    snprintf(g_song_query, sizeof(g_song_query), "%s", query ? query : "");
+    g_song_search_active = search_active != 0;
+    g_song_browser_level = browser_level;
+    g_song_selection_is_exit = selection_is_exit != 0;
+    g_song_row_count = row_count < TAIKO_OVERLAY_SONG_ROW_COUNT
+        ? row_count : TAIKO_OVERLAY_SONG_ROW_COUNT;
+    for (unsigned row = 0; row < g_song_row_count; ++row) {
+        snprintf(g_song_rows[row].title, sizeof(g_song_rows[row].title), "%s",
+                 rows && rows[row].title ? rows[row].title : "");
+        snprintf(g_song_rows[row].genre, sizeof(g_song_rows[row].genre), "%s",
+                 rows && rows[row].genre ? rows[row].genre : "");
+        g_song_rows[row].catalog_index = rows ? rows[row].catalog_index : 0;
+        g_song_rows[row].selected = rows && rows[row].selected;
+        g_song_rows[row].kind = rows ? rows[row].kind
+                                    : TAIKO_OVERLAY_ROW_SONG;
+    }
     g_mode = 5;
     g_visible = 1;
     g_deadline = 0;

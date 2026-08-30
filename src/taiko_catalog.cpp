@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <unordered_map>
 #include <string_view>
 #include <vector>
 
@@ -93,6 +94,30 @@ uint8_t chart_mask(const std::filesystem::path& fumen_root,
     return mask;
 }
 
+std::unordered_map<std::string, std::string> load_title_overrides()
+{
+    const char* configured = std::getenv("TAIKO_SONG_TITLES");
+    const std::filesystem::path path = configured && configured[0]
+        ? configured : "config/song_titles_en.tsv";
+    std::ifstream stream(path);
+    std::unordered_map<std::string, std::string> overrides;
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        const std::size_t separator = line.find('\t');
+        if (separator == std::string::npos || separator == 0 ||
+            separator + 1 >= line.size())
+            continue;
+        overrides[line.substr(0, separator)] = line.substr(separator + 1);
+    }
+    if (!overrides.empty())
+        std::fprintf(stderr,
+                     "[taiko_catalog] loaded %zu English title overrides "
+                     "from %s\n", overrides.size(), path.string().c_str());
+    return overrides;
+}
+
 void load_once()
 {
     const char* configured_root = std::getenv("PS3_VFS_ROOT");
@@ -113,6 +138,7 @@ void load_once()
     }
 
     const std::filesystem::path fumen_root = root / "data/fumen";
+    const auto title_overrides = load_title_overrides();
     std::size_t position = 0;
     std::size_t metadata_count = 0;
     while ((position = xml.find("<Data", position)) != std::string::npos) {
@@ -129,10 +155,14 @@ void load_once()
         ++metadata_count;
         song.difficulty_mask = chart_mask(fumen_root, song.music_id);
         if (!song.difficulty_mask) continue;
-        song.title = tag_value(block, "musicname");
+        song.original_title = tag_value(block, "musicname");
+        song.title = song.original_title;
         song.genre = tag_value(block, "genrename");
         song.unique_id = parse_uint(tag_value(block, "uniqueid"));
         if (song.title.empty()) song.title = song.music_id;
+        const auto translated = title_overrides.find(song.music_id);
+        if (translated != title_overrides.end() && !translated->second.empty())
+            song.title = translated->second;
         g_songs.emplace_back(std::move(song));
     }
 
@@ -168,4 +198,18 @@ const char* taiko_catalog_difficulty_name(unsigned difficulty)
         "EASY", "NORMAL", "HARD", "ONI", "URA"
     };
     return difficulty < TAIKO_DIFFICULTY_COUNT ? names[difficulty] : "?";
+}
+
+const char* taiko_catalog_genre_name(const std::string& genre)
+{
+    if (genre == "J-POP") return "J-POP";
+    if (genre == "アニメ") return "ANIME";
+    if (genre == "ボーカロイド") return "VOCALOID";
+    if (genre == "バラエティ") return "VARIETY";
+    if (genre == "クラシック") return "CLASSICAL";
+    if (genre == "ゲームミュージック") return "GAME MUSIC";
+    if (genre == "ナムコオリジナル") return "NAMCO ORIGINAL";
+    if (genre == "メドレー") return "MEDLEY";
+    if (genre == "童謡") return "CHILDREN'S SONGS";
+    return genre.c_str();
 }

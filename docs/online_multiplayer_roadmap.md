@@ -136,6 +136,18 @@ song 2 reached `played=2 limit=2`, the arcade-limit/final-session branch was
 redirected through that same native operation and successfully launched a
 third `kr01` Oni. Both Results destinations are live-validated.
 
+Browser UX checkpoint (2026-08-30): the lightweight overlay now follows the
+osu!lazer Song Select composition with a nine-row carousel, persistent song
+and difficulty details, match counts, keyboard/mouse fast navigation, random
+selection, title/genre/music-ID text filtering, alphabetic sorting, and Green's
+nine genre folders. The folders are now a distinct first-level selection, and
+opened folders repeat a selectable return-to-categories row after every ten
+songs. Search launched from the folder screen spans the complete catalog;
+search launched inside a folder remains folder-scoped. FreeType-rendered titles
+accept optional music-ID-keyed English
+overrides without changing the native selection identity. The cabinet
+rim/centre path and the native Green commit transaction are unchanged.
+
 Completion gate: a host command can repeatedly start any installed stock song
 at the requested difficulty with the correct fumen and audio.
 

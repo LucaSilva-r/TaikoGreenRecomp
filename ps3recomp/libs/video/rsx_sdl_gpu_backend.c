@@ -141,6 +141,27 @@ extern int taiko_audio_offset_get_ms(void);
 extern void taiko_overlay_set_status(const char* text, int expires_in);
 extern int taiko_character_mode_get(void);
 extern int taiko_character_mode_cycle(void);
+extern int taiko_frontend_browser_command(unsigned command);
+extern int taiko_frontend_browser_text(const char* text);
+extern int taiko_frontend_browser_captures_text(void);
+
+enum {
+    TAIKO_BROWSER_SEARCH_TOGGLE = 1,
+    TAIKO_BROWSER_SEARCH_CLEAR,
+    TAIKO_BROWSER_SEARCH_BACKSPACE,
+    TAIKO_BROWSER_PREVIOUS,
+    TAIKO_BROWSER_NEXT,
+    TAIKO_BROWSER_PREVIOUS_PAGE,
+    TAIKO_BROWSER_NEXT_PAGE,
+    TAIKO_BROWSER_FIRST,
+    TAIKO_BROWSER_LAST,
+    TAIKO_BROWSER_RANDOM,
+    TAIKO_BROWSER_CATEGORY_PREVIOUS,
+    TAIKO_BROWSER_CATEGORY_NEXT,
+    TAIKO_BROWSER_DIFFICULTY_PREVIOUS,
+    TAIKO_BROWSER_DIFFICULTY_NEXT,
+    TAIKO_BROWSER_PLAY,
+};
 #endif
 
 enum {
@@ -2944,6 +2965,16 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
 }
 #endif
 
+#ifndef RSX_SDL_KMS_PRESENT
+/* The draw loop is shared with direct KMS and keeps the runtime branch even
+ * in windowed-only builds. The branch is always false there, but provide the
+ * companion predicate so MinGW does not depend on a KMS-only definition. */
+static int title_overlay_requires_gpu(void)
+{
+    return 0;
+}
+#endif
+
 static int present_display(SDL_GPUCommandBuffer* commands)
 {
 #ifdef RSX_SDL_KMS_PRESENT
@@ -3830,9 +3861,16 @@ static SDL_Scancode evdev_scancode(unsigned code)
     case KEY_F10: return SDL_SCANCODE_F10;
     case KEY_UP: return SDL_SCANCODE_UP;
     case KEY_DOWN: return SDL_SCANCODE_DOWN;
-#ifdef RSX_SDL_REPLAY_STANDALONE
     case KEY_LEFT: return SDL_SCANCODE_LEFT;
     case KEY_RIGHT: return SDL_SCANCODE_RIGHT;
+    case KEY_PAGEUP: return SDL_SCANCODE_PAGEUP;
+    case KEY_PAGEDOWN: return SDL_SCANCODE_PAGEDOWN;
+    case KEY_HOME: return SDL_SCANCODE_HOME;
+    case KEY_END: return SDL_SCANCODE_END;
+    case KEY_Q: return SDL_SCANCODE_Q;
+    case KEY_E: return SDL_SCANCODE_E;
+    case KEY_R: return SDL_SCANCODE_R;
+#ifdef RSX_SDL_REPLAY_STANDALONE
     case KEY_Y: return SDL_SCANCODE_Y;
     case KEY_N: return SDL_SCANCODE_N;
     case KEY_ESC: return SDL_SCANCODE_ESCAPE;
@@ -4001,6 +4039,43 @@ static void evdev_handle_key(unsigned keyboard,
         __atomic_fetch_or(&s_sdl.evdev_hotkeys, EVDEV_HOTKEY_AUDIO_SHOW,
                           __ATOMIC_RELEASE);
         return;
+    }
+    if (down) {
+        unsigned browser_command = 0;
+        switch (scancode) {
+        case SDL_SCANCODE_LEFT:
+            browser_command = TAIKO_BROWSER_DIFFICULTY_PREVIOUS;
+            break;
+        case SDL_SCANCODE_RIGHT:
+            browser_command = TAIKO_BROWSER_DIFFICULTY_NEXT;
+            break;
+        case SDL_SCANCODE_PAGEUP:
+            browser_command = TAIKO_BROWSER_PREVIOUS_PAGE;
+            break;
+        case SDL_SCANCODE_PAGEDOWN:
+            browser_command = TAIKO_BROWSER_NEXT_PAGE;
+            break;
+        case SDL_SCANCODE_HOME:
+            browser_command = TAIKO_BROWSER_FIRST;
+            break;
+        case SDL_SCANCODE_END:
+            browser_command = TAIKO_BROWSER_LAST;
+            break;
+        case SDL_SCANCODE_Q:
+            browser_command = TAIKO_BROWSER_CATEGORY_PREVIOUS;
+            break;
+        case SDL_SCANCODE_E:
+            browser_command = TAIKO_BROWSER_CATEGORY_NEXT;
+            break;
+        case SDL_SCANCODE_R:
+            browser_command = TAIKO_BROWSER_RANDOM;
+            break;
+        default:
+            break;
+        }
+        if (browser_command &&
+            taiko_frontend_browser_command(browser_command))
+            return;
     }
 #endif
     const unsigned action = keyboard_action(scancode);
@@ -4211,6 +4286,20 @@ static void handle_event(const SDL_Event* event)
         } else s_sdl.stopping = 1;
         return;
     }
+#ifndef RSX_SDL_REPLAY_STANDALONE
+    if (event->type == SDL_EVENT_TEXT_INPUT) {
+        if (taiko_frontend_browser_captures_text())
+            (void)taiko_frontend_browser_text(event->text.text);
+        return;
+    }
+    if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+        if (event->wheel.y > 0.0f)
+            (void)taiko_frontend_browser_command(TAIKO_BROWSER_PREVIOUS);
+        else if (event->wheel.y < 0.0f)
+            (void)taiko_frontend_browser_command(TAIKO_BROWSER_NEXT);
+        return;
+    }
+#endif
     if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
         /* Direct KMS has a dedicated evdev thread. SDL's Linux input backend
          * can still enqueue the same keyboard transitions even with the
@@ -4218,8 +4307,8 @@ static void handle_event(const SDL_Event* event)
          * event loop until tens or hundreds of milliseconds later under load.
          * Processing both paths creates a second, visibly delayed hit. */
         if (s_sdl.kms_present) return;
-        if (event->key.repeat) return;
 #ifdef RSX_SDL_REPLAY_STANDALONE
+        if (event->key.repeat) return;
         if (event->key.down && g_rsx_replay_key_hook) {
             g_rsx_replay_key_hook((int)event->key.scancode);
             return;
@@ -4233,6 +4322,77 @@ static void handle_event(const SDL_Event* event)
             return;
         }
 #ifndef RSX_SDL_REPLAY_STANDALONE
+        if (event->key.down) {
+            const int captures_text =
+                taiko_frontend_browser_captures_text();
+            unsigned browser_command = 0;
+            switch (event->key.scancode) {
+            case SDL_SCANCODE_TAB:
+                browser_command = TAIKO_BROWSER_SEARCH_TOGGLE;
+                break;
+            case SDL_SCANCODE_ESCAPE:
+                browser_command = TAIKO_BROWSER_SEARCH_CLEAR;
+                break;
+            case SDL_SCANCODE_BACKSPACE:
+                if (captures_text)
+                    browser_command = TAIKO_BROWSER_SEARCH_BACKSPACE;
+                break;
+            case SDL_SCANCODE_UP:
+                browser_command = TAIKO_BROWSER_PREVIOUS;
+                break;
+            case SDL_SCANCODE_DOWN:
+                browser_command = TAIKO_BROWSER_NEXT;
+                break;
+            case SDL_SCANCODE_PAGEUP:
+                browser_command = TAIKO_BROWSER_PREVIOUS_PAGE;
+                break;
+            case SDL_SCANCODE_PAGEDOWN:
+                browser_command = TAIKO_BROWSER_NEXT_PAGE;
+                break;
+            case SDL_SCANCODE_HOME:
+                browser_command = TAIKO_BROWSER_FIRST;
+                break;
+            case SDL_SCANCODE_END:
+                browser_command = TAIKO_BROWSER_LAST;
+                break;
+            case SDL_SCANCODE_Q:
+            case SDL_SCANCODE_LEFTBRACKET:
+                if (!captures_text)
+                    browser_command = TAIKO_BROWSER_CATEGORY_PREVIOUS;
+                break;
+            case SDL_SCANCODE_E:
+            case SDL_SCANCODE_RIGHTBRACKET:
+                if (!captures_text)
+                    browser_command = TAIKO_BROWSER_CATEGORY_NEXT;
+                break;
+            case SDL_SCANCODE_LEFT:
+                browser_command = TAIKO_BROWSER_DIFFICULTY_PREVIOUS;
+                break;
+            case SDL_SCANCODE_RIGHT:
+                browser_command = TAIKO_BROWSER_DIFFICULTY_NEXT;
+                break;
+            case SDL_SCANCODE_RETURN:
+            case SDL_SCANCODE_KP_ENTER:
+                browser_command = TAIKO_BROWSER_PLAY;
+                break;
+            case SDL_SCANCODE_R:
+                if (!captures_text) browser_command = TAIKO_BROWSER_RANDOM;
+                break;
+            case SDL_SCANCODE_F:
+                if ((event->key.mod & SDL_KMOD_CTRL) && !captures_text)
+                    browser_command = TAIKO_BROWSER_SEARCH_TOGGLE;
+                break;
+            default:
+                break;
+            }
+            if (browser_command &&
+                taiko_frontend_browser_command(browser_command))
+                return;
+            if (captures_text) return;
+        } else if (taiko_frontend_browser_captures_text()) {
+            return;
+        }
+        if (event->key.repeat) return;
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F9) {
             toggle_performance_overlay();
             return;
@@ -4522,6 +4682,7 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
                                         SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
                                         window_flags);
         if (!s_sdl.window) goto fail;
+        (void)SDL_StartTextInput(s_sdl.window);
     }
     if (getenv("TAIKO_HIDE_CURSOR")) SDL_HideCursor();
     const char* requested_driver = getenv("TAIKO_GPU_DRIVER");

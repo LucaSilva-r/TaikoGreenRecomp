@@ -7,6 +7,7 @@
 
 struct TaikoCatalogSong {
     std::string music_id;
+    std::string original_title;
     std::string title;
     std::string genre;
     uint32_t unique_id = 0;
@@ -27,5 +28,6 @@ bool taiko_catalog_load();
 std::size_t taiko_catalog_count();
 const TaikoCatalogSong* taiko_catalog_song(std::size_t index);
 const char* taiko_catalog_difficulty_name(unsigned difficulty);
+const char* taiko_catalog_genre_name(const std::string& genre);
 
 #endif

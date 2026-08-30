@@ -55,6 +55,41 @@ the character pointer. The unique music ID is at record `+0x1c` (for example,
 The host resolves its selected textual music ID against this live vector on
 every launch. It never assumes XML order equals manager order.
 
+## Host browser controls
+
+The opaque browser first presents Green's nine genre folders in its right-side
+carousel. Enter or a right-centre hit opens the selected folder. Inside it the
+browser keeps the current song, available difficulties, music ID, and filtered
+position visible on the left. A selectable **Back to Categories** row is
+inserted after every ten alphabetized songs and after the final partial block,
+matching the game's repeated folder-exit affordance. Enter/right-centre on that
+row returns to the folder list. Escape also returns when no filter is active.
+
+Rim hits move one entry; Up/Down on the cabinet/direct-KMS path jump eight. On
+the desktop, Up/Down and the mouse wheel move one, Page Up/Page Down jump eight,
+Home/End reach the bounds, `R` chooses a random song, Left/Right change
+difficulty, and Enter activates the selected folder, song, or exit row.
+
+Songs are alphabetized by their displayed title, with full-width Latin letters
+normalized for sorting. The folder list contains the original Green genres:
+J-POP, Anime, Vocaloid, Variety, Classical, Game Music, Namco Original, Medley,
+and Children's Songs. Search applies inside the opened folder.
+
+Tab or Ctrl+F on the category screen opens a global, alphabetized search across
+all nine folders; invoking it inside an opened folder keeps the search scoped
+to that folder. Terms are case-insensitive and must all occur somewhere in the
+title, genre, or music ID. Backspace edits the query and Escape clears it. This
+filtering changes only the host catalog view; the selected textual music ID
+still goes through the live-manager resolution and guarded native commit below.
+
+The browser text is FreeType-rendered metadata, not Green's pre-rendered title
+textures. Green's `musicinfo.xml` contains only the original title and no
+English translation or Japanese reading key. Optional accurate English names
+can therefore be supplied in `config/song_titles_en.tsv` (or a path selected
+by `TAIKO_SONG_TITLES`) as tab-separated `music_id` / display-title pairs.
+Overrides participate in display, search, and sorting only; the original title
+remains searchable and the native launch still uses `music_id`.
+
 ## Native confirmation transaction
 
 `func_001F5CA8` dispatches the scene state at `scene + 0x10`. State 10 is the
