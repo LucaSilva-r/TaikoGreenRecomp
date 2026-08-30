@@ -23,8 +23,12 @@
 /* The artwork sets the layout: a red disc on the left for the countdown, a
  * yellow body for the code. Both texts are black, as on the cabinet. */
 enum {
-    OVERLAY_WIDTH = TAIKO_PAIRING_PILL_WIDTH,
-    OVERLAY_HEIGHT = TAIKO_PAIRING_PILL_HEIGHT,
+    PILL_WIDTH = TAIKO_PAIRING_PILL_WIDTH,
+    PILL_HEIGHT = TAIKO_PAIRING_PILL_HEIGHT,
+    HOST_WIDTH = 1280,
+    HOST_HEIGHT = 720,
+    OVERLAY_MAX_WIDTH = HOST_WIDTH,
+    OVERLAY_MAX_HEIGHT = HOST_HEIGHT,
     PILL_DISC_WIDTH = 64,             /* the red disc at the left end */
     CODE_CENTER_X = 158,
     CODE_PIXELS = 34,
@@ -36,12 +40,23 @@ static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
 enum { TEXT_OUTLINE_RADIUS = 3 };
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t g_pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT];
+static uint32_t g_pixels[OVERLAY_MAX_WIDTH * OVERLAY_MAX_HEIGHT];
 static uint32_t g_version;
 static int      g_visible;
-static int      g_mode;             /* 1 pairing, 2 transient status */
+static int      g_mode;             /* 1 pairing, 2 status, 3--5 host screens */
+static int      g_width = PILL_WIDTH;
+static int      g_height = PILL_HEIGHT;
+static int      g_host_selection;
 static char     g_code[16];
 static char     g_status[32];
+static char     g_player_name[64];
+static char     g_song_id[32];
+static char     g_song_title[256];
+static char     g_song_genre[128];
+static char     g_song_difficulty[32];
+static uint32_t g_song_unique_id;
+static unsigned g_song_index;
+static unsigned g_song_total;
 static long     g_deadline;
 static int      g_drawn_remaining = -1;
 
@@ -121,10 +136,10 @@ static int font_ready(void)
  * pill's rounded ends stay transparent on screen. */
 static void put_pixel(int x, int y, uint32_t colour, unsigned coverage)
 {
-    if (x < 0 || y < 0 || x >= OVERLAY_WIDTH || y >= OVERLAY_HEIGHT || !coverage)
+    if (x < 0 || y < 0 || x >= g_width || y >= g_height || !coverage)
         return;
 
-    uint32_t* target = &g_pixels[(size_t)y * OVERLAY_WIDTH + x];
+    uint32_t* target = &g_pixels[(size_t)y * g_width + x];
     const unsigned source_alpha = ((colour >> 24) & 0xFF) * coverage / 255u;
     if (!source_alpha) return;
 
@@ -146,7 +161,9 @@ static void put_pixel(int x, int y, uint32_t colour, unsigned coverage)
 
 static void draw_pill(void)
 {
-    for (int i = 0; i < OVERLAY_WIDTH * OVERLAY_HEIGHT; i++) {
+    g_width = PILL_WIDTH;
+    g_height = PILL_HEIGHT;
+    for (int i = 0; i < PILL_WIDTH * PILL_HEIGHT; i++) {
         const unsigned char* pixel = &taiko_pairing_pill_rgba[i * 4];
         g_pixels[i] = ((uint32_t)pixel[3] << 24) | ((uint32_t)pixel[2] << 16) |
                       ((uint32_t)pixel[1] << 8) | (uint32_t)pixel[0];
@@ -181,8 +198,28 @@ static int text_width(const char* text, int pixels)
 {
     int width = 0;
     if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return 0;
-    for (const char* c = text; *c; c++) {
-        if (FT_Load_Char(g_face, (FT_ULong)(unsigned char)*c, FT_LOAD_DEFAULT) != 0)
+    const unsigned char* cursor = (const unsigned char*)text;
+    while (*cursor) {
+        FT_ULong codepoint = *cursor++;
+        if ((codepoint & 0xE0u) == 0xC0u && (cursor[0] & 0xC0u) == 0x80u) {
+            codepoint = ((codepoint & 0x1Fu) << 6) | (cursor[0] & 0x3Fu);
+            cursor += 1;
+        } else if ((codepoint & 0xF0u) == 0xE0u &&
+                   (cursor[0] & 0xC0u) == 0x80u &&
+                   (cursor[1] & 0xC0u) == 0x80u) {
+            codepoint = ((codepoint & 0x0Fu) << 12) |
+                        ((cursor[0] & 0x3Fu) << 6) | (cursor[1] & 0x3Fu);
+            cursor += 2;
+        } else if ((codepoint & 0xF8u) == 0xF0u &&
+                   (cursor[0] & 0xC0u) == 0x80u &&
+                   (cursor[1] & 0xC0u) == 0x80u &&
+                   (cursor[2] & 0xC0u) == 0x80u) {
+            codepoint = ((codepoint & 0x07u) << 18) |
+                        ((cursor[0] & 0x3Fu) << 12) |
+                        ((cursor[1] & 0x3Fu) << 6) | (cursor[2] & 0x3Fu);
+            cursor += 3;
+        }
+        if (FT_Load_Char(g_face, codepoint, FT_LOAD_DEFAULT) != 0)
             continue;
         width += (int)(g_face->glyph->advance.x >> 6);
     }
@@ -192,13 +229,33 @@ static int text_width(const char* text, int pixels)
 /* Centred on `centre_x`, and vertically centred on the pill rather than sat on
  * a baseline: the strings here are digits and a hyphen, so their ink box is
  * what should look centred. */
-static void draw_text(const char* text, int pixels, int centre_x)
+static void draw_text_at(const char* text, int pixels, int centre_x, int centre_y)
 {
     if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return;
 
-    int top = OVERLAY_HEIGHT, bottom = 0;
-    for (const char* c = text; *c; c++) {
-        if (FT_Load_Char(g_face, (FT_ULong)(unsigned char)*c, FT_LOAD_DEFAULT) != 0)
+    int top = g_height, bottom = 0;
+    const unsigned char* cursor = (const unsigned char*)text;
+    while (*cursor) {
+        FT_ULong codepoint = *cursor++;
+        if ((codepoint & 0xE0u) == 0xC0u && (cursor[0] & 0xC0u) == 0x80u) {
+            codepoint = ((codepoint & 0x1Fu) << 6) | (cursor[0] & 0x3Fu);
+            cursor += 1;
+        } else if ((codepoint & 0xF0u) == 0xE0u &&
+                   (cursor[0] & 0xC0u) == 0x80u &&
+                   (cursor[1] & 0xC0u) == 0x80u) {
+            codepoint = ((codepoint & 0x0Fu) << 12) |
+                        ((cursor[0] & 0x3Fu) << 6) | (cursor[1] & 0x3Fu);
+            cursor += 2;
+        } else if ((codepoint & 0xF8u) == 0xF0u &&
+                   (cursor[0] & 0xC0u) == 0x80u &&
+                   (cursor[1] & 0xC0u) == 0x80u &&
+                   (cursor[2] & 0xC0u) == 0x80u) {
+            codepoint = ((codepoint & 0x07u) << 18) |
+                        ((cursor[0] & 0x3Fu) << 12) |
+                        ((cursor[1] & 0x3Fu) << 6) | (cursor[2] & 0x3Fu);
+            cursor += 3;
+        }
+        if (FT_Load_Char(g_face, codepoint, FT_LOAD_DEFAULT) != 0)
             continue;
         const FT_Glyph_Metrics* metrics = &g_face->glyph->metrics;
         const int glyph_top = (int)(metrics->horiBearingY >> 6);
@@ -206,14 +263,35 @@ static void draw_text(const char* text, int pixels, int centre_x)
         if (glyph_top > bottom) bottom = glyph_top;
         if (glyph_bottom < top) top = glyph_bottom;
     }
-    const int baseline = (OVERLAY_HEIGHT + bottom + top) / 2;
+    const int baseline = centre_y + (bottom + top) / 2;
 
     /* Two passes, so every outline stays behind every fill. */
     for (int pass = 0; pass < 2; pass++) {
         int pen_x = centre_x - text_width(text, pixels) / 2;
         if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return;
-        for (const char* c = text; *c; c++) {
-            if (FT_Load_Char(g_face, (FT_ULong)(unsigned char)*c, FT_LOAD_RENDER) != 0)
+        cursor = (const unsigned char*)text;
+        while (*cursor) {
+            FT_ULong codepoint = *cursor++;
+            if ((codepoint & 0xE0u) == 0xC0u &&
+                (cursor[0] & 0xC0u) == 0x80u) {
+                codepoint = ((codepoint & 0x1Fu) << 6) | (cursor[0] & 0x3Fu);
+                cursor += 1;
+            } else if ((codepoint & 0xF0u) == 0xE0u &&
+                       (cursor[0] & 0xC0u) == 0x80u &&
+                       (cursor[1] & 0xC0u) == 0x80u) {
+                codepoint = ((codepoint & 0x0Fu) << 12) |
+                            ((cursor[0] & 0x3Fu) << 6) | (cursor[1] & 0x3Fu);
+                cursor += 2;
+            } else if ((codepoint & 0xF8u) == 0xF0u &&
+                       (cursor[0] & 0xC0u) == 0x80u &&
+                       (cursor[1] & 0xC0u) == 0x80u &&
+                       (cursor[2] & 0xC0u) == 0x80u) {
+                codepoint = ((codepoint & 0x07u) << 18) |
+                            ((cursor[0] & 0x3Fu) << 12) |
+                            ((cursor[1] & 0x3Fu) << 6) | (cursor[2] & 0x3Fu);
+                cursor += 3;
+            }
+            if (FT_Load_Char(g_face, codepoint, FT_LOAD_RENDER) != 0)
                 continue;
             const FT_GlyphSlot glyph = g_face->glyph;
             draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
@@ -223,15 +301,130 @@ static void draw_text(const char* text, int pixels, int centre_x)
     }
 }
 
+static void draw_text_fit(const char* text, int preferred_pixels,
+                          int maximum_width, int centre_x, int centre_y)
+{
+    int pixels = preferred_pixels;
+    while (pixels > 20 && text_width(text, pixels) > maximum_width)
+        pixels -= 2;
+    draw_text_at(text, pixels, centre_x, centre_y);
+}
+
+static void fill_rect(int left, int top, int right, int bottom, uint32_t colour)
+{
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > g_width) right = g_width;
+    if (bottom > g_height) bottom = g_height;
+    for (int y = top; y < bottom; ++y)
+        for (int x = left; x < right; ++x)
+            g_pixels[(size_t)y * g_width + x] = colour;
+}
+
+static void render_host(void)
+{
+    g_width = HOST_WIDTH;
+    g_height = HOST_HEIGHT;
+    fill_rect(0, 0, g_width, g_height, 0xFF24170Fu);
+    fill_rect(0, 0, g_width, 150, 0xFF5A2415u);
+    fill_rect(0, 145, g_width, 150, 0xFF40C8FFu);
+
+    if (g_mode == 3) {
+        draw_text_at("PLAYER LOGIN", 58, HOST_WIDTH / 2, 82);
+        const uint32_t selected = 0xFF36B7F3u;
+        const uint32_t idle = 0xFF574232u;
+        fill_rect(185, 235, 615, 455, g_host_selection == 0 ? selected : idle);
+        fill_rect(665, 235, 1095, 455, g_host_selection == 1 ? selected : idle);
+        draw_text_at("ANONYMOUS", 42, 400, 330);
+        draw_text_at("NO CARD - OFFLINE", 25, 400, 392);
+        draw_text_at("BANAPASSPORT", 42, 880, 330);
+        draw_text_at("USE YOUR SAVED PROFILE", 25, 880, 392);
+        draw_text_at("RIM: CHOOSE     CENTRE: CONFIRM", 29,
+                     HOST_WIDTH / 2, 580);
+        return;
+    }
+
+    if (g_mode == 4) {
+        draw_text_at("BANAPASSPORT LOGIN", 54, HOST_WIDTH / 2, 82);
+        draw_text_at("ENTER THIS CODE ON THE PAIRING PAGE", 31,
+                     HOST_WIDTH / 2, 245);
+        if (g_code[0]) {
+            char code[16];
+            if (strlen(g_code) == 6)
+                snprintf(code, sizeof(code), "%.3s-%s", g_code, g_code + 3);
+            else
+                snprintf(code, sizeof(code), "%s", g_code);
+            draw_text_at(code, 88, HOST_WIDTH / 2, 365);
+            char countdown[48];
+            int remaining = (int)(g_deadline - monotonic_seconds());
+            if (remaining < 0) remaining = 0;
+            snprintf(countdown, sizeof(countdown), "EXPIRES IN %d", remaining);
+            draw_text_at(countdown, 29, HOST_WIDTH / 2, 465);
+        } else {
+            draw_text_at("WAITING FOR SERVER...", 46, HOST_WIDTH / 2, 365);
+        }
+        draw_text_at("THE GAME IS AUTHENTICATING THROUGH ITS NATIVE CARD PATH",
+                     24, HOST_WIDTH / 2, 580);
+        return;
+    }
+
+    if (g_mode == 6) {
+        draw_text_at("STARTING SESSION", 58, HOST_WIDTH / 2, 82);
+        if (g_player_name[0])
+            draw_text_at(g_player_name, 40, HOST_WIDTH / 2, 315);
+        draw_text_at("PLAYER DATA IS READY", 34, HOST_WIDTH / 2, 400);
+        draw_text_at("FINISHING THE NATIVE GAME HANDOFF...", 27,
+                     HOST_WIDTH / 2, 535);
+        return;
+    }
+
+    draw_text_at("SONG SELECT", 60, HOST_WIDTH / 2, 82);
+    if (!g_song_total) {
+        draw_text_at("CATALOG UNAVAILABLE", 46, HOST_WIDTH / 2, 350);
+        draw_text_at("CHECK PS3_VFS_ROOT AND MUSICINFO.XML", 28,
+                     HOST_WIDTH / 2, 430);
+        return;
+    }
+
+    char counter[64];
+    snprintf(counter, sizeof(counter), "%u / %u", g_song_index + 1,
+             g_song_total);
+    draw_text_at(counter, 27, 1120, 205);
+    draw_text_fit(g_song_genre, 30, 900, HOST_WIDTH / 2, 205);
+
+    fill_rect(110, 245, 1170, 485, 0xFF3A3024u);
+    draw_text_fit(g_song_title, 52, 980, HOST_WIDTH / 2, 335);
+    char identity[160];
+    snprintf(identity, sizeof(identity), "MUSIC ID: %s     UNIQUE ID: %u",
+             g_song_id, g_song_unique_id);
+    draw_text_fit(identity, 25, 980, HOST_WIDTH / 2, 430);
+
+    char difficulty[96];
+    snprintf(difficulty, sizeof(difficulty), "DIFFICULTY: %s",
+             g_song_difficulty);
+    draw_text_at(difficulty, 36, HOST_WIDTH / 2, 535);
+    draw_text_at("RIM: SONG     LEFT CENTRE: DIFFICULTY     RIGHT CENTRE: PLAY",
+                 23, HOST_WIDTH / 2, 620);
+    draw_text_at("SELECTION IS COMMITTED THROUGH THE NATIVE GAME MANAGER",
+                 20, HOST_WIDTH / 2, 675);
+}
+
 static void render(int remaining)
 {
     char code[16];
     char countdown[4];
 
+    if (g_mode >= 3) {
+        render_host();
+        g_drawn_remaining = remaining;
+        ++g_version;
+        return;
+    }
+
     draw_pill();
 
     if (g_mode == 2) {
-        draw_text(g_status, 24, OVERLAY_WIDTH / 2);
+        draw_text_at(g_status, 24, PILL_WIDTH / 2, PILL_HEIGHT / 2);
         g_drawn_remaining = remaining;
         ++g_version;
         return;
@@ -242,10 +435,11 @@ static void render(int remaining)
         snprintf(code, sizeof(code), "%.3s-%s", g_code, g_code + 3);
     else
         snprintf(code, sizeof(code), "%s", g_code);
-    draw_text(code, CODE_PIXELS, CODE_CENTER_X);
+    draw_text_at(code, CODE_PIXELS, CODE_CENTER_X, PILL_HEIGHT / 2);
 
     snprintf(countdown, sizeof(countdown), "%d", remaining > 99 ? 99 : remaining);
-    draw_text(countdown, COUNTDOWN_PIXELS, PILL_DISC_WIDTH / 2);
+    draw_text_at(countdown, COUNTDOWN_PIXELS, PILL_DISC_WIDTH / 2,
+                 PILL_HEIGHT / 2);
 
     g_drawn_remaining = remaining;
     ++g_version;
@@ -258,10 +452,17 @@ static void render(int remaining)
 void taiko_overlay_set_pairing(const char* code, int expires_in)
 {
     pthread_mutex_lock(&g_lock);
+    /* The reader polls before the user chooses BAID. Its legacy pairing pill
+     * must not replace an opaque host-owned screen. Mode 4 is the exception:
+     * it is the host BAID screen and consumes the refreshed code itself. */
+    if (g_mode >= 3 && g_mode != 4) {
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
     snprintf(g_code, sizeof(g_code), "%s", code ? code : "");
     g_deadline = monotonic_seconds() + (expires_in > 0 ? expires_in : 0);
     g_visible = g_code[0] != '\0';
-    g_mode = 1;
+    if (g_mode != 4) g_mode = 1;
     g_drawn_remaining = -1;
     pthread_mutex_unlock(&g_lock);
 }
@@ -269,6 +470,10 @@ void taiko_overlay_set_pairing(const char* code, int expires_in)
 void taiko_overlay_set_status(const char* text, int expires_in)
 {
     pthread_mutex_lock(&g_lock);
+    if (g_mode >= 3) {
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
     snprintf(g_status, sizeof(g_status), "%s", text ? text : "");
     g_deadline = monotonic_seconds() + (expires_in > 0 ? expires_in : 0);
     g_visible = g_status[0] != '\0';
@@ -277,9 +482,107 @@ void taiko_overlay_set_status(const char* text, int expires_in)
     pthread_mutex_unlock(&g_lock);
 }
 
+void taiko_overlay_show_entry_menu(int selection)
+{
+    pthread_mutex_lock(&g_lock);
+    g_host_selection = selection != 0;
+    g_mode = 3;
+    g_visible = 1;
+    g_deadline = 0;
+    g_drawn_remaining = -1;
+    ++g_version;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void taiko_overlay_show_baid_wait(void)
+{
+    pthread_mutex_lock(&g_lock);
+    g_mode = 4;
+    g_visible = 1;
+    g_drawn_remaining = -1;
+    ++g_version;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void taiko_overlay_show_entry_progress(const char* player_name)
+{
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_player_name, sizeof(g_player_name), "%s",
+             player_name && player_name[0] ? player_name : "P1");
+    g_mode = 6;
+    g_visible = 1;
+    g_deadline = 0;
+    g_drawn_remaining = -1;
+    ++g_version;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void taiko_overlay_show_song_select(const char* player_name)
+{
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_player_name, sizeof(g_player_name), "%s",
+             player_name && player_name[0] ? player_name : "P1");
+    g_song_total = 0;
+    g_mode = 5;
+    g_visible = 1;
+    g_deadline = 0;
+    g_drawn_remaining = -1;
+    ++g_version;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void taiko_overlay_show_song_browser(const char* player_name,
+                                     const char* music_id,
+                                     const char* title,
+                                     const char* genre,
+                                     uint32_t unique_id,
+                                     unsigned index,
+                                     unsigned total,
+                                     const char* difficulty)
+{
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_player_name, sizeof(g_player_name), "%s",
+             player_name && player_name[0] ? player_name : "P1");
+    snprintf(g_song_id, sizeof(g_song_id), "%s", music_id ? music_id : "");
+    snprintf(g_song_title, sizeof(g_song_title), "%s", title ? title : "");
+    snprintf(g_song_genre, sizeof(g_song_genre), "%s", genre ? genre : "");
+    snprintf(g_song_difficulty, sizeof(g_song_difficulty), "%s",
+             difficulty ? difficulty : "?");
+    g_song_unique_id = unique_id;
+    g_song_index = index;
+    g_song_total = total;
+    g_mode = 5;
+    g_visible = 1;
+    g_deadline = 0;
+    g_drawn_remaining = -1;
+    ++g_version;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void taiko_overlay_hide_host_screen(void)
+{
+    pthread_mutex_lock(&g_lock);
+    if (g_mode >= 3) {
+        g_mode = 0;
+        g_visible = 0;
+        g_code[0] = '\0';
+        ++g_version;
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
 void taiko_overlay_clear(void)
 {
     pthread_mutex_lock(&g_lock);
+    if (g_mode >= 3) {
+        if (g_code[0]) {
+            g_code[0] = '\0';
+            g_drawn_remaining = -1;
+            ++g_version;
+        }
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
     if (g_visible) ++g_version;
     g_visible = 0;
     g_mode = 0;
@@ -294,7 +597,11 @@ const uint32_t* taiko_overlay_frame(int* width, int* height, uint32_t* version)
 
     int remaining = (int)(g_deadline - monotonic_seconds());
     if (remaining < 0) remaining = 0;
-    if (g_visible && remaining == 0) {
+    if (g_mode == 4 && g_code[0] && remaining == 0) {
+        g_code[0] = '\0';
+        g_drawn_remaining = -1;
+        ++g_version;
+    } else if (g_visible && g_mode < 3 && remaining == 0) {
         g_visible = 0;
         ++g_version;
     }
@@ -306,8 +613,8 @@ const uint32_t* taiko_overlay_frame(int* width, int* height, uint32_t* version)
     }
     if (remaining != g_drawn_remaining) render(remaining);
 
-    if (width) *width = OVERLAY_WIDTH;
-    if (height) *height = OVERLAY_HEIGHT;
+    if (width) *width = g_width;
+    if (height) *height = g_height;
     if (version) *version = g_version;
     pthread_mutex_unlock(&g_lock);
     return g_pixels;

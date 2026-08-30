@@ -43,6 +43,7 @@ extern "C" void     ps3_hle_register_ctx(uint32_t nid, const char* name, void (*
 extern "C" void     vm_write32(uint64_t a, uint32_t v);
 extern "C" void     vm_write64(uint64_t a, uint64_t v);
 extern "C" void     ydkj_parse_yield(void);
+extern "C" void     ppu_dump_guest_stack(ppu_context* ctx, const char* tag);
 /* Title-local ATRAC can acknowledge compressed preview refills without
  * copying bytes that its in-process decoder has already consumed. Weak keeps
  * the generic runtime independent of Taiko when linked by another title. */
@@ -196,6 +197,20 @@ static void cellFsOpen(ppu_context* ctx)
     uint32_t flags  = (uint32_t)ctx->gpr[4];
     uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
     host_path(hpath, sizeof hpath, gpath);
+
+    /* Song Select reversing aid: a solo fumen open is the first unambiguous
+     * gameplay-preload boundary after the UI commits song and course.  Keep
+     * this opt-in because the stack walk is intentionally expensive. */
+    if (getenv("TAIKO_FUMEN_OPEN_TRACE") &&
+        strstr(gpath, "/data/fumen/") && strstr(gpath, "/solo/") &&
+        strstr(gpath, ".bin")) {
+        fprintf(stderr,
+                "[fumen-open] path='%s' path-ptr=%08X flags=%08X "
+                "fd-ptr=%08X lr=%08X\n",
+                gpath, (uint32_t)ctx->gpr[3], flags, fd_ptr,
+                (uint32_t)ctx->lr);
+        ppu_dump_guest_stack(ctx, "fumen-open");
+    }
 
     /* fopen() mode strings can't express the PS3/POSIX open semantics (e.g.
      * O_WRONLY without create+truncate, or O_CREAT without O_TRUNC), so build

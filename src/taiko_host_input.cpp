@@ -1,4 +1,5 @@
 #include "taiko_host_input.h"
+#include "taiko_frontend.h"
 
 #include <atomic>
 #include <cstring>
@@ -49,6 +50,8 @@ extern "C" void taiko_host_input_update_levels(unsigned player, uint32_t levels,
                                                   uint64_t timestamp_ns)
 {
     if (player >= 2) return;
+    if (taiko_frontend_filter_levels)
+        levels = taiko_frontend_filter_levels(player, levels, timestamp_ns);
     uint32_t previous = s_levels[player].exchange(levels,
                                                    std::memory_order_acq_rel);
     latch(player, levels & ~previous, timestamp_ns);
@@ -58,6 +61,8 @@ extern "C" void taiko_host_input_press(unsigned player, uint32_t actions,
                                          uint64_t timestamp_ns)
 {
     if (player >= 2) return;
+    if (taiko_frontend_consume_press &&
+        taiko_frontend_consume_press(player, actions)) return;
     uint32_t previous = s_levels[player].fetch_or(actions,
                                                    std::memory_order_acq_rel);
     latch(player, actions & ~previous, timestamp_ns);
@@ -65,8 +70,13 @@ extern "C" void taiko_host_input_press(unsigned player, uint32_t actions,
 
 extern "C" void taiko_host_input_release(unsigned player, uint32_t actions)
 {
-    if (player < 2)
+    if (player >= 2) return;
+    if (taiko_frontend_consume_release &&
+        taiko_frontend_consume_release(player, actions)) {
         s_levels[player].fetch_and(~actions, std::memory_order_acq_rel);
+        return;
+    }
+    s_levels[player].fetch_and(~actions, std::memory_order_acq_rel);
 }
 
 extern "C" void taiko_host_input_consume(taiko_host_input_snapshot* snapshot)

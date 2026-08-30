@@ -53,6 +53,7 @@ static inline int GetModuleHandleExA(unsigned long, LPCSTR address, HMODULE* out
 }
 #endif
 
+#include <atomic>
 #include <mutex>
 
 extern "C" uint8_t* vm_base;   /* defined by the host */
@@ -429,6 +430,69 @@ extern "C" int g_vm_diag_enabled = 0;
  * full helpers.  Published once before any guest thread starts. */
 extern "C" uint8_t* ppu_vm_fast_base = nullptr;
 
+/* Optional title-directed byte watch. Unlike YDKJ_AWATCH8 this range can be
+ * armed after a guest object is allocated, which is necessary for short-lived
+ * scene records whose addresses change from boot to boot. The title layer is
+ * the only caller; the slow path remains completely disabled unless a memory
+ * diagnostic environment variable is set before guest startup. */
+static std::atomic<uint32_t> g_guest_byte_watch_begin{0};
+static std::atomic<uint32_t> g_guest_byte_watch_end{0};
+static std::atomic<unsigned> g_guest_byte_watch_budget{0};
+extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag);
+
+static bool ppu_guest_watch_claim(uint32_t address, uint32_t size,
+                                  uint32_t* begin_out)
+{
+    const uint32_t begin =
+        g_guest_byte_watch_begin.load(std::memory_order_relaxed);
+    const uint32_t end =
+        g_guest_byte_watch_end.load(std::memory_order_relaxed);
+    unsigned budget =
+        g_guest_byte_watch_budget.load(std::memory_order_acquire);
+    if (!budget || address >= end || address + size <= begin)
+        return false;
+    if (!g_guest_byte_watch_budget.compare_exchange_strong(
+            budget, budget - 1, std::memory_order_acq_rel))
+        return false;
+    *begin_out = begin;
+    return true;
+}
+
+static void ppu_guest_watch_log(const char* operation, uint32_t address,
+                                uint32_t begin, uint64_t old_value,
+                                uint64_t new_value, unsigned digits)
+{
+    fprintf(stderr,
+            "[BYTEWATCH] %s %08X +%04X %0*llX->%0*llX "
+            "tid=%llu cia=%08X lr=%08X r3=%08X r4=%08X\n",
+            operation, address, address - begin, digits,
+            (unsigned long long)old_value, digits,
+            (unsigned long long)new_value,
+            g_active_ctx ? (unsigned long long)g_active_ctx->thread_id : 999ull,
+            g_active_ctx ? (uint32_t)g_active_ctx->cia : 0,
+            g_active_ctx ? (uint32_t)g_active_ctx->lr : 0,
+            g_active_ctx ? (uint32_t)g_active_ctx->gpr[3] : 0,
+            g_active_ctx ? (uint32_t)g_active_ctx->gpr[4] : 0);
+    if (g_active_ctx)
+        ppu_dump_guest_stack(g_active_ctx, "byte-writer");
+}
+
+extern "C" void ppu_set_guest_byte_watch(uint32_t begin, uint32_t end,
+                                           unsigned budget)
+{
+    if (end <= begin || !budget) {
+        g_guest_byte_watch_budget.store(0, std::memory_order_release);
+        g_guest_byte_watch_begin.store(0, std::memory_order_relaxed);
+        g_guest_byte_watch_end.store(0, std::memory_order_relaxed);
+        return;
+    }
+    g_guest_byte_watch_begin.store(begin, std::memory_order_relaxed);
+    g_guest_byte_watch_end.store(end, std::memory_order_relaxed);
+    g_guest_byte_watch_budget.store(budget, std::memory_order_release);
+    fprintf(stderr, "[BYTEWATCH] armed %08X..%08X budget=%u\n",
+            begin, end, budget);
+}
+
 static void ppu_vm_diag_init(void)
 {
     static const char* const vars[] = {
@@ -436,7 +500,7 @@ static void ppu_vm_diag_init(void)
         "PS3_SPINBT8", "PS3_SPINBT16", "YDKJ_RWATCH", "FLOW_RVAL",
         "FLOW_VALWATCH", "YDKJ_NULLSPIN", "YDKJ_SPINBT", "YDKJ_SPINCIA",
         "YDKJ_AWATCH8", "YDKJ_WWATCH", "FLOW_WVAL", "YDKJ_AWATCH",
-        "YDKJ_VTWATCH", "FLOW_HEAPWVAL"
+        "YDKJ_VTWATCH", "FLOW_HEAPWVAL", "TAIKO_ENTRY_TRACE_WRITES"
     };
     for (const char* name : vars) {
         const char* value = getenv(name);
@@ -720,6 +784,37 @@ uint64_t vm_read64(uint64_t a) { if (vm_oob((uint32_t)a,8)) return 0;
     return __builtin_bswap64(v); }
 void vm_write8 (uint64_t a, uint8_t  v) { if (vm_oob((uint32_t)a,1)) return;
     if (!g_vm_diag_enabled) { vm_base[(uint32_t)a] = v; return; }
+    { const uint32_t ea = (uint32_t)a;
+      uint32_t begin = 0;
+      if (vm_base[ea] != v && ppu_guest_watch_claim(ea, 1, &begin)) {
+        ppu_guest_watch_log("write8", ea, begin, vm_base[ea], v, 2);
+        /* Green's no-card join commits record byte zero from func_00226A9C.
+         * At that instruction r31 still owns the callback frame. Capture its
+         * real raw argument layout so host adapters can reproduce the native
+         * transaction without guessing at the Lumen callback ABI. */
+        if (ea == begin && v == 1 && g_active_ctx) {
+            const uint32_t frame = (uint32_t)g_active_ctx->gpr[31];
+            if (frame && (!ppu_vm_size || (uint64_t)frame + 0x2Cu <= ppu_vm_size)) {
+                const uint32_t inline_arg = vm_read32(frame + 0x10);
+                const uint32_t current_arg = vm_read32(frame + 0x1C);
+                const uint32_t count = vm_read32(frame + 0x28);
+                fprintf(stderr,
+                        "[BYTEWATCH-CALLBACK] frame=%08X inline=%08X "
+                        "current=%08X count=%u",
+                        frame, inline_arg, current_arg, count);
+                if (current_arg >= 8 &&
+                    (!ppu_vm_size || (uint64_t)current_arg + 8u <= ppu_vm_size)) {
+                    fprintf(stderr,
+                            " arg1={type=%u,value=%08X} "
+                            "arg2={type=%u,value=%08X}",
+                            vm_read32(current_arg), vm_read32(current_arg + 4),
+                            vm_read32(current_arg - 8), vm_read32(current_arg - 4));
+                }
+                fputc('\n', stderr);
+            }
+        }
+      }
+    }
     /* AWATCH8: watch byte writes to a specific addr (e.g. the 0x543580 Lv-2
      * completion flag the worker spins on) — vm_write32-based AWATCH misses these. */
     { static int64_t aw=-2; if(aw==-2){const char*e=getenv("YDKJ_AWATCH8"); aw=e?(int64_t)strtoul(e,0,16):-1;}
@@ -744,6 +839,13 @@ void vm_write32(uint64_t a, uint32_t v) { if (vm_oob((uint32_t)a,4)) return;
         else
             memcpy(vm_base + (uint32_t)a, &v, 4);
         return;
+    }
+    { const uint32_t ea = (uint32_t)a; uint32_t old_be = 0;
+      memcpy(&old_be, vm_base + ea, 4);
+      const uint32_t old_value = __builtin_bswap32(old_be);
+      uint32_t begin = 0;
+      if (old_value != v && ppu_guest_watch_claim(ea, 4, &begin))
+        ppu_guest_watch_log("write32", ea, begin, old_value, v, 8);
     }
     { static int64_t w=-2; if (w==-2) { const char* e=getenv("YDKJ_WWATCH"); w = e?(int64_t)strtoul(e,0,0):-1; }
       if (w>=0) { uint32_t ea=(uint32_t)a; if (ea>=(uint32_t)w && ea<(uint32_t)w+0x40) {
@@ -1139,6 +1241,45 @@ extern "C" void ppu_dump_guest_stack(ppu_context* ctx, const char* tag)
     if (!vm_oob(sp,4)) { char rw[600]; int rp=snprintf(rw,sizeof rw,"      rawstk:");
         for (int i=0;i<24 && !vm_oob(sp+i*4,4);i++){ uint32_t t; memcpy(&t,vm_base+sp+i*4,4); rp+=snprintf(rw+rp,sizeof(rw)-rp," %08X",__builtin_bswap32(t)); }
         fprintf(stderr,"%s\n",rw); }
+    /* PPC64 frames form an explicit backchain: the doubleword at the current
+     * SP points to the caller's SP, and the callee saves its incoming LR at
+     * caller_sp + 0x10.  Follow that chain across page boundaries.  The older
+     * bounded linear scan below remains useful for leaf/trampoline frames,
+     * but by design it cannot cross a stack guard/page boundary. */
+    {
+        char chain[1800];
+        int cp = snprintf(chain, sizeof chain, "[GBACK:%s]", tag ? tag : "?");
+        uint32_t frame = sp;
+        for (unsigned depth = 0; depth < 48 && cp < 1650; ++depth) {
+            if (vm_oob(frame, 8)) break;
+            uint64_t encoded_next;
+            memcpy(&encoded_next, vm_base + frame, sizeof encoded_next);
+            const uint64_t next64 = __builtin_bswap64(encoded_next);
+            if (next64 > UINT32_MAX) break;
+            const uint32_t next = (uint32_t)next64;
+            if (!next || next <= frame || next - frame > 0x20000u ||
+                vm_oob(next + 0x10u, 8))
+                break;
+            uint64_t encoded_lr;
+            memcpy(&encoded_lr, vm_base + next + 0x10u, sizeof encoded_lr);
+            const uint32_t saved_lr = (uint32_t)__builtin_bswap64(encoded_lr);
+            uint32_t function = 0;
+            for (uint64_t k = 0; k < function_table_count; ++k) {
+                const uint32_t candidate = function_table[k].addr;
+                if (candidate <= saved_lr && candidate > function)
+                    function = candidate;
+            }
+            if (function && saved_lr - function < 0x4000u)
+                cp += snprintf(chain + cp, sizeof(chain) - cp,
+                               " %08X=>func_%08X+0x%X", next, function,
+                               saved_lr - function);
+            else
+                cp += snprintf(chain + cp, sizeof(chain) - cp,
+                               " %08X=>%08X", next, saved_lr);
+            frame = next;
+        }
+        fprintf(stderr, "%s\n", chain);
+    }
     /* Identify the worker's dispatched method: func_000750A8 vcalls
      * [[arg+0xC]+0] (code) with toc [[arg+0xC]+4]. Dump for the known thread
      * arg-objects (AsyncLoad=0x40003450, Trophy=0x40003E80) so we can trace the
@@ -1235,6 +1376,30 @@ extern "C" void ps3_indirect_call(ppu_context* ctx)
         fprintf(stderr,"[RECVTRACE #%d] indirect-call -> func_00075380 (q=1 receive) r3=0x%08X r4=0x%08X\n",_n,(uint32_t)ctx->gpr[3],(uint32_t)ctx->gpr[4]);
         ppu_dump_guest_stack(ctx,"recv-caller"); } } }
     uint32_t addr = (uint32_t)ctx->ctr;
+    if (addr == 0x00226A9Cu && getenv("TAIKO_ENTRY_TRACE_WRITES")) {
+        const uint32_t frame = (uint32_t)ctx->gpr[3];
+        fprintf(stderr, "[ENTRY-CALLBACK] enter frame=%08X fields:", frame);
+        for (uint32_t offset = 0; offset <= 0x2C; offset += 4)
+            fprintf(stderr, " +%02X=%08X", offset, vm_read32(frame + offset));
+        fputc('\n', stderr);
+        const uint32_t inline_arg = vm_read32(frame + 0x10);
+        const uint32_t current_arg = vm_read32(frame + 0x1C);
+        if (inline_arg) {
+            fprintf(stderr, "[ENTRY-CALLBACK] inline %08X:", inline_arg);
+            for (uint32_t offset = 0; offset < 0x30; offset += 4)
+                fprintf(stderr, " +%02X=%08X", offset,
+                        vm_read32(inline_arg + offset));
+            fputc('\n', stderr);
+        }
+        if (current_arg >= 8) {
+            fprintf(stderr,
+                    "[ENTRY-CALLBACK] current=%08X "
+                    "arg1={type=%u,value=%08X} arg2={type=%u,value=%08X}\n",
+                    current_arg,
+                    vm_read32(current_arg), vm_read32(current_arg + 4),
+                    vm_read32(current_arg - 8), vm_read32(current_arg - 4));
+        }
+    }
     /* Null / return-to-OS sentinel: a bctr to address 0 means the guest
      * unwound to the initial frame (or a not-yet-populated function pointer).
      * Don't treat it as an unresolved call -- just return to the caller. */

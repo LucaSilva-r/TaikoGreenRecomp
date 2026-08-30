@@ -72,9 +72,79 @@
    "symbol": "ppu_note_free",
    "text": "extern \"C\" void ppu_note_free(uint32_t ptr, uint32_t lr, uint32_t tid);",
    "function": "func_005A93CC"
+  },
+  {
+   "symbol": "taiko_frontend_guest_tick",
+   "text": "extern \"C\" void taiko_frontend_guest_tick(ppu_context* ctx);",
+   "function": "func_001EF214"
+  },
+  {
+   "symbol": "taiko_frontend_song_select_tick",
+   "text": "extern \"C\" void taiko_frontend_song_select_tick(ppu_context* ctx);",
+   "function": "func_001F5CA8"
+  },
+  {
+   "symbol": "taiko_frontend_results_end_override",
+   "text": "extern \"C\" int taiko_frontend_results_end_override(ppu_context* ctx);",
+   "function": "func_001E31E4"
+  },
+  {
+   "symbol": "taiko_frontend_results_continue_tick",
+   "text": "extern \"C\" void taiko_frontend_results_continue_tick(ppu_context* ctx);",
+   "function": "func_001EBEB0"
+  },
+  {
+   "symbol": "taiko_entry_game_mode_callback_trace",
+   "text": "extern \"C\" void taiko_entry_game_mode_callback_trace(ppu_context* ctx);",
+   "function": "func_002287BC"
   }
  ],
  "functions": {
+  "func_001EF214": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_frontend_guest_tick(ctx);"
+    ]
+   }
+  ],
+  "func_001F5CA8": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_frontend_song_select_tick(ctx);"
+    ]
+   }
+  ],
+  "func_001E31E4": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_frontend_results_end_override(ctx)) return;"
+    ]
+   }
+  ],
+  "func_001EBEB0": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_frontend_results_continue_tick(ctx);"
+    ]
+   }
+  ],
+  "func_002287BC": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_entry_game_mode_callback_trace(ctx);"
+    ]
+   }
+  ],
   "func_002A6BB4": [
    {
     "anchor": "        ctx->fpr[31] = ctx->fpr[1];",

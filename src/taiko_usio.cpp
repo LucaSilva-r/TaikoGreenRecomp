@@ -1394,6 +1394,32 @@ void hle_bulk_transfer(ppu_context* ctx)
             count = 0;
         }
     }
+    if (pipe == kPipeIn && count >= 7 &&
+        std::getenv("TAIKO_ENTRY_TRACE")) {
+        const uint8_t response_command = vm_read8(buffer + 6);
+        /* A no-card InListPassiveTarget poll is the very common 12-byte 4B
+         * response.  Keep the entry trace focused on an actual target and the
+         * following InDataExchange replies.  The active lifted caller is
+         * UsbConnectionCell::bulk_receive; its saved LR is still in this
+         * frame, and identifies the command/parser call site above it. */
+        if ((response_command == 0x4B && count > 12) ||
+            response_command == 0x41) {
+            const uint32_t submitter_return =
+                static_cast<uint32_t>(vm_read64(ctx->gpr[1] + 0xC0));
+            std::fprintf(stderr,
+                         "[entry-usio] response=%02X count=%d buffer=%08X "
+                         "callback-opd=%08X argument=%08X hle-lr=%08X "
+                         "submitter-return=%08X data=",
+                         response_command, count, buffer, callback_opd,
+                         argument, static_cast<uint32_t>(ctx->lr),
+                         submitter_return);
+            for (int32_t i = 0; i < count; ++i) {
+                std::fprintf(stderr, "%02X", vm_read8(buffer +
+                                                       static_cast<uint32_t>(i)));
+            }
+            std::fputc('\n', stderr);
+        }
+    }
     callback(callback_opd, 0, count, argument);
     ctx->gpr[3] = 0;
 }

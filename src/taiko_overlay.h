@@ -18,6 +18,21 @@ extern "C" {
 void taiko_overlay_set_pairing(const char* code, int expires_in);
 /* Show a short appliance-status message using the same composited surface. */
 void taiko_overlay_set_status(const char* text, int expires_in);
+/* Opaque host-owned screens. These cover the guest frame completely so the
+ * corresponding Lumen menu is neither visible nor used for interaction. */
+void taiko_overlay_show_entry_menu(int selection);
+void taiko_overlay_show_entry_progress(const char* player_name);
+void taiko_overlay_show_baid_wait(void);
+void taiko_overlay_show_song_select(const char* player_name);
+void taiko_overlay_show_song_browser(const char* player_name,
+                                     const char* music_id,
+                                     const char* title,
+                                     const char* genre,
+                                     uint32_t unique_id,
+                                     unsigned index,
+                                     unsigned total,
+                                     const char* difficulty);
+void taiko_overlay_hide_host_screen(void);
 void taiko_overlay_clear(void);
 
 /* The image to draw over the frame, or NULL when there is nothing to show.

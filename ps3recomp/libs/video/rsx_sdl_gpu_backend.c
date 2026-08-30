@@ -2437,10 +2437,14 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
      * frame is letterboxed inside it, and an overlay measured in window pixels
      * drifts outside the picture. 0.22 of the frame width is what the artwork
      * covers on the cabinet's own 1280-wide screen. */
-    float draw_w = (float)frame_width * 0.22f;
-    float draw_h = draw_w * (float)height / (float)width;
-    const float x = (float)frame_x + ((float)frame_width - draw_w) * 0.5f;
-    const float y = (float)frame_y + (float)frame_height * 0.04f;
+    const int full_frame = width == SDL_RSX_WIDTH && height == SDL_RSX_HEIGHT;
+    float draw_w = full_frame ? (float)frame_width : (float)frame_width * 0.22f;
+    float draw_h = full_frame ? (float)frame_height
+                              : draw_w * (float)height / (float)width;
+    const float x = full_frame ? (float)frame_x
+                               : (float)frame_x + ((float)frame_width - draw_w) * 0.5f;
+    const float y = full_frame ? (float)frame_y
+                               : (float)frame_y + (float)frame_height * 0.04f;
 
     /* Pixels -> normalised device coordinates (y grows downwards on screen). */
     const float rect[4] = {
@@ -2550,6 +2554,17 @@ static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
     }
     *pitch = *x = *y = *width = *height = 0;
     return NULL;
+}
+
+static int title_overlay_requires_gpu(void)
+{
+    int width = 0, height = 0;
+    uint32_t version = 0;
+    const uint32_t* pixels = g_rsx_overlay_frame
+        ? g_rsx_overlay_frame(&width, &height, &version) : NULL;
+    (void)version;
+    return pixels && (width > KMS_CPU_OVERLAY_MAX_WIDTH ||
+                      height > KMS_CPU_OVERLAY_MAX_HEIGHT);
 }
 
 static void kms_snapshot_cpu_overlay(struct kms_slot* slot)
@@ -3530,7 +3545,8 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
         pending_clear = NULL;
     }
     if (s_sdl.kms_present) {
-        if (s_sdl.kms_zero_copy && !s_sdl.kms_cpu_overlay_safe) {
+        if (title_overlay_requires_gpu() ||
+            (s_sdl.kms_zero_copy && !s_sdl.kms_cpu_overlay_safe)) {
             draw_overlay(commands, s_sdl.display,
                          SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
                          0, 0, SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
