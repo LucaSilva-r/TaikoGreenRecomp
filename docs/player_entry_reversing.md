@@ -251,11 +251,30 @@ account/profile data into P1 and changed the active byte from 0 to 1. An
 explicit negative test with argument 2 set to 1 returned no selectable profile
 and left P1 inactive.
 
-`build-linux/taiko-host-frontend-baid-05.log` validates the complete opt-in host
-path. The virtual card reached the reader, `baidcheck.php` returned success,
-costume loading completed, and the controller entered `CardSelect`. The host
-then invoked `func_00226A9C` with the captured `{0,0}` contract, invoked the
-captured game-mode callback, started the userdata controller, and followed:
+`build-linux/taiko-host-frontend-baid-05.log` validated the state-machine tail,
+but later visual validation exposed an important false positive in its player
+commit. The virtual card reached the reader, `baidcheck.php` returned success,
+and costume `032000` loaded, but the host invoked only `func_00226A9C`. That is
+the Card Select confirmation operation; by itself it activates the initialized
+no-card record.
+
+The byte-writer stack in the stock authenticated capture identifies the
+missing preceding transaction as `func_00225CB8`. It takes the destination
+player index, copies the decoded BAID staging record from slot 2 into that
+player record, and performs the associated Card Select manager updates. Stock
+Card Select therefore performs `{ func_00225CB8(P1), func_00226A9C(P1, 0) }`.
+The host now invokes that pair after one native Card Select update and requires
+the assignment to change at least 16 player-record bytes, preventing the
+two-byte no-card fallback from being reported as authenticated. The remaining
+captured tail is:
+
+`build-linux/taiko-auth-profile-copy-01.log` live-validates the corrected pair.
+The profile-assignment callback changed 162 bytes, the confirmation left P1
+active with 160 bytes changed relative to the original record, and the next
+state snapshot observed 172 total changes including the account identity and
+profile fields. The normal `userdata.php` and `crownsdata.php` requests then
+completed, and Song Select reopened `cos_032000`, proving that the costume
+selection propagated beyond Player Entry.
 
 ```text
 CardSelect (7)

@@ -28,6 +28,9 @@ constexpr uint32_t kGameEntryReset = 0x000A8A3Cu;
 constexpr uint32_t kGameEntryMain = 0x000AD13Cu;
 constexpr uint32_t kSongSelectStateMachine = 0x000D2208u;
 constexpr uint32_t kSongSelectSceneEnter = 0x000FA0C0u;
+constexpr uint32_t kCardSelectInputFour = 0x00224620u;
+constexpr uint32_t kCardSelectInputTwo = 0x00224864u;
+constexpr uint32_t kCardSelectStatus = 0x00224C54u;
 
 constexpr size_t kGameEntryWords = 0xA0 / sizeof(uint32_t);
 constexpr size_t kSongSelectWords = 0x100 / sizeof(uint32_t);
@@ -334,6 +337,28 @@ void trace_object(const char* method, const char* phase, ObjectKind kind,
 
 using GuestFunction = void (*)(ppu_context*);
 
+void trace_callback(ppu_context* ctx, const char* method,
+                    GuestFunction original)
+{
+    const uint32_t frame = static_cast<uint32_t>(ctx->gpr[3]);
+    const uint32_t auxiliary = frame ? vm_read32(frame + 0x10) : 0;
+    const uint32_t current = frame ? vm_read32(frame + 0x1C) : 0;
+    const uint32_t count = auxiliary ? vm_read32(auxiliary + 0x28) : 0;
+    std::fprintf(stderr,
+                 "[entry-card-callback] %s tid=%llu lr=%08X frame=%08X "
+                 "current=%08X count=%u",
+                 method, static_cast<unsigned long long>(ctx->thread_id),
+                 static_cast<uint32_t>(ctx->lr), frame, current, count);
+    const uint32_t printable = count < 8 ? count : 8;
+    for (uint32_t index = 0; index < printable; ++index) {
+        const uint32_t argument = current - index * 8;
+        std::fprintf(stderr, " arg%u={type=%u,value=%08X}", index + 1,
+                     vm_read32(argument), vm_read32(argument + 4));
+    }
+    std::fputc('\n', stderr);
+    original(ctx);
+}
+
 void trace_call(ppu_context* ctx, const char* method, ObjectKind kind,
                 size_t words, GuestFunction original)
 {
@@ -374,6 +399,21 @@ void trace_song_select_enter(ppu_context* ctx)
                kSongSelectWords, func_000FA0C0);
 }
 
+void trace_card_select_input_four(ppu_context* ctx)
+{
+    trace_callback(ctx, "func_00224620", func_00224620);
+}
+
+void trace_card_select_input_two(ppu_context* ctx)
+{
+    trace_callback(ctx, "func_00224864", func_00224864);
+}
+
+void trace_card_select_status(ppu_context* ctx)
+{
+    trace_callback(ctx, "func_00224C54", func_00224C54);
+}
+
 void register_taiko_entry_trace_hooks()
 {
     if (!trace_enabled())
@@ -382,8 +422,12 @@ void register_taiko_entry_trace_hooks()
     ppu_register_function(kGameEntryMain, trace_game_entry_main);
     ppu_register_function(kSongSelectStateMachine, trace_song_select_state);
     ppu_register_function(kSongSelectSceneEnter, trace_song_select_enter);
+    ppu_register_function(kCardSelectInputFour, trace_card_select_input_four);
+    ppu_register_function(kCardSelectInputTwo, trace_card_select_input_two);
+    ppu_register_function(kCardSelectStatus, trace_card_select_status);
     std::fprintf(stderr,
-                 "[entry-trace] installed GameEntry/SongSelect state wrappers; "
+                 "[entry-trace] installed GameEntry/SongSelect/CardSelect "
+                 "wrappers; "
                  "all-calls=%u\n",
                  trace_calls_enabled() ? 1u : 0u);
 }

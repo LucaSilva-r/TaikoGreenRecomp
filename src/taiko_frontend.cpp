@@ -49,6 +49,7 @@ constexpr uint32_t kStateWaitEndInterval = 35;
 constexpr uint32_t kStateEnd = 39;
 constexpr uint32_t kStateTerm = 40;
 
+constexpr uint32_t kAuthenticatedProfileCopy = 0x00225CB8;
 constexpr uint32_t kAnonymousJoin = 0x00226A9C;
 constexpr uint32_t kGameModeCommit = 0x002287BC;
 constexpr uint32_t kEntrySetState = 0x001ED698;
@@ -121,6 +122,7 @@ uint32_t g_toc = 0;
 unsigned g_finish_delay = 0;
 unsigned g_finish_stage = 0;
 unsigned g_finish_timeout = 0;
+unsigned g_card_select_ticks = 0;
 const char* g_session_label = "P1";
 
 struct SongCategory {
@@ -660,6 +662,7 @@ void handle_rising(unsigned player, uint32_t rising)
         g_phase.store(Phase::AnonymousRequested, std::memory_order_release);
         std::fprintf(stderr, "[taiko_frontend] anonymous requested\n");
     } else {
+        g_card_select_ticks = 0;
         g_phase.store(Phase::BaidWaiting, std::memory_order_release);
         taiko_overlay_show_baid_wait();
         std::fprintf(stderr, "[taiko_frontend] BanaPassport login requested\n");
@@ -677,6 +680,42 @@ void write_integer_variant(uint32_t address, uint32_t value)
 bool invoke_player_join(uint32_t controller, uint32_t toc,
                         bool require_offline_record)
 {
+    std::array<uint8_t, kPlayerRecordSize> before{};
+    const uint32_t record = controller + kPlayerRecordOffset;
+    for (uint32_t offset = 0; offset < kPlayerRecordSize; ++offset)
+        before[offset] = vm_read8(record + offset);
+
+    if (!require_offline_record) {
+        /* Stock Card Select first assigns the decoded BAID staging record
+         * (slot 2) to the chosen cabinet player through func_00225CB8. Its
+         * sole argument is the destination player index. Confirming through
+         * func_00226A9C alone merely activates the default no-card record. */
+        for (uint32_t offset = 0; offset < 0x40; offset += 4)
+            vm_write32(kCallbackFrame + offset, 0);
+        for (uint32_t offset = 0; offset < 0x110; offset += 4)
+            vm_write32(kCallbackArgument2 + offset, 0);
+        write_integer_variant(kCallbackArgument1, 0); /* assign BAID to P1 */
+        vm_write32(kCallbackFrame + 0x10, kCallbackStack);
+        vm_write32(kCallbackStack + 0x20, 8);
+        vm_write32(kCallbackStack + 0x28, 1);
+        vm_write32(kCallbackStack + 0x2C, 10);
+        vm_write32(kCallbackFrame + 0x14, kCallbackArgument1);
+        vm_write32(kCallbackFrame + 0x18, kCallbackBufferEnd);
+        vm_write32(kCallbackFrame + 0x1C, kCallbackArgument1);
+        ppu_guest_call_ct(kAuthenticatedProfileCopy, toc,
+                          kCallbackFrame, 0, 0, 0);
+
+        unsigned profile_changed = 0;
+        for (uint32_t offset = 0; offset < kPlayerRecordSize; ++offset)
+            profile_changed += before[offset] != vm_read8(record + offset);
+        std::fprintf(stderr,
+                     "[taiko_frontend] authenticated profile assignment "
+                     "record=%08X changed=%u\n",
+                     record, profile_changed);
+        if (profile_changed < 16)
+            return false;
+    }
+
     for (uint32_t offset = 0; offset < 0x40; offset += 4)
         vm_write32(kCallbackFrame + offset, 0);
     for (uint32_t offset = 0; offset < 0x110; offset += 4)
@@ -699,16 +738,23 @@ bool invoke_player_join(uint32_t controller, uint32_t toc,
 
     ppu_guest_call_ct(kAnonymousJoin, toc, kCallbackFrame, 0, 0, 0);
 
-    const uint32_t record = controller + kPlayerRecordOffset;
     const uint8_t active = vm_read8(record);
     const uint8_t kind = vm_read8(record + 0x42B);
+    unsigned changed = 0;
+    for (uint32_t offset = 0; offset < kPlayerRecordSize; ++offset)
+        changed += before[offset] != vm_read8(record + offset);
     std::fprintf(stderr,
                  "[taiko_frontend] player join transaction mode=%s "
-                 "record=%08X active=%u kind=%u\n",
+                 "record=%08X active=%u kind=%u changed=%u\n",
                  require_offline_record ? "offline" : "authenticated",
-                 record, active, kind);
+                 record, active, kind, changed);
     if (active != 1) return false;
     if (require_offline_record && kind != 2) return false;
+    /* A real BAID selection copies the account identity, unlock/profile and
+     * costume fields into the 0x4f0-byte player record. The captured account
+     * changed 151 bytes; the premature CardSelect call changed only the two
+     * anonymous/session bytes. Never label that fallback as authenticated. */
+    if (!require_offline_record && changed < 16) return false;
 
     return true;
 }
@@ -1035,11 +1081,24 @@ extern "C" void taiko_frontend_guest_tick(ppu_context* ctx)
     }
 
     if (phase == Phase::BaidWaiting) {
-        /* CardSelect is reached only after baidcheck, profile application and
-         * costume loading have all succeeded. Invoke the title's native
-         * selection callback in that prepared manager context instead of
-         * waiting for its Lumen choice to set the record's active byte. */
-        if (state == kStateCardSelect) {
+        if (state != kStateCardSelect) {
+            g_card_select_ticks = 0;
+            return;
+        }
+
+        /* This hook runs before func_001EF214's native state update. On the
+         * first tick that observes CardSelect, its selection model has not yet
+         * received even one CardSelect update, so func_00226A9C falls back to
+         * the initialized no-card record. Let that native update complete and
+         * invoke the callback on the following dispatcher tick. */
+        if (g_card_select_ticks++ == 0) {
+            std::fprintf(stderr,
+                         "[taiko_frontend] CardSelect reached; waiting for "
+                         "one native update before authenticated commit\n");
+            return;
+        }
+
+        {
             if (!invoke_player_join(controller, g_toc, false)) {
                 release_to_stock("authenticated player join failed");
                 return;
