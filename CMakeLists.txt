@@ -404,6 +404,10 @@ set(TAIKO_BOOT_SOURCES
     ${RECOMP_SOURCES}
     ${TAIKO_EMBEDDED_IMAGE_SOURCES}
 )
+if(WIN32)
+    list(APPEND TAIKO_BOOT_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_log.c")   # release stdout/stderr gate
+endif()
 if(ANDROID)
     add_library(taiko_boot SHARED ${TAIKO_BOOT_SOURCES})
 else()
@@ -576,12 +580,39 @@ endif()
 if(WIN32 AND TAIKO_RSX_BACKEND STREQUAL "sdl_gpu")
     set(TAIKO_DXC_RUNTIME_DIR
         "${TAIKO_SDL_GPU_ROOT}/dxc-v1.8.2502/bin/x64")
+    set(TAIKO_D3D12_AGILITY_ROOT
+        "${TAIKO_SDL_GPU_ROOT}/d3d12-agility-1.619.5")
+    if(NOT EXISTS "${TAIKO_D3D12_AGILITY_ROOT}/bin/x64/D3D12Core.dll")
+        message(FATAL_ERROR
+            "DirectX 12 Agility SDK is missing from ${TAIKO_D3D12_AGILITY_ROOT}. "
+            "Run scripts/setup_sdl_gpu_mingw.sh again.")
+    endif()
+    target_compile_definitions(ps3recomp_runtime PRIVATE
+        TAIKO_D3D12_AGILITY_SDK_VERSION=619)
     function(taiko_copy_dxc_runtime target)
         foreach(dll dxcompiler.dll dxil.dll)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                     "${TAIKO_DXC_RUNTIME_DIR}/${dll}"
                     "$<TARGET_FILE_DIR:${target}>/${dll}"
+                VERBATIM)
+        endforeach()
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "$<TARGET_FILE_DIR:${target}>/D3D12"
+            VERBATIM)
+        foreach(dll D3D12Core.dll d3d12SDKLayers.dll)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${TAIKO_D3D12_AGILITY_ROOT}/bin/x64/${dll}"
+                    "$<TARGET_FILE_DIR:${target}>/D3D12/${dll}"
+                VERBATIM)
+        endforeach()
+        foreach(license LICENSE.txt LICENSE-CODE.txt)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${TAIKO_D3D12_AGILITY_ROOT}/licenses/${license}"
+                    "$<TARGET_FILE_DIR:${target}>/D3D12/${license}"
                 VERBATIM)
         endforeach()
     endfunction()
@@ -612,6 +643,13 @@ endif()
 # sys_ppu_thread_create.
 if(WIN32)
     target_link_options(taiko_boot PRIVATE -Wl,--stack,268435456
+        # Suppress high-volume diagnostics before formatting/stdio locking in
+        # standalone releases. src/taiko_log.c passes non-console file I/O
+        # through unchanged and TAIKO_QUIET_LOG=0 restores full logging.
+        -Wl,--wrap=__mingw_printf -Wl,--wrap=__mingw_fprintf
+        -Wl,--wrap=printf -Wl,--wrap=fprintf
+        -Wl,--wrap=puts -Wl,--wrap=fputs -Wl,--wrap=putchar
+        -Wl,--wrap=fputc -Wl,--wrap=fwrite
         # Static libgcc/libstdc++/winpthread: the mingw DLLs live in the Fedora
         # sysroot, not next to the .exe, so a dynamic link dies at loader_init
         # under Wine with status c0000135.

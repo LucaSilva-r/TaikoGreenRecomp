@@ -62,6 +62,7 @@ void     ps3_load_prx_modules(void) {}
 
 #ifdef _WIN32
 #include <windows.h>
+extern "C" void taiko_log_configure(int standalone);
 extern "C" void vm_note_accessible_range(uint32_t addr, uint32_t size,
                                            int accessible);
 /* Last-chance crash reporter: vm_base accesses are bounds-guarded, so a real
@@ -788,6 +789,13 @@ int main(int argc, char** argv)
      * runtime paths cache environment switches on first use, and mutating the
      * process environment after loader activity perturbs early title startup. */
     if (standalone && !configure_standalone_usrdir()) return 1;
+#endif
+
+#ifdef _WIN32
+    /* A standalone release is quiet by default: Wine console output can cost
+     * enough to affect frame pacing. Explicit-ELF developer runs stay verbose.
+     * TAIKO_QUIET_LOG=0/1 overrides either default. */
+    taiko_log_configure(standalone);
 #endif
 
 #ifdef _WIN32

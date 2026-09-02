@@ -4573,6 +4573,45 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
                 requested_driver);
         s_sdl.device = SDL_CreateGPUDeviceWithProperties(props);
         SDL_DestroyProperties(props);
+#elif defined(_WIN32) && defined(TAIKO_D3D12_AGILITY_SDK_VERSION)
+        /* Automatic selection prefers D3D12 on Windows. Older Windows 10
+         * builds do not expose every feature query required by current SDL,
+         * so point its D3D12 backend at the packaged Microsoft Agility SDK.
+         * Vulkan ignores these D3D12-only properties. */
+        SDL_PropertiesID props = SDL_CreateProperties();
+        if (!props) goto fail;
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_SPIRV) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXBC_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_DXBC) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_DXIL) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_MSL_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_MSL) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_SHADERS_METALLIB_BOOLEAN,
+            (shader_formats & SDL_GPU_SHADERFORMAT_METALLIB) != 0);
+        SDL_SetBooleanProperty(
+            props, SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN,
+            getenv("SDL_GPU_DEBUG") != NULL);
+        if (requested_driver)
+            SDL_SetStringProperty(
+                props, SDL_PROP_GPU_DEVICE_CREATE_NAME_STRING,
+                requested_driver);
+        SDL_SetNumberProperty(
+            props,
+            SDL_PROP_GPU_DEVICE_CREATE_D3D12_AGILITY_SDK_VERSION_NUMBER,
+            TAIKO_D3D12_AGILITY_SDK_VERSION);
+        SDL_SetStringProperty(
+            props,
+            SDL_PROP_GPU_DEVICE_CREATE_D3D12_AGILITY_SDK_PATH_STRING,
+            ".\\D3D12\\");
+        s_sdl.device = SDL_CreateGPUDeviceWithProperties(props);
+        SDL_DestroyProperties(props);
 #else
         s_sdl.device = SDL_CreateGPUDevice(
             shader_formats, getenv("SDL_GPU_DEBUG") != NULL,

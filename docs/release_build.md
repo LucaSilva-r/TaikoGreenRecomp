@@ -21,14 +21,19 @@ as a Windows resource. To make an old developer-only build instead, configure
 with `-DTAIKO_EMBED_PPU_IMAGE=OFF`; that executable still requires an ELF path
 argument.
 
-Copy `build/TaikoRecomp.exe`, `build/dxcompiler.dll`, and `build/dxil.dll` into
-the user's dumped game directory:
+Copy `build/TaikoRecomp.exe`, `build/dxcompiler.dll`, `build/dxil.dll`, and the
+complete `build/D3D12` directory into the user's dumped game directory:
 
 ```text
 USRDIR/
   TaikoRecomp.exe
   dxcompiler.dll
   dxil.dll
+  D3D12/
+    D3D12Core.dll
+    d3d12SDKLayers.dll
+    LICENSE.txt
+    LICENSE-CODE.txt
   EBOOT.BIN
   data/
   cache/
@@ -47,10 +52,19 @@ Run `TaikoRecomp.exe` without command-line arguments. It automatically:
   mixer rather than a separate media player;
 - stores cabinet backup SRAM at `USRDIR/usiobackup.bin`.
 
+Standalone Windows releases suppress stdout and stderr by default. This avoids
+the formatting, stdio locking, and Wine-console cost of the runtime's extensive
+development diagnostics. Set `TAIKO_QUIET_LOG=0` before launching to restore
+the complete log; `TAIKO_QUIET_LOG=1` can also silence an explicit-ELF
+development run. File output such as backup SRAM and captures is unaffected.
+
 SDL3, SDL_shadercross, SPIRV-Cross, the MinGW C++ runtime, libgcc, and
 winpthreads are linked statically. Dynamic guest shader compilation requires
-the two pinned Microsoft DXC runtime DLLs. Native Windows lets SDL_GPU select
-D3D12 or Vulkan; `run-taiko.sh` selects Vulkan when developing under Wine.
+the two pinned Microsoft DXC runtime DLLs. D3D12 uses the pinned Microsoft
+Agility SDK 1.619.5 (SDK version 619) from the `D3D12` subdirectory, which lets
+current SDL_GPU run on supported older Windows 10 installations without relying
+on the inbox D3D12 runtime. Native Windows lets SDL_GPU select D3D12 or Vulkan;
+`run-taiko.sh` selects Vulkan when developing under Wine.
 
 ## Audio and synchronization
 

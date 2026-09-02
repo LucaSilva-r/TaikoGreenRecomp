@@ -18,6 +18,10 @@ dxc_version="v1.8.2502"
 dxc_asset="dxc_2025_02_20.zip"
 dxc_url="https://github.com/microsoft/DirectXShaderCompiler/releases/download/${dxc_version}/${dxc_asset}"
 dxc_sha256="70b1913a1bfce4a3e1a5311d16246f4ecdf3a3e613abec8aa529e57668426f85"
+agility_version="1.619.5"
+agility_asset="Microsoft.Direct3D.D3D12.${agility_version}.nupkg"
+agility_url="https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/${agility_version}"
+agility_sha256="0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6"
 
 for tool in cmake git ninja curl sha256sum tar unzip \
             x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++; do
@@ -82,6 +86,23 @@ if [[ ! -f "${dxc_root}/bin/x64/dxcompiler.dll" ]]; then
     unzip -q "${dxc_archive}" -d "${dxc_root}"
 fi
 
+# SDL's D3D12 backend needs newer runtime feature queries than older Windows
+# installations expose. Vendor Microsoft's official Agility SDK under the
+# required subdirectory instead of placing D3D12Core.dll beside the executable.
+agility_archive="${download_dir}/${agility_asset}"
+download_verified "${agility_url}" "${agility_archive}" "${agility_sha256}"
+agility_root="${prefix}/d3d12-agility-${agility_version}"
+if [[ ! -f "${agility_root}/bin/x64/D3D12Core.dll" ||
+      ! -f "${agility_root}/bin/x64/d3d12SDKLayers.dll" ]]; then
+    mkdir -p "${agility_root}/bin/x64" "${agility_root}/licenses"
+    unzip -j -o "${agility_archive}" \
+        build/native/bin/x64/D3D12Core.dll \
+        build/native/bin/x64/d3d12SDKLayers.dll \
+        -d "${agility_root}/bin/x64"
+    unzip -j -o "${agility_archive}" LICENSE.txt LICENSE-CODE.txt \
+        -d "${agility_root}/licenses"
+fi
+
 shadercross_source="${source_dir}/SDL_shadercross"
 checkout_exact "https://github.com/libsdl-org/SDL_shadercross.git" \
     "${shadercross_source}" "${shadercross_commit}"
@@ -113,7 +134,10 @@ cmake --install "${work_dir}/shadercross-mingw"
     printf 'SPIRV_CROSS=%s\n' "${spirv_cross_commit}"
     printf 'DXC_RELEASE=%s\n' "${dxc_version}"
     printf 'DXC_SHA256=%s\n' "${dxc_sha256}"
+    printf 'D3D12_AGILITY=%s\n' "${agility_version}"
+    printf 'D3D12_AGILITY_SDK_VERSION=619\n'
+    printf 'D3D12_AGILITY_SHA256=%s\n' "${agility_sha256}"
 } >"${prefix}/versions.txt"
 
 printf 'MinGW SDL_GPU dependencies installed in %s\n' "${prefix}"
-printf 'The game build copies dxcompiler.dll and dxil.dll beside its executable.\n'
+printf 'The game build copies DXC beside the executable and Agility SDK into D3D12/.\n'
