@@ -63,7 +63,44 @@ not modify `img00279`/`img00286`: those belong to Reward Shop. Do not modify
 overwrote unrelated assets, causing the giant pre-entry mode art and the
 renamed Shop button.
 
-Build and install the patched archive from a known-clean copy:
+## Runtime distribution
+
+Shipping builds do not replace or edit the user's
+`entry/packeddata.ddp`. `assets/entry_pc_mode.tkovl` is a compact binary delta
+embedded in the executable. When the game opens the Player Entry archive, the
+cellFs VFS reads the untouched file, validates its exact size and CRC32, and
+applies the delta to a private delete-on-close stream. `cellFsOpen`,
+`cellFsFstat`, and pathname-based `cellFsStat` therefore all see the patched
+archive, while the file in the dump remains byte-for-byte original.
+
+The supported clean Green archive is 12,305,848 bytes with CRC32 `f3aa0b97`
+and SHA-256
+`daa356e31fa9728ac558fc805119a11f957a3d8add54a58361adf5db671aa3ff`.
+The virtual result is 12,306,020 bytes with CRC32 `3f7677db`. An unsupported
+archive is logged and opened unchanged; an archive that already contains this
+exact patch is also used unchanged. Set `TAIKO_ENTRY_PC_MODE_OVERLAY=0` to
+disable injection explicitly.
+
+The distributed `.tkovl` contains source-copy commands plus only literal
+changed/inserted bytes, not a replacement game archive. Regenerate it after a
+deliberate Lumen patch change with:
+
+```sh
+python3 tools/lumen/patch_entry_pc_mode.py \
+  --source game/vfs/data/lumendata/packed/entry/packeddata.orig.ddp \
+  --packlist game/vfs/data/lumendata/packed/entry/packlist.txt \
+  --font fonts/font.ttf \
+  --output /tmp/entry_pc_mode.ddp
+python3 tools/make_overlay_patch.py \
+  game/vfs/data/lumendata/packed/entry/packeddata.orig.ddp \
+  /tmp/entry_pc_mode.ddp assets/entry_pc_mode.tkovl
+```
+
+The overlay generator replays its serialized result and refuses to write it
+unless it recreates the target exactly.
+
+For development, a patched archive can still be produced directly from a
+known-clean copy:
 
 ```sh
 python3 tools/lumen/patch_entry_pc_mode.py \

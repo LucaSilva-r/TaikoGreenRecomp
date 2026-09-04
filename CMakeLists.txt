@@ -400,6 +400,7 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"  # host view of installed stock songs
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_frontend.cpp" # host-owned Player Entry/login shell
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pc_mode.cpp"  # custom PC mode scene & handoff
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_entry_overlay.cpp" # non-destructive Player Entry DDP overlay
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_lumen.cpp"    # title-local Lumen state fixes
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_entry_trace.cpp" # Player Entry/Song Select reversing trace
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_vertex_job.cpp" # native SPURS vertex skinning
@@ -560,6 +561,27 @@ else()
     message(STATUS "Overlay font: ${TAIKO_OVERLAY_FONT_FILE} absent, "
                    "the overlay will load a font at runtime")
 endif()
+
+# The Player Entry modification is distributed as a source-copy/data patch,
+# never as a modified game archive. Embed the ~70 KiB patch so standalone users
+# need only provide their untouched supported Green dump.
+set(TAIKO_ENTRY_OVERLAY_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/entry_pc_mode.tkovl")
+set(TAIKO_ENTRY_OVERLAY_PATCH_C
+    "${CMAKE_BINARY_DIR}/taiko_entry_overlay_patch.c")
+add_custom_command(
+    OUTPUT "${TAIKO_ENTRY_OVERLAY_PATCH_C}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+            --input "${TAIKO_ENTRY_OVERLAY_PATCH}"
+            --out "${TAIKO_ENTRY_OVERLAY_PATCH_C}"
+            --name taiko_entry_overlay_patch
+    DEPENDS
+            "${TAIKO_ENTRY_OVERLAY_PATCH}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+    COMMENT "Embedding Player Entry runtime patch"
+    VERBATIM)
+target_sources(taiko_boot PRIVATE "${TAIKO_ENTRY_OVERLAY_PATCH_C}")
 
 # Build the runtime from source rather than expecting a prebuilt .lib -- we are
 # cross-compiling, so there is nothing prebuilt to find.

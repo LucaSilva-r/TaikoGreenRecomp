@@ -49,6 +49,17 @@ extern "C" void     ppu_dump_guest_stack(ppu_context* ctx, const char* tag);
  * the generic runtime independent of Taiko when linked by another title. */
 extern "C" __attribute__((weak)) int
 taiko_atrac_discard_stream_read(uint32_t buffer, uint64_t bytes);
+/* Titles may transparently provide a read-only file overlay. Returning null
+ * leaves the translated host path untouched. The returned FILE belongs to the
+ * VFS and is closed normally by cellFsClose. */
+extern "C" __attribute__((weak)) FILE*
+taiko_fs_open_overlay(const char* guest_path, const char* host_path,
+                      uint32_t flags);
+/* Let the same overlay adjust pathname-based stat results before an open.
+ * Returning zero preserves the real host file size. */
+extern "C" __attribute__((weak)) int
+taiko_fs_stat_overlay(const char* guest_path, const char* host_path,
+                      uint64_t* size);
 #ifdef _WIN32
 extern "C" char __ImageBase;
 extern "C" unsigned short __stdcall RtlCaptureStackBackTrace(unsigned long,unsigned long,void**,unsigned long*);
@@ -224,21 +235,25 @@ static void cellFsOpen(ppu_context* ctx)
     if (flags & CELL_FS_O_TRUNC)  oflags |= O_TRUNC;
     if (flags & CELL_FS_O_APPEND) oflags |= O_APPEND;
 
-    int hfd = open(hpath, oflags | O_BINARY, 0666);
-    if (hfd < 0) {
-        fprintf(stderr, "[fs] open FAIL '%s' -> '%s' tid=%lu\n", gpath, hpath,
-                (unsigned long)ps3_host_thread_id());
-        ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
-    }
-    const char* fmode = (acc == CELL_FS_O_RDWR)
-                        ? ((flags & CELL_FS_O_APPEND) ? "ab+" : "rb+")
-                        : (acc == CELL_FS_O_WRONLY)
-                          ? ((flags & CELL_FS_O_APPEND) ? "ab" : "wb")
-                          : "rb";
-    FILE* f = fdopen(hfd, fmode);
+    FILE* f = taiko_fs_open_overlay
+        ? taiko_fs_open_overlay(gpath, hpath, flags) : nullptr;
     if (!f) {
-        close(hfd);
-        ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return;
+        int hfd = open(hpath, oflags | O_BINARY, 0666);
+        if (hfd < 0) {
+            fprintf(stderr, "[fs] open FAIL '%s' -> '%s' tid=%lu\n", gpath, hpath,
+                    (unsigned long)ps3_host_thread_id());
+            ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
+        }
+        const char* fmode = (acc == CELL_FS_O_RDWR)
+                            ? ((flags & CELL_FS_O_APPEND) ? "ab+" : "rb+")
+                            : (acc == CELL_FS_O_WRONLY)
+                              ? ((flags & CELL_FS_O_APPEND) ? "ab" : "wb")
+                              : "rb";
+        f = fdopen(hfd, fmode);
+        if (!f) {
+            close(hfd);
+            ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return;
+        }
     }
     int fd = fd_alloc_file(f);
     if (fd < 0) { fclose(f); ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
@@ -432,8 +447,11 @@ static void cellFsStat(ppu_context* ctx)
     if (stat(hpath, &st) != 0) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return; }
     uint32_t mode = (st.st_mode & S_IFDIR) ? (CELL_FS_S_IFDIR | 0x1FF)
                                            : (CELL_FS_S_IFREG | 0x1B6);
-    if (sb) write_stat(sb, mode, (uint64_t)st.st_size);
-    if (getenv("YDKJ_FSDBG") && strstr(gpath,".toc")) fprintf(stderr,"[FSDBG] cellFsStat('%s') -> size=0x%llX\n",gpath,(unsigned long long)st.st_size);
+    uint64_t size = (uint64_t)st.st_size;
+    if (taiko_fs_stat_overlay)
+        taiko_fs_stat_overlay(gpath, hpath, &size);
+    if (sb) write_stat(sb, mode, size);
+    if (getenv("YDKJ_FSDBG") && strstr(gpath,".toc")) fprintf(stderr,"[FSDBG] cellFsStat('%s') -> size=0x%llX\n",gpath,(unsigned long long)size);
     ctx->gpr[3] = CELL_OK;
 }
 
