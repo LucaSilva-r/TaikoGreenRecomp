@@ -246,8 +246,15 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
     const int joinable    = ppu_thread_flags_joinable(flags);
 
     if (stack_size == 0) stack_size = VM_PPU_STACK_SIZE;
-    if (stack_size < 0x4000) stack_size = 0x4000; /* 16 KB minimum */
-    stack_size = VM_ALIGN_UP(stack_size, vm_host_page_size());
+    /* LV2 preserves a 4 KiB request.  Keep that guest-visible size distinct
+     * from the backing allocation: hosts with larger pages (notably 16 KiB
+     * ARM64 Linux) still need a host-page-rounded mapping and guard, but the
+     * initial SP and sys_ppu_thread_get_stack_information must describe the
+     * stack the guest requested.  Some PS3 CRTs locate per-thread state by
+     * comparing SP against this exact range. */
+    stack_size = VM_ALIGN_UP(stack_size, VM_PAGE_SIZE);
+    const uint32_t stack_capacity =
+        VM_ALIGN_UP(stack_size, vm_host_page_size());
 
     table_lock();
 
@@ -262,17 +269,19 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
      * leaked a stack on every joined or detached short-lived thread. */
     const uint32_t cached_stack_addr = t->stack_addr;
     const uint32_t cached_stack_size = t->stack_size;
+    const uint32_t cached_stack_capacity = t->stack_capacity;
     memset(t, 0, sizeof(*t));
 
     /* Allocate guest stack */
     uint32_t stack_addr = 0;
-    if (cached_stack_addr && cached_stack_size >= stack_size)
+    if (cached_stack_addr && cached_stack_capacity >= stack_capacity)
         stack_addr = cached_stack_addr;
     else
-        stack_addr = vm_stack_allocate(&g_vm_stack_alloc, stack_size);
+        stack_addr = vm_stack_allocate(&g_vm_stack_alloc, stack_capacity);
     if (stack_addr == 0) {
         t->stack_addr = cached_stack_addr;
         t->stack_size = cached_stack_size;
+        t->stack_capacity = cached_stack_capacity;
         table_unlock();
         return (int64_t)(int32_t)CELL_ENOMEM;
     }
@@ -294,6 +303,7 @@ int64_t sys_ppu_thread_create(ppu_context* ctx)
     t->joinable   = joinable;
     t->stack_addr = stack_addr;
     t->stack_size = stack_size;
+    t->stack_capacity = stack_capacity;
     t->entry_addr = entry;
 
     /* Copy thread name if provided */
