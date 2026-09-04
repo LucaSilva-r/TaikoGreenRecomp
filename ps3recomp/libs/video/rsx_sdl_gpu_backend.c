@@ -96,6 +96,7 @@ typedef struct shader_entry {
     SDL_ShaderCross_GraphicsShaderResourceInfo resources;
     u8 sampler_units[4]; /* dense SDL slot -> sparse RSX texture unit */
     u8 sampler_unit_count;
+    u8 vertex_constants_uniform;
     /* Dense storage-buffer slot -> guest vp_c[] slot. Address-indexed vertex
      * programs retain the identity mapping for the complete bank. */
     u16 vertex_constant_units[RSX_BATCH_VP_CONSTANTS];
@@ -878,19 +879,70 @@ static SDL_GPUShader* compile_hlsl(const char* source,
         SDL_ShaderCross_ReflectGraphicsSPIRV(spirv, spirv_size, 0);
     SDL_GPUShader* result = NULL;
     if (metadata) {
-        SDL_ShaderCross_SPIRV_Info info;
-        SDL_zero(info);
-        info.bytecode = spirv;
-        info.bytecode_size = spirv_size;
-        info.entrypoint = "main";
-        info.shader_stage = stage;
         *resources = metadata->resource_info;
         if (getenv("SDL_GPU_DUMP_SHADERS"))
             fprintf(stderr, "[SDL_GPU] resources samplers=%u storage_tex=%u storage_buf=%u uniforms=%u\n",
                     resources->num_samplers, resources->num_storage_textures,
                     resources->num_storage_buffers, resources->num_uniform_buffers);
-        result = SDL_ShaderCross_CompileGraphicsShaderFromSPIRV(
-            s_sdl.device, &info, resources, 0);
+        const char* driver = SDL_GetGPUDeviceDriver(s_sdl.device);
+        if (driver && strcmp(driver, "direct3d12") == 0) {
+            /* Going HLSL -> SPIR-V -> HLSL/DXIL can renumber fragment inputs
+             * after unused varyings are stripped. D3D12 then rejects the PSO
+             * because the vertex and pixel signatures assign the same
+             * TEXCOORD semantic to different hardware registers. Vulkan links
+             * the original SPIR-V locations and is unaffected. Compile the
+             * source straight to DXIL on D3D12. Vertex shaders are rewritten
+             * to use a uniform buffer below because SDL_shadercross explicitly
+             * does not support this mode with StructuredBuffers. */
+            SDL_PropertiesID props = SDL_CreateProperties();
+            if (props) {
+                SDL_SetBooleanProperty(
+                    props,
+                    SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN,
+                    true);
+                hlsl.props = props;
+                size_t dxil_size = 0;
+                Uint8* dxil = (Uint8*)SDL_ShaderCross_CompileDXILFromHLSL(
+                    &hlsl, &dxil_size);
+                SDL_DestroyProperties(props);
+                hlsl.props = 0;
+                if (dxil) {
+                    SDL_GPUShaderCreateInfo create_info;
+                    SDL_zero(create_info);
+                    create_info.code_size = dxil_size;
+                    create_info.code = dxil;
+                    create_info.entrypoint = "main";
+                    create_info.format = SDL_GPU_SHADERFORMAT_DXIL;
+                    create_info.stage =
+                        stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX
+                            ? SDL_GPU_SHADERSTAGE_VERTEX
+                            : SDL_GPU_SHADERSTAGE_FRAGMENT;
+                    create_info.num_samplers = resources->num_samplers;
+                    create_info.num_storage_textures =
+                        resources->num_storage_textures;
+                    create_info.num_storage_buffers =
+                        resources->num_storage_buffers;
+                    create_info.num_uniform_buffers =
+                        resources->num_uniform_buffers;
+                    result = SDL_CreateGPUShader(s_sdl.device, &create_info);
+                    SDL_free(dxil);
+                }
+            }
+            if (!result)
+                fprintf(stderr,
+                        "[SDL_GPU] direct HLSL-to-DXIL creation failed "
+                        "(%016llx): %s\n",
+                        (unsigned long long)hash, SDL_GetError());
+        } else {
+            SDL_ShaderCross_SPIRV_Info info;
+            SDL_zero(info);
+            info.bytecode = spirv;
+            info.bytecode_size = spirv_size;
+            info.entrypoint = "main";
+            info.shader_stage = stage;
+            result = SDL_ShaderCross_CompileGraphicsShaderFromSPIRV(
+                s_sdl.device, &info, resources, 0);
+        }
         SDL_free(metadata);
     }
     SDL_free(spirv);
@@ -1195,6 +1247,7 @@ static shader_entry* get_shader(const rsx_render_op* op,
     unsigned sampler_unit_count = 0;
     u16 vertex_constant_units[RSX_BATCH_VP_CONSTANTS];
     unsigned vertex_constant_count = 0;
+    int vertex_constants_uniform = 0;
     if (stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX && blob->size) {
         result = rsx_vp_decompile(blob->data, (u32)blob->size,
                                   source, 512u * 1024u,
@@ -1260,6 +1313,24 @@ static shader_entry* get_shader(const rsx_render_op* op,
         replace_all(source, 512u * 1024u,
                     "cbuffer VPConst : register(b0)",
                     "cbuffer VPConst : register(b0, space1)");
+        const char* driver = SDL_GetGPUDeviceDriver(s_sdl.device);
+        if (driver && strcmp(driver, "direct3d12") == 0) {
+            char declaration[160];
+            snprintf(declaration, sizeof(declaration),
+                     "cbuffer VPDirect : register(b0, space1) { "
+                     "float4 rsx_vp_constants[%u]; };",
+                     vertex_constant_count ? vertex_constant_count : 1u);
+            replace_all(source, 512u * 1024u,
+                        "StructuredBuffer<float4> rsx_vp_constants : "
+                        "register(t0, space0);\n"
+                        "cbuffer VPBase : register(b0, space1) { "
+                        "uint rsx_vp_base; uint3 rsx_vp_pad; };",
+                        declaration);
+            replace_all(source, 512u * 1024u,
+                        "rsx_vp_constants[rsx_vp_base+",
+                        "rsx_vp_constants[");
+            vertex_constants_uniform = 1;
+        }
     } else if (stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT && blob->size) {
         const u8* fragment_data = outline_bypass
             ? s_direct_copy_fp : blob->data;
@@ -1361,6 +1432,7 @@ static shader_entry* get_shader(const rsx_render_op* op,
     entry->flags = flags;
     entry->shader = compile_hlsl(source, stage, &entry->resources, hash);
     entry->sampler_unit_count = (u8)sampler_unit_count;
+    entry->vertex_constants_uniform = (u8)vertex_constants_uniform;
     memcpy(entry->sampler_units, sampler_units, sizeof(entry->sampler_units));
     entry->vertex_constant_count = (u16)vertex_constant_count;
     memcpy(entry->vertex_constant_units, vertex_constant_units,
@@ -1936,6 +2008,24 @@ static int same_draw_attachments(const rsx_render_op* a,
     return get_surface(&a->depth) == get_surface(&b->depth);
 }
 
+static void copy_vertex_constant(const rsx_render_op* op, unsigned guest,
+                                 float value[4])
+{
+    memset(value, 0, 4u * sizeof(float));
+    const u64 source_offset = (u64)guest * 4u * sizeof(float);
+    if (source_offset + 4u * sizeof(float) <=
+        op->data.draw.vertex_constants.size)
+        memcpy(value, op->data.draw.vertex_constants.data + source_offset,
+               4u * sizeof(float));
+    /* RSXB v2's VP epilogue constants are defined in clip space. Canonicalize
+     * x/y at the consumer boundary so older captures remain valid. */
+    if (guest == 512) {
+        value[0] = 1.0f; value[1] = 1.0f; value[3] = 1.0f;
+    } else if (guest == 513) {
+        value[0] = 0.0f; value[1] = 0.0f; value[3] = 0.0f;
+    }
+}
+
 static void execute_draw(SDL_GPUCommandBuffer* commands,
                          SDL_GPURenderPass* pass,
                          const rsx_render_op* op,
@@ -1962,7 +2052,17 @@ static void execute_draw(SDL_GPUCommandBuffer* commands,
             : s_sdl.default_sampler;
     }
     if (!vertex_shader || !fragment_shader) return;
-    if (vertex_shader->resources.num_uniform_buffers) {
+    if (vertex_shader->vertex_constants_uniform) {
+        float constants[RSX_BATCH_VP_CONSTANTS][4];
+        for (unsigned dense = 0;
+             dense < vertex_shader->vertex_constant_count; ++dense)
+            copy_vertex_constant(
+                op, vertex_shader->vertex_constant_units[dense],
+                constants[dense]);
+        SDL_PushGPUVertexUniformData(
+            commands, 0, constants,
+            vertex_shader->vertex_constant_count * 4u * sizeof(float));
+    } else if (vertex_shader->resources.num_uniform_buffers) {
         u32 base_uniform[4] = {vertex_constant_base, 0, 0, 0};
         SDL_PushGPUVertexUniformData(commands, 0, base_uniform,
                                      sizeof(base_uniform));
@@ -3343,7 +3443,9 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
                     continue;
                 shader_entry* shader = get_shader(
                     op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
-                if (!shader || !shader->vertex_constant_count) continue;
+                if (!shader || !shader->vertex_constant_count ||
+                    shader->vertex_constants_uniform)
+                    continue;
                 const u64 bytes =
                     (u64)shader->vertex_constant_count * 4u * sizeof(float);
                 if (constant_bytes > UINT32_MAX ||
@@ -3392,22 +3494,8 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
                      dense < shader->vertex_constant_count; ++dense) {
                     const unsigned guest =
                         shader->vertex_constant_units[dense];
-                    float value[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                    const u64 source_offset = (u64)guest * sizeof(value);
-                    if (source_offset + sizeof(value) <=
-                        op->data.draw.vertex_constants.size)
-                        memcpy(value,
-                               op->data.draw.vertex_constants.data +
-                                   source_offset,
-                               sizeof(value));
-                    /* RSXB v2's VP epilogue constants are defined in clip
-                     * space. Canonicalize x/y at the consumer boundary so
-                     * captures from before the recorder fix remain valid. */
-                    if (guest == 512) {
-                        value[0] = 1.0f; value[1] = 1.0f; value[3] = 1.0f;
-                    } else if (guest == 513) {
-                        value[0] = 0.0f; value[1] = 0.0f; value[3] = 0.0f;
-                    }
+                    float value[4];
+                    copy_vertex_constant(op, guest, value);
                     memcpy(destination + dense * 4u, value, sizeof(value));
                 }
             }
