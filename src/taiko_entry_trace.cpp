@@ -8,6 +8,7 @@
  */
 
 #include "ppu_recomp.h"
+#include "taiko_pc_mode.h"
 
 #include <array>
 #include <atomic>
@@ -467,10 +468,33 @@ extern "C" void taiko_entry_event_trace(ppu_context* ctx)
  * but the argument count and values are different. */
 extern "C" void taiko_entry_game_mode_callback_trace(ppu_context* ctx)
 {
-    if (!ctx || !trace_enabled())
+    if (!ctx)
         return;
 
     const uint32_t frame = static_cast<uint32_t>(ctx->gpr[3]);
+    if (frame) {
+        const uint32_t auxiliary = vm_read32(frame + 0x10);
+        const uint32_t current = vm_read32(frame + 0x1C);
+        const uint32_t count = auxiliary ? vm_read32(auxiliary + 0x28) : 0;
+        if (count >= 1 && current) {
+            const uint32_t game_mode = vm_read32(current + 4);
+            taiko_pc_mode_on_game_mode_selected(game_mode);
+            if (game_mode == TAIKO_PC_MODE_SENTINEL) {
+                /* 99 is private to the added Lumen item. Let the stock
+                 * callback complete its normal Play bookkeeping while the
+                 * pending flag redirects the outgoing sequence task later. */
+                vm_write32(current + 4, TAIKO_PC_MODE_SAFE_GAME_MODE);
+                std::fprintf(stderr,
+                             "[taiko_pc_mode] rewrote guest sentinel %u to "
+                             "safe stock mode %u\n",
+                             game_mode, TAIKO_PC_MODE_SAFE_GAME_MODE);
+            }
+        }
+    }
+
+    if (!trace_enabled())
+        return;
+
     std::fprintf(stderr,
                  "[entry-game-mode-callback] tid=%llu lr=%08X frame=%08X "
                  "toc=%08X\n",

@@ -399,6 +399,7 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_input.cpp" # portable title input latch
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"  # host view of installed stock songs
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_frontend.cpp" # host-owned Player Entry/login shell
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pc_mode.cpp"  # custom PC mode scene & handoff
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_lumen.cpp"    # title-local Lumen state fixes
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_entry_trace.cpp" # Player Entry/Song Select reversing trace
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_vertex_job.cpp" # native SPURS vertex skinning

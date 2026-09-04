@@ -8,7 +8,10 @@
  * managers intact. Both paths then invoke Green's native game-mode callback,
  * func_002287BC, and enter its stock WaitEndInterval handoff.
  */
+#define TAIKO_FRONTEND_IMPLEMENTATION
 #include "taiko_frontend.h"
+#undef TAIKO_FRONTEND_IMPLEMENTATION
+#include "taiko_pc_mode.h"
 
 #include "ppu_recomp.h"
 #include "taiko_catalog.h"
@@ -153,6 +156,7 @@ bool enabled()
 
 bool frontend_owns_input()
 {
+    if (taiko_pc_mode_is_active()) return true;
     if (!enabled()) return false;
     const Phase phase = g_phase.load(std::memory_order_acquire);
     return phase != Phase::WaitingForEntry && phase != Phase::Passthrough &&
@@ -472,6 +476,12 @@ void enter_song_select_shell()
     }
     g_song_search_active.store(false, std::memory_order_release);
     show_current_song();
+}
+
+extern "C" void taiko_frontend_enter_song_select_shell(void)
+{
+    g_phase.store(Phase::SongSelect, std::memory_order_release);
+    enter_song_select_shell();
 }
 
 void change_song_category(int direction)
@@ -1039,6 +1049,9 @@ extern "C" int taiko_frontend_browser_captures_text(void)
 
 extern "C" void taiko_frontend_guest_tick(ppu_context* ctx)
 {
+    /* PC Mode reuses this verified Player Entry dispatcher hook even when the
+     * legacy TAIKO_HOST_FRONTEND overlay is disabled. */
+    taiko_pc_mode_entry_tick(ctx);
     if (!enabled() || !ctx) return;
     const uint32_t controller = static_cast<uint32_t>(ctx->gpr[3]);
     if (!controller) return;
@@ -1046,6 +1059,12 @@ extern "C" void taiko_frontend_guest_tick(ppu_context* ctx)
     Phase phase = g_phase.load(std::memory_order_acquire);
 
     if (phase == Phase::WaitingForEntry && state == kStateEntryMain) {
+        static const bool legacy_overlay = [] {
+            const char* s = std::getenv("TAIKO_OVERLAY_ENTRY");
+            return s && s[0] && std::strcmp(s, "0") != 0;
+        }();
+        if (!legacy_overlay) return;
+
         g_controller = controller;
         g_toc = static_cast<uint32_t>(ctx->gpr[2]);
         g_selection.store(0, std::memory_order_release);

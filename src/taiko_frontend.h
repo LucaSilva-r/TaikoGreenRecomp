@@ -9,7 +9,7 @@ extern "C" {
 
 struct ppu_context;
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(TAIKO_FRONTEND_IMPLEMENTATION)
 #define TAIKO_FRONTEND_OPTIONAL __attribute__((weak))
 #else
 #define TAIKO_FRONTEND_OPTIONAL
@@ -52,6 +52,9 @@ int taiko_frontend_browser_text(const char* text)
     TAIKO_FRONTEND_OPTIONAL;
 int taiko_frontend_browser_captures_text(void)
     TAIKO_FRONTEND_OPTIONAL;
+
+/* Enter and display the host song select browser shell */
+void taiko_frontend_enter_song_select_shell(void);
 
 /* Called at the verified Player Entry dispatcher boundary on the main PPU
  * thread. Host/UI threads only enqueue intent; all guest calls happen here. */
