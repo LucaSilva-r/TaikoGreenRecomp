@@ -16,26 +16,14 @@
  */
 
 #include "ppu_recomp.h"
+#include "taiko_audio_decoder.h"
 #include "taiko_audio_offset.h"
-
-#ifdef TAIKO_HAVE_FFMPEG
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
-#include <libavutil/log.h>
-#include <libavutil/mem.h>
-#include <libswresample/swresample.h>
-}
-#endif
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 #include <cstdint>
-#include <cerrno>
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
@@ -45,7 +33,6 @@ extern "C" {
 #include <condition_variable>
 #include <cstring>
 #include <filesystem>
-#include <list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -162,14 +149,6 @@ uint32_t read_le32(uint32_t ea)
            (static_cast<uint32_t>(vm_read8(ea + 3)) << 24);
 }
 
-uint32_t read_le32(const uint8_t* data)
-{
-    return static_cast<uint32_t>(data[0]) |
-           (static_cast<uint32_t>(data[1]) << 8) |
-           (static_cast<uint32_t>(data[2]) << 16) |
-           (static_cast<uint32_t>(data[3]) << 24);
-}
-
 void read_riff_loop(uint32_t data, uint32_t bytes, DecoderState& state)
 {
     /* ATRAC RIFFs carry sample-accurate loop points in a standard `smpl`
@@ -200,464 +179,6 @@ void read_riff_loop(uint32_t data, uint32_t bytes, DecoderState& state)
     }
 }
 
-#ifdef TAIKO_HAVE_FFMPEG
-
-constexpr size_t kMaxRiffBytes = 256u * 1024u * 1024u;
-
-struct RiffLocation {
-    std::string path;
-    uint64_t offset = 0;
-};
-
-std::mutex g_riff_index_mutex;
-std::unordered_map<uint64_t, RiffLocation> g_riff_index;
-std::once_flag g_riff_index_once;
-
-/* Full decoded songs are tens of MiB each, so an unbounded "cache every song"
- * policy would consume tens of GiB while browsing the catalog. Keep recently
- * used ATRAC assets in a byte-bounded LRU instead. Decoder handles share the
- * immutable vector, avoiding both another FFmpeg pass and a large PCM copy. */
-struct PcmCacheEntry {
-    uint64_t hash;
-    size_t riff_bytes;
-    uint32_t sample_rate;
-    std::shared_ptr<std::vector<float>> pcm;
-};
-
-std::mutex g_pcm_cache_mutex;
-std::list<PcmCacheEntry> g_pcm_cache;
-size_t g_pcm_cache_bytes = 0;
-
-size_t pcm_cache_limit_bytes()
-{
-    static const size_t limit = [] {
-        const char* text = std::getenv("TAIKO_AUDIO_PCM_CACHE_MB");
-        unsigned long mb = text ? std::strtoul(text, nullptr, 0) : 512ul;
-        if (mb < 64ul) mb = 64ul;
-        if (mb > 8192ul) mb = 8192ul;
-        return static_cast<size_t>(mb) * 1024u * 1024u;
-    }();
-    return limit;
-}
-
-uint64_t host_fnv1a64(const std::vector<uint8_t>& bytes)
-{
-    uint64_t hash = 1469598103934665603ull;
-    for (uint8_t byte : bytes) {
-        hash ^= byte;
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
-
-bool pcm_cache_lookup(uint64_t hash, size_t riff_bytes, DecoderState& state)
-{
-    std::lock_guard<std::mutex> lock(g_pcm_cache_mutex);
-    for (auto it = g_pcm_cache.begin(); it != g_pcm_cache.end(); ++it) {
-        if (it->hash != hash || it->riff_bytes != riff_bytes)
-            continue;
-        state.pcm = it->pcm;
-        state.sample_rate = it->sample_rate;
-        state.pcm_cache_hit = true;
-        g_pcm_cache.splice(g_pcm_cache.begin(), g_pcm_cache, it);
-        return true;
-    }
-    return false;
-}
-
-void pcm_cache_insert(uint64_t hash, size_t riff_bytes,
-                      uint32_t sample_rate,
-                      const std::shared_ptr<std::vector<float>>& pcm)
-{
-    const size_t bytes = pcm->size() * sizeof(float);
-    const size_t limit = pcm_cache_limit_bytes();
-    if (bytes > limit) return;
-
-    std::lock_guard<std::mutex> lock(g_pcm_cache_mutex);
-    for (auto it = g_pcm_cache.begin(); it != g_pcm_cache.end(); ++it) {
-        if (it->hash == hash && it->riff_bytes == riff_bytes) {
-            g_pcm_cache_bytes -= it->pcm->size() * sizeof(float);
-            g_pcm_cache.erase(it);
-            break;
-        }
-    }
-    g_pcm_cache.push_front(PcmCacheEntry{hash, riff_bytes, sample_rate, pcm});
-    g_pcm_cache_bytes += bytes;
-    while (g_pcm_cache_bytes > limit && g_pcm_cache.size() > 1) {
-        const auto& victim = g_pcm_cache.back();
-        g_pcm_cache_bytes -= victim.pcm->size() * sizeof(float);
-        g_pcm_cache.pop_back();
-    }
-}
-
-bool read_file_riff(const RiffLocation& location,
-                    const std::vector<uint8_t>& prefix,
-                    size_t declared_bytes, std::vector<uint8_t>& riff)
-{
-    FILE* file = std::fopen(location.path.c_str(), "rb");
-    if (!file) return false;
-    /* NUB scanning only records RIFF offsets from the first 64 KiB, so the
-     * portable C seek is sufficient even where long is 32-bit. */
-    bool ok = std::fseek(file, static_cast<long>(location.offset), SEEK_SET) == 0;
-    std::vector<uint8_t> check(prefix.size());
-    if (ok)
-        ok = std::fread(check.data(), 1, check.size(), file) == check.size() &&
-             check == prefix;
-    if (ok)
-        ok = std::fseek(file, static_cast<long>(location.offset), SEEK_SET) == 0;
-    if (ok) {
-        riff.resize(declared_bytes);
-        ok = std::fread(riff.data(), 1, riff.size(), file) == riff.size();
-    }
-    std::fclose(file);
-    if (!ok) riff.clear();
-    return ok;
-}
-
-void build_riff_index()
-{
-    const char* root = std::getenv("PS3_VFS_ROOT");
-    if (!root || !*root) return;
-    const std::filesystem::path directory =
-        std::filesystem::path(root) / "data" / "sound" / "bgm" / "nub";
-    std::error_code directory_error;
-    std::filesystem::directory_iterator entries(directory, directory_error);
-    if (directory_error) return;
-
-    const uint64_t started_ns = ps3_host_monotonic_ns();
-    std::unordered_map<uint64_t, RiffLocation> built;
-    for (const auto& entry : entries) {
-        std::error_code entry_error;
-        if (!entry.is_regular_file(entry_error) || entry_error ||
-            entry.path().extension() != ".nub")
-            continue;
-        const std::string path = entry.path().string();
-        FILE* file = std::fopen(path.c_str(), "rb");
-        if (!file) continue;
-        std::vector<uint8_t> header(0x10000);
-        const size_t header_bytes =
-            std::fread(header.data(), 1, header.size(), file);
-        header.resize(header_bytes);
-        auto marker = std::search(header.begin(), header.end(),
-                                  "RIFF", "RIFF" + 4);
-        while (marker != header.end()) {
-            const size_t offset = static_cast<size_t>(marker - header.begin());
-            if (offset + 12 <= header.size() &&
-                std::memcmp(header.data() + offset + 8, "WAVE", 4) == 0 &&
-                std::fseek(file, static_cast<long>(offset), SEEK_SET) == 0) {
-                std::vector<uint8_t> signature(4096);
-                const size_t signature_bytes = std::fread(
-                    signature.data(), 1, signature.size(), file);
-                if (signature_bytes == signature.size())
-                    built[host_fnv1a64(signature)] =
-                        RiffLocation{path, offset};
-            }
-            marker = std::search(marker + 4, header.end(),
-                                 "RIFF", "RIFF" + 4);
-        }
-        std::fclose(file);
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_riff_index_mutex);
-        for (auto& [hash, location] : built)
-            g_riff_index.emplace(hash, std::move(location));
-    }
-    const uint64_t finished_ns = ps3_host_monotonic_ns();
-    std::fprintf(stderr,
-        "[taiko_atrac] indexed %zu NUB RIFF sources in %.2fms\n",
-        built.size(),
-        static_cast<double>(finished_ns - started_ns) / 1000000.0);
-}
-
-bool resolve_complete_riff(uint64_t hash, const std::vector<uint8_t>& prefix,
-                           std::vector<uint8_t>& riff, std::string& source)
-{
-    if (prefix.size() < 12 || std::memcmp(prefix.data(), "RIFF", 4) != 0 ||
-        std::memcmp(prefix.data() + 8, "WAVE", 4) != 0)
-        return false;
-    const uint64_t declared64 = static_cast<uint64_t>(read_le32(prefix.data() + 4)) + 8;
-    if (declared64 < 12 || declared64 > kMaxRiffBytes)
-        return false;
-    const size_t declared = static_cast<size_t>(declared64);
-    if (declared <= prefix.size()) {
-        riff.assign(prefix.begin(), prefix.begin() + declared);
-        source = "guest-buffer";
-        return true;
-    }
-
-    if (prefix.size() >= 4096)
-        std::call_once(g_riff_index_once, build_riff_index);
-
-    std::lock_guard<std::mutex> index_lock(g_riff_index_mutex);
-    if (auto known = g_riff_index.find(hash); known != g_riff_index.end()) {
-        if (read_file_riff(known->second, prefix, declared, riff)) {
-            source = known->second.path;
-            return true;
-        }
-        g_riff_index.erase(known);
-    }
-
-    const char* root = std::getenv("PS3_VFS_ROOT");
-    if (!root || !*root) return false;
-    const std::filesystem::path directory =
-        std::filesystem::path(root) / "data" / "sound" / "bgm" / "nub";
-    std::error_code directory_error;
-    std::filesystem::directory_iterator entries(directory, directory_error);
-    if (directory_error) return false;
-    bool matched = false;
-    for (const auto& entry : entries) {
-        std::error_code entry_error;
-        if (!entry.is_regular_file(entry_error) || entry_error ||
-            entry.path().extension() != ".nub")
-            continue;
-        RiffLocation candidate{entry.path().string(), 0};
-        FILE* file = std::fopen(candidate.path.c_str(), "rb");
-        if (!file) continue;
-        std::vector<uint8_t> header(0x10000);
-        const size_t header_bytes = std::fread(header.data(), 1, header.size(), file);
-        header.resize(header_bytes);
-        std::fclose(file);
-        auto marker = std::search(header.begin(), header.end(),
-                                  prefix.begin(), prefix.begin() + 4);
-        while (marker != header.end()) {
-            candidate.offset = static_cast<uint64_t>(marker - header.begin());
-            if (read_file_riff(candidate, prefix, declared, riff)) {
-                g_riff_index[hash] = candidate;
-                source = candidate.path;
-                matched = true;
-                break;
-            }
-            marker = std::search(marker + 1, header.end(),
-                                 prefix.begin(), prefix.begin() + 4);
-        }
-        if (matched) break;
-    }
-    return matched;
-}
-
-struct MemoryInput {
-    const uint8_t* data = nullptr;
-    size_t size = 0;
-    size_t position = 0;
-};
-
-int read_memory_packet(void* opaque, uint8_t* destination, int requested)
-{
-    auto& input = *static_cast<MemoryInput*>(opaque);
-    const size_t available = input.size - std::min(input.position, input.size);
-    const size_t count = std::min<size_t>(available, static_cast<size_t>(requested));
-    if (!count) return AVERROR_EOF;
-    std::memcpy(destination, input.data + input.position, count);
-    input.position += count;
-    return static_cast<int>(count);
-}
-
-int64_t seek_memory(void* opaque, int64_t offset, int whence)
-{
-    auto& input = *static_cast<MemoryInput*>(opaque);
-    if (whence == AVSEEK_SIZE) return static_cast<int64_t>(input.size);
-    whence &= ~AVSEEK_FORCE;
-    int64_t base = 0;
-    if (whence == SEEK_CUR) base = static_cast<int64_t>(input.position);
-    else if (whence == SEEK_END) base = static_cast<int64_t>(input.size);
-    else if (whence != SEEK_SET) return AVERROR(EINVAL);
-    if (offset < -base || offset > static_cast<int64_t>(input.size) - base)
-        return AVERROR(EINVAL);
-    input.position = static_cast<size_t>(base + offset);
-    return static_cast<int64_t>(input.position);
-}
-
-uint32_t riff_fact_samples(const std::vector<uint8_t>& riff)
-{
-    size_t offset = 12;
-    while (offset + 8 <= riff.size()) {
-        const uint32_t size = read_le32(riff.data() + offset + 4);
-        if (std::memcmp(riff.data() + offset, "fact", 4) == 0 &&
-            size >= 4 && offset + 12 <= riff.size())
-            return read_le32(riff.data() + offset + 8);
-        if (std::memcmp(riff.data() + offset, "data", 4) == 0) break;
-        const uint64_t next = static_cast<uint64_t>(offset) + 8 + size + (size & 1u);
-        if (next > riff.size()) break;
-        offset = static_cast<size_t>(next);
-    }
-    return 0;
-}
-
-std::string ffmpeg_error(int error)
-{
-    char text[AV_ERROR_MAX_STRING_SIZE]{};
-    av_strerror(error, text, sizeof text);
-    return text;
-}
-
-bool decode_riff(const std::vector<uint8_t>& riff, DecoderState& state,
-                 std::string& failure,
-                 const std::atomic<bool>* cancelled = nullptr)
-{
-    static std::once_flag log_once;
-    std::call_once(log_once, [] { av_log_set_level(AV_LOG_ERROR); });
-
-    MemoryInput input{riff.data(), riff.size(), 0};
-    AVIOContext* io = nullptr;
-    AVFormatContext* format = nullptr;
-    AVCodecContext* decoder = nullptr;
-    SwrContext* resampler = nullptr;
-    AVPacket* packet = nullptr;
-    AVFrame* frame = nullptr;
-    AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
-    int last_error = 0;
-
-    bool ok = [&]() {
-        constexpr int io_buffer_bytes = 32768;
-        uint8_t* io_buffer = static_cast<uint8_t*>(av_malloc(io_buffer_bytes));
-        if (!io_buffer) { failure = "out of memory allocating AVIO"; return false; }
-        io = avio_alloc_context(io_buffer, io_buffer_bytes, 0, &input,
-                                read_memory_packet, nullptr, seek_memory);
-        if (!io) {
-            av_free(io_buffer);
-            failure = "could not create AVIO context";
-            return false;
-        }
-        format = avformat_alloc_context();
-        if (!format) { failure = "could not create format context"; return false; }
-        format->pb = io;
-        format->flags |= AVFMT_FLAG_CUSTOM_IO;
-        const AVInputFormat* wav = av_find_input_format("wav");
-        last_error = avformat_open_input(&format, nullptr, wav, nullptr);
-        if (last_error < 0) { failure = "open WAV: " + ffmpeg_error(last_error); return false; }
-        last_error = avformat_find_stream_info(format, nullptr);
-        if (last_error < 0) { failure = "read stream info: " + ffmpeg_error(last_error); return false; }
-        const int stream = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO,
-                                               -1, -1, nullptr, 0);
-        if (stream < 0) { failure = "no audio stream: " + ffmpeg_error(stream); return false; }
-        const AVCodecParameters* parameters = format->streams[stream]->codecpar;
-        const AVCodec* codec = avcodec_find_decoder(parameters->codec_id);
-        if (!codec) { failure = "ATRAC3plus decoder is unavailable"; return false; }
-        decoder = avcodec_alloc_context3(codec);
-        if (!decoder) { failure = "could not create decoder context"; return false; }
-        last_error = avcodec_parameters_to_context(decoder, parameters);
-        if (last_error < 0) { failure = "copy codec parameters: " + ffmpeg_error(last_error); return false; }
-        last_error = avcodec_open2(decoder, codec, nullptr);
-        if (last_error < 0) { failure = "open decoder: " + ffmpeg_error(last_error); return false; }
-        if (decoder->sample_rate <= 0 || decoder->ch_layout.nb_channels <= 0) {
-            failure = "decoder reported an invalid audio layout";
-            return false;
-        }
-        state.sample_rate = static_cast<uint32_t>(decoder->sample_rate);
-        last_error = swr_alloc_set_opts2(&resampler, &stereo, AV_SAMPLE_FMT_FLT,
-                                         decoder->sample_rate, &decoder->ch_layout,
-                                         decoder->sample_fmt, decoder->sample_rate,
-                                         0, nullptr);
-        if (last_error < 0 || !resampler) {
-            failure = "create PCM converter: " + ffmpeg_error(last_error);
-            return false;
-        }
-        last_error = swr_init(resampler);
-        if (last_error < 0) { failure = "initialize PCM converter: " + ffmpeg_error(last_error); return false; }
-
-        packet = av_packet_alloc();
-        frame = av_frame_alloc();
-        if (!packet || !frame) { failure = "out of memory allocating decode frames"; return false; }
-
-        auto receive_frames = [&]() {
-            for (;;) {
-                const int received = avcodec_receive_frame(decoder, frame);
-                if (received == AVERROR(EAGAIN) || received == AVERROR_EOF) return true;
-                if (received < 0) {
-                    failure = "receive ATRAC frame: " + ffmpeg_error(received);
-                    return false;
-                }
-                const int capacity = swr_get_out_samples(resampler, frame->nb_samples);
-                if (capacity < 0) {
-                    failure = "size converted PCM: " + ffmpeg_error(capacity);
-                    return false;
-                }
-                const size_t old_size = state.pcm->size();
-                state.pcm->resize(old_size + static_cast<size_t>(capacity) * kChannels);
-                uint8_t* output[] = {
-                    reinterpret_cast<uint8_t*>(state.pcm->data() + old_size)
-                };
-                const int converted = swr_convert(resampler, output, capacity,
-                    const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples);
-                if (converted < 0) {
-                    failure = "convert PCM: " + ffmpeg_error(converted);
-                    return false;
-                }
-                state.pcm->resize(old_size + static_cast<size_t>(converted) * kChannels);
-                av_frame_unref(frame);
-            }
-        };
-
-        while ((last_error = av_read_frame(format, packet)) >= 0) {
-            if (cancelled && cancelled->load(std::memory_order_relaxed)) {
-                failure = "cancelled";
-                av_packet_unref(packet);
-                return false;
-            }
-            if (packet->stream_index == stream) {
-                last_error = avcodec_send_packet(decoder, packet);
-                if (last_error < 0) {
-                    failure = "submit ATRAC packet: " + ffmpeg_error(last_error);
-                    av_packet_unref(packet);
-                    return false;
-                }
-                if (!receive_frames()) { av_packet_unref(packet); return false; }
-            }
-            av_packet_unref(packet);
-        }
-        if (last_error != AVERROR_EOF) {
-            failure = "read WAV packets: " + ffmpeg_error(last_error);
-            return false;
-        }
-        last_error = avcodec_send_packet(decoder, nullptr);
-        if (last_error < 0) { failure = "flush ATRAC decoder: " + ffmpeg_error(last_error); return false; }
-        if (!receive_frames()) return false;
-        return !state.pcm->empty();
-    }();
-
-    av_frame_free(&frame);
-    av_packet_free(&packet);
-    swr_free(&resampler);
-    avcodec_free_context(&decoder);
-    if (format) avformat_close_input(&format);
-    if (io) {
-        av_freep(&io->buffer);
-        avio_context_free(&io);
-    }
-
-    if (!ok) {
-        state.pcm->clear();
-        if (failure.empty()) failure = "decoder returned no PCM";
-        return false;
-    }
-    for (size_t i = 0; i < state.pcm->size(); ++i) {
-        if ((i & 0x3FFFFu) == 0 && cancelled &&
-            cancelled->load(std::memory_order_relaxed)) {
-            failure = "cancelled";
-            state.pcm->clear();
-            return false;
-        }
-        const float sample = (*state.pcm)[i];
-        if (!std::isfinite(sample) || std::abs(sample) > 4.0f) {
-            failure = "decoder produced an unsafe PCM sample";
-            state.pcm->clear();
-            return false;
-        }
-    }
-    const size_t frames = state.pcm->size() / kChannels;
-    const uint32_t fact = riff_fact_samples(riff);
-    if (fact && (frames < fact || frames > static_cast<size_t>(fact) + 8192)) {
-        char detail[128];
-        std::snprintf(detail, sizeof detail,
-                      "decoded duration %zu does not match RIFF fact %u", frames, fact);
-        failure = detail;
-        state.pcm->clear();
-        return false;
-    }
-    state.decode_cursor = 0;
-    return true;
-}
-
 bool prepare_guest_riff(uint32_t data, uint32_t bytes, uint64_t hash,
                         DecoderState& state, std::string& source,
                         std::string& failure, std::vector<uint8_t>& riff,
@@ -665,15 +186,33 @@ bool prepare_guest_riff(uint32_t data, uint32_t bytes, uint64_t hash,
 {
     std::vector<uint8_t> prefix(bytes);
     for (uint32_t i = 0; i < bytes; ++i) prefix[i] = vm_read8(data + i);
-    if (!resolve_complete_riff(hash, prefix, riff, source)) {
-        failure = "could not resolve the complete RIFF in data/sound/bgm/nub";
+    if (!taiko_audio_resolve_riff(hash, prefix, riff, source, failure)) {
         return false;
     }
-    pcm_hash = host_fnv1a64(riff);
-    if (pcm_cache_lookup(pcm_hash, riff.size(), state))
-        riff.clear();
+    pcm_hash = taiko_audio_hash_bytes(riff);
     return true;
 }
+
+bool decode_riff(const std::vector<uint8_t>& riff, DecoderState& state,
+                 std::string& failure,
+                 const std::atomic<bool>* cancelled = nullptr)
+{
+    TaikoDecodedAudio decoded;
+    if (!taiko_audio_decode_riff(riff, 0, cancelled, decoded, failure))
+        return false;
+    state.pcm = std::move(decoded.pcm);
+    state.sample_rate = decoded.sample_rate;
+    state.pcm_cache_hit = decoded.cache_hit;
+    if (decoded.has_loop) {
+        state.has_loop = true;
+        state.loop_start = decoded.loop_start;
+        state.loop_end = decoded.loop_end;
+    }
+    state.decode_cursor = 0;
+    return true;
+}
+
+#ifdef TAIKO_HAVE_FFMPEG
 
 struct PreviewDecodeJob {
     uint32_t handle = 0;
@@ -760,9 +299,8 @@ private:
             const uint64_t ready_host_ns = ps3_host_monotonic_ns();
             if (ready &&
                 !job->cancelled->load(std::memory_order_relaxed)) {
-                pcm_cache_insert(job->pcm_hash, job->riff.size(),
-                                 decoded.sample_rate, decoded.pcm);
                 size_t frames = 0;
+                const bool cache_hit = decoded.pcm_cache_hit;
                 bool published = false;
                 {
                     std::lock_guard<std::mutex> lock(g_decoder_mutex);
@@ -773,6 +311,12 @@ private:
                         DecoderState& state = it->second;
                         state.pcm = std::move(decoded.pcm);
                         state.sample_rate = decoded.sample_rate;
+                        state.pcm_cache_hit = decoded.pcm_cache_hit;
+                        if (decoded.has_loop) {
+                            state.has_loop = true;
+                            state.loop_start = decoded.loop_start;
+                            state.loop_end = decoded.loop_end;
+                        }
                         frames = state.pcm->size() / kChannels;
                         if (state.reset_requested)
                             state.decode_cursor = std::min<size_t>(
@@ -787,12 +331,13 @@ private:
                 if (published) {
                     std::fprintf(stderr,
                         "[taiko_atrac] async decoded handle=%08X hash=%016llX "
-                        "frames=%zu decode=%.2fms cache=miss read=%u buffer=%u source=%s\n",
+                        "frames=%zu decode=%.2fms cache=%s read=%u buffer=%u source=%s\n",
                         job->handle,
                         static_cast<unsigned long long>(job->prefix_hash),
                         frames,
                         static_cast<double>(ready_host_ns - decode_start_ns) /
                             1000000.0,
+                        cache_hit ? "hit" : "miss",
                         job->initial_bytes, job->buffer_bytes,
                         job->source.c_str());
                 }
@@ -829,14 +374,6 @@ PreviewDecodeWorker& preview_decode_worker()
 }
 
 #else
-
-bool prepare_guest_riff(uint32_t, uint32_t, uint64_t, DecoderState&,
-                        std::string&, std::string& failure,
-                        std::vector<uint8_t>&, uint64_t&)
-{
-    failure = "this executable was built without in-process ATRAC support";
-    return false;
-}
 
 #endif
 
@@ -909,7 +446,7 @@ void set_data_and_get_mem_size(ppu_context* ctx)
         const bool prepared = prepare_guest_riff(
             data, bytes, source_hash, state, source, failure, riff, pcm_hash);
         state.gameplay_song = prepared && is_gameplay_song(source, bytes);
-        bool ready = prepared && state.pcm_cache_hit;
+        bool ready = false;
         bool queued = false;
 #ifdef TAIKO_HAVE_FFMPEG
         const char* async_previews = std::getenv("TAIKO_AUDIO_ASYNC_PREVIEWS");
@@ -927,9 +464,6 @@ void set_data_and_get_mem_size(ppu_context* ctx)
             /* Gameplay and short in-memory jingles remain synchronous: their
              * start time and authored loop state must be ready on return. */
             ready = decode_riff(riff, state, failure);
-            if (ready)
-                pcm_cache_insert(pcm_hash, riff.size(), state.sample_rate,
-                                 state.pcm);
         }
 #endif
         if (ready && state.gameplay_song) {

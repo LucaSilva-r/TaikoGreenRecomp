@@ -85,17 +85,21 @@ static FT_Library g_library;
 static FT_Face    g_face;
 static int        g_font_state;    /* 0 untried, 1 ready, -1 unavailable */
 
-/* Published to the RSX backend, which blits whatever this returns over the
- * frame. Weak so a build with a backend that has no overlay support still
- * links; the assignment below is then simply skipped. */
-extern const uint32_t* (*g_rsx_overlay_frame)(int* width, int* height,
-                                              uint32_t* version)
-    __attribute__((weak));
+/* Published to the RSX backend. Weak symbols keep null/alternate renderer
+ * builds independent of this title extension. */
+extern RsxHostFrameCopy g_rsx_host_frame_copy __attribute__((weak));
+extern void rsx_sdl_gpu_backend_wake(void) __attribute__((weak));
 
 __attribute__((constructor))
 static void taiko_overlay_register(void)
 {
-    if (&g_rsx_overlay_frame) g_rsx_overlay_frame = taiko_overlay_frame;
+    if (&g_rsx_host_frame_copy)
+        g_rsx_host_frame_copy = taiko_host_frame_copy;
+}
+
+static void wake_renderer(void)
+{
+    if (rsx_sdl_gpu_backend_wake) rsx_sdl_gpu_backend_wake();
 }
 
 static long monotonic_seconds(void)
@@ -696,6 +700,7 @@ void taiko_overlay_set_pairing(const char* code, int expires_in)
     if (g_mode != 4) g_mode = 1;
     g_drawn_remaining = -1;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_set_status(const char* text, int expires_in)
@@ -711,6 +716,7 @@ void taiko_overlay_set_status(const char* text, int expires_in)
     g_mode = 2;
     g_drawn_remaining = -1;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_show_entry_menu(int selection)
@@ -723,6 +729,7 @@ void taiko_overlay_show_entry_menu(int selection)
     g_drawn_remaining = -1;
     ++g_version;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_show_baid_wait(void)
@@ -733,6 +740,7 @@ void taiko_overlay_show_baid_wait(void)
     g_drawn_remaining = -1;
     ++g_version;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_show_entry_progress(const char* player_name)
@@ -746,6 +754,7 @@ void taiko_overlay_show_entry_progress(const char* player_name)
     g_drawn_remaining = -1;
     ++g_version;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_show_song_select(const char* player_name)
@@ -769,6 +778,7 @@ void taiko_overlay_show_song_select(const char* player_name)
     g_drawn_remaining = -1;
     ++g_version;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_show_song_browser(const char* player_name,
@@ -830,6 +840,7 @@ void taiko_overlay_show_song_browser(const char* player_name,
     g_drawn_remaining = -1;
     ++g_version;
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_hide_host_screen(void)
@@ -842,6 +853,7 @@ void taiko_overlay_hide_host_screen(void)
         ++g_version;
     }
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
 void taiko_overlay_clear(void)
@@ -854,6 +866,7 @@ void taiko_overlay_clear(void)
             ++g_version;
         }
         pthread_mutex_unlock(&g_lock);
+        wake_renderer();
         return;
     }
     if (g_visible) ++g_version;
@@ -862,10 +875,13 @@ void taiko_overlay_clear(void)
     g_code[0] = '\0';
     g_status[0] = '\0';
     pthread_mutex_unlock(&g_lock);
+    wake_renderer();
 }
 
-const uint32_t* taiko_overlay_frame(int* width, int* height, uint32_t* version)
+int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
+                          size_t destination_bytes)
 {
+    if (!info) return 0;
     pthread_mutex_lock(&g_lock);
 
     int remaining = (int)(g_deadline - monotonic_seconds());
@@ -879,16 +895,29 @@ const uint32_t* taiko_overlay_frame(int* width, int* height, uint32_t* version)
         ++g_version;
     }
     if (!g_visible || !font_ready()) {
-        const uint32_t current = g_version;
+        info->mode = HOST_FRAME_NONE;
+        info->width = 0;
+        info->height = 0;
+        info->pitch = 0;
+        info->version = g_version;
         pthread_mutex_unlock(&g_lock);
-        if (version) *version = current;
-        return NULL;
+        return 0;
     }
     if (remaining != g_drawn_remaining) render(remaining);
 
-    if (width) *width = g_width;
-    if (height) *height = g_height;
-    if (version) *version = g_version;
+    info->mode = g_mode >= 3 ? HOST_FRAME_FULLSCREEN : HOST_FRAME_OVERLAY;
+    info->width = (uint32_t)g_width;
+    info->height = (uint32_t)g_height;
+    info->pitch = (uint32_t)g_width * sizeof(uint32_t);
+    info->version = g_version;
+    if (destination) {
+        const size_t required = (size_t)info->pitch * info->height;
+        if (destination_bytes < required) {
+            pthread_mutex_unlock(&g_lock);
+            return 0;
+        }
+        memcpy(destination, g_pixels, required);
+    }
     pthread_mutex_unlock(&g_lock);
-    return g_pixels;
+    return 1;
 }

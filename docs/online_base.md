@@ -198,8 +198,8 @@ by `tools/gen_pairing_pill.py`), with the countdown in the red disc and the
 code as `661-722` across the yellow body, both in the game's own font.
 `src/taiko_overlay.c` rasterizes the text with FreeType (vendored by
 `scripts/build_freetype.sh`) and composites it onto the artwork; the SDL_GPU
-backend draws the result over the presented frame through an optional
-`g_rsx_overlay_frame` hook.
+backend obtains a coherent copy through the optional `g_rsx_host_frame_copy`
+provider and draws the result over the presented frame.
 
 That draw is a small alpha-blended textured quad, not a blit: `SDL_BlitGPUTexture`
 cannot blend, so the pill's rounded transparent ends would be punched into the

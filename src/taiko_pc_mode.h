@@ -9,20 +9,27 @@ extern "C" {
 
 struct ppu_context;
 
-/* Private Lumen-to-host value. The callback shim rewrites it to normal Play
- * before the original game code sees it, so it cannot collide with AI Battle. */
+/* Private fourth argument on SetNextScene; never stored as a guest game mode.
+ * The stock callback reads only its original first three arguments. */
 #define TAIKO_PC_MODE_SENTINEL 99u
 #define TAIKO_PC_MODE_SAFE_GAME_MODE 1u
 
 /* Returns 1 if Custom PC Mode is currently active, 0 otherwise. */
 int taiko_pc_mode_is_active(void);
+/* Development gate. Unset/zero keeps the validated GameSongSelect-backed
+ * diagnostic path; one enables the host-only sequence freeze. */
+int taiko_pc_mode_is_standalone(void);
 
-/* Called by the game-mode selection callback (func_002287BC). */
+/* Called by the normal scene-commit callback (func_002287BC). */
 void taiko_pc_mode_on_game_mode_selected(uint32_t mode);
 
 /* Observe the stock Player Entry dispatcher and arm the handoff only after
  * its authored fade/cleanup has reached the final state. */
 void taiko_pc_mode_entry_tick(struct ppu_context* ctx);
+
+/* Intercept the post-Entry destination factory before it allocates Song
+ * Select. Returns nonzero after the factory's native outgoing-scene prefix. */
+int taiko_pc_mode_destination_override(struct ppu_context* ctx);
 
 /* Called to activate PC Mode frontend. */
 void taiko_pc_mode_activate(uint32_t controller);

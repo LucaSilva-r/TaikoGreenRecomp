@@ -4,6 +4,7 @@
 
 #include "rsx_recorder.h"
 #include "rsx_render_batch.h"
+#include "rsx_host_frame.h"
 #include "rsx_vp_decompiler.h"
 #include "rsx_fp_decompiler.h"
 #include "ps3emu/host_platform.h"
@@ -227,6 +228,8 @@ typedef struct sdl_rsx_state {
     unsigned queue_write;
     unsigned queue_count;
     Uint32 wake_event;
+    int host_present_requested;
+    Uint64 host_last_present_ns;
     gpu_surface surfaces[SDL_RSX_MAX_SURFACES];
     unsigned surface_count;
     SDL_GPUTexture* display;
@@ -361,6 +364,15 @@ typedef struct sdl_rsx_state {
 } sdl_rsx_state;
 
 static sdl_rsx_state s_sdl;
+
+void rsx_sdl_gpu_backend_wake(void)
+{
+    if (!s_sdl.initialized) return;
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = s_sdl.wake_event;
+    SDL_PushEvent(&event);
+}
 
 typedef struct pace_stats {
     double mean_ms;
@@ -2190,12 +2202,8 @@ static SDL_GPUTexture* presentation_texture(Uint32* source_width,
     return result;
 }
 
-/* Optional overlay, supplied by the title layer (src/taiko_overlay.c): a
- * straight-alpha RGBA image drawn over the presented frame. Windowed output
- * uses the GPU quad below; direct KMS blends it during the scanout CPU copy.
- * A build without the title hook simply draws nothing. */
-const uint32_t* (*g_rsx_overlay_frame)(int* width, int* height,
-                                      uint32_t* version);
+/* Optional copied host frame supplied by the title layer. */
+RsxHostFrameCopy g_rsx_host_frame_copy;
 
 static struct {
     SDL_GPUTexture* texture;
@@ -2205,6 +2213,10 @@ static struct {
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUSampler* sampler;
     SDL_GPUTextureFormat pipeline_format;
+    uint8_t* pixels;
+    size_t pixel_capacity;
+    HostFrameInfo frame;
+    uint32_t presented_version;
 } s_overlay;
 
 static struct {
@@ -2479,6 +2491,49 @@ static int draw_fps_overlay(SDL_GPUCommandBuffer* commands,
     return 1;
 }
 
+static int copy_host_frame(void)
+{
+    HostFrameInfo queried;
+    SDL_zero(queried);
+    if (!g_rsx_host_frame_copy ||
+        !g_rsx_host_frame_copy(&queried, NULL, 0)) {
+        s_overlay.frame = queried;
+        return 0;
+    }
+    if (!queried.width || !queried.height ||
+        queried.pitch < queried.width * sizeof(uint32_t) ||
+        queried.height > SIZE_MAX / queried.pitch) {
+        SDL_zero(s_overlay.frame);
+        return 0;
+    }
+    const size_t required = (size_t)queried.pitch * queried.height;
+    if (required > s_overlay.pixel_capacity) {
+        void* resized = realloc(s_overlay.pixels, required);
+        if (!resized) return 0;
+        s_overlay.pixels = (uint8_t*)resized;
+        s_overlay.pixel_capacity = required;
+    }
+    if (s_overlay.frame.version == queried.version &&
+        s_overlay.frame.mode == queried.mode &&
+        s_overlay.frame.width == queried.width &&
+        s_overlay.frame.height == queried.height &&
+        s_overlay.frame.pitch == queried.pitch)
+        return 1;
+
+    HostFrameInfo copied;
+    SDL_zero(copied);
+    if (!g_rsx_host_frame_copy(&copied, s_overlay.pixels,
+                               s_overlay.pixel_capacity))
+        return 0;
+    if (!copied.width || !copied.height ||
+        copied.pitch < copied.width * sizeof(uint32_t) ||
+        copied.height > SIZE_MAX / copied.pitch ||
+        (size_t)copied.pitch * copied.height > s_overlay.pixel_capacity)
+        return 0;
+    s_overlay.frame = copied;
+    return 1;
+}
+
 /* Upload when the pixels changed, then blit into the frame's top-left. */
 static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapchain,
                          Uint32 swapchain_width, Uint32 swapchain_height,
@@ -2486,11 +2541,11 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
                          Uint32 frame_width, Uint32 frame_height,
                          SDL_GPUTextureFormat target_format)
 {
-    int width = 0, height = 0;
-    uint32_t version = 0;
-    const uint32_t* pixels =
-        g_rsx_overlay_frame ? g_rsx_overlay_frame(&width, &height, &version) : NULL;
-    if (!pixels || width <= 0 || height <= 0) return;
+    if (!copy_host_frame()) return;
+    const int width = (int)s_overlay.frame.width;
+    const int height = (int)s_overlay.frame.height;
+    const uint32_t version = s_overlay.frame.version;
+    const uint8_t* pixels = s_overlay.pixels;
 
     if (s_overlay.texture &&
         (s_overlay.width != width || s_overlay.height != height)) {
@@ -2515,7 +2570,7 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
         s_overlay.uploaded = 0;
     }
     if (!s_overlay.uploaded || s_overlay.version != version) {
-        const Uint32 size = (Uint32)width * (Uint32)height * 4u;
+        const Uint32 size = s_overlay.frame.pitch * (Uint32)height;
         SDL_GPUTransferBufferCreateInfo transfer_info;
         SDL_zero(transfer_info);
         transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
@@ -2537,7 +2592,7 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
             SDL_GPUTextureTransferInfo upload;
             SDL_zero(upload);
             upload.transfer_buffer = transfer;
-            upload.pixels_per_row = (Uint32)width;
+            upload.pixels_per_row = s_overlay.frame.pitch / 4u;
             upload.rows_per_layer = (Uint32)height;
             SDL_GPUTextureRegion destination;
             SDL_zero(destination);
@@ -2650,20 +2705,15 @@ static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
         *pitch = *x = *y = *width = *height = 0;
         return NULL;
     }
-    int title_width = 0, title_height = 0;
-    uint32_t version = 0;
-    const uint32_t* title = g_rsx_overlay_frame
-        ? g_rsx_overlay_frame(&title_width, &title_height, &version) : NULL;
-    (void)version;
-    if (title && title_width > 0 && title_height > 0 &&
-        title_width <= KMS_CPU_OVERLAY_MAX_WIDTH &&
-        title_height <= KMS_CPU_OVERLAY_MAX_HEIGHT) {
-        *width = (unsigned)title_width;
-        *height = (unsigned)title_height;
-        *pitch = *width * 4u;
+    const int have_title = copy_host_frame();
+    if (have_title && s_overlay.frame.width <= KMS_CPU_OVERLAY_MAX_WIDTH &&
+        s_overlay.frame.height <= KMS_CPU_OVERLAY_MAX_HEIGHT) {
+        *width = s_overlay.frame.width;
+        *height = s_overlay.frame.height;
+        *pitch = s_overlay.frame.pitch;
         *x = (SDL_RSX_WIDTH - *width) / 2u;
         *y = SDL_RSX_HEIGHT * 4u / 100u;
-        return title;
+        return (const uint32_t*)s_overlay.pixels;
     }
     if (s_sdl.perf_overlay && s_fps_overlay.cpu_version != 0) {
         *width = FPS_OVERLAY_WIDTH;
@@ -2679,13 +2729,9 @@ static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
 
 static int title_overlay_requires_gpu(void)
 {
-    int width = 0, height = 0;
-    uint32_t version = 0;
-    const uint32_t* pixels = g_rsx_overlay_frame
-        ? g_rsx_overlay_frame(&width, &height, &version) : NULL;
-    (void)version;
-    return pixels && (width > KMS_CPU_OVERLAY_MAX_WIDTH ||
-                      height > KMS_CPU_OVERLAY_MAX_HEIGHT);
+    return copy_host_frame() &&
+        (s_overlay.frame.width > KMS_CPU_OVERLAY_MAX_WIDTH ||
+         s_overlay.frame.height > KMS_CPU_OVERLAY_MAX_HEIGHT);
 }
 
 static void kms_snapshot_cpu_overlay(struct kms_slot* slot)
@@ -3160,6 +3206,39 @@ static int present_display(SDL_GPUCommandBuffer* commands)
                                            : submit_commands(commands);
     s_sdl.perf_fence_ns += SDL_GetTicksNS() - blit_end_ns;
     return result;
+}
+
+static int present_host_frame_only(void)
+{
+    if (!copy_host_frame() ||
+        s_overlay.frame.mode != HOST_FRAME_FULLSCREEN)
+        return -1;
+#ifdef RSX_SDL_KMS_PRESENT
+    if (s_sdl.kms_present) {
+        SDL_GPUCommandBuffer* commands =
+            SDL_AcquireGPUCommandBuffer(s_sdl.device);
+        if (!commands) return -1;
+        SDL_GPUColorTargetInfo target;
+        SDL_zero(target);
+        target.texture = s_sdl.display;
+        target.clear_color.a = 1.0f;
+        target.load_op = SDL_GPU_LOADOP_CLEAR;
+        target.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* pass =
+            SDL_BeginGPURenderPass(commands, &target, 1, NULL);
+        if (!pass) {
+            SDL_CancelGPUCommandBuffer(commands);
+            return -1;
+        }
+        SDL_EndGPURenderPass(pass);
+        draw_overlay(commands, s_sdl.display,
+                     SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                     0, 0, SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+        return present_display_kms(commands);
+    }
+#endif
+    return present_display(NULL);
 }
 
 static void update_window_title(void)
@@ -3721,8 +3800,14 @@ done:
     free(vertex_constant_offsets);
     free(vertex_offsets);
     const Uint64 present_start_ns = perf_start;
-    if (present_display(commands) == 0)
+    if (present_display(commands) == 0) {
         ++s_sdl.fps_window_frames;
+        if (s_overlay.frame.mode == HOST_FRAME_FULLSCREEN) {
+            s_overlay.presented_version = s_overlay.frame.version;
+            s_sdl.host_last_present_ns = SDL_GetTicksNS();
+            s_sdl.host_present_requested = 0;
+        }
+    }
     perf_mark = SDL_GetTicksNS();
     s_sdl.perf_present_ns += perf_mark - perf_start;
     trace_frame_pacing(enqueue_ns, execute_start_ns, present_start_ns, perf_mark);
@@ -4373,6 +4458,12 @@ static void handle_event(const SDL_Event* event)
             SDL_UnlockMutex(s_sdl.queue_mutex);
         } else s_sdl.stopping = 1;
         return;
+    }
+    if (event->type == SDL_EVENT_WINDOW_EXPOSED ||
+        event->type == SDL_EVENT_WINDOW_RESTORED ||
+        event->type == SDL_EVENT_WINDOW_RESIZED ||
+        event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+        s_sdl.host_present_requested = 1;
     }
 #ifndef RSX_SDL_REPLAY_STANDALONE
     if (event->type == SDL_EVENT_TEXT_INPUT) {
@@ -5033,6 +5124,25 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
      * event wait, or presentation would fall to one batch per timeout. */
     if (rsx_sdl_gpu_backend_has_pending_batches()) timeout_ms = 0;
 
+    /* A full-screen host frame has no RSX producer to wake or present it.
+     * Poll its version before sleeping, while preserving the 60 Hz ceiling. */
+    if (copy_host_frame() &&
+        s_overlay.frame.mode == HOST_FRAME_FULLSCREEN &&
+        (s_sdl.host_present_requested ||
+         s_overlay.presented_version != s_overlay.frame.version)) {
+        const Uint64 now = SDL_GetTicksNS();
+        const Uint64 interval = 1000000000ull / 60ull;
+        if (!s_sdl.host_last_present_ns ||
+            now - s_sdl.host_last_present_ns >= interval) {
+            timeout_ms = 0;
+        } else {
+            const int remaining_ms = (int)((interval -
+                (now - s_sdl.host_last_present_ns) + 999999ull) / 1000000ull);
+            if (timeout_ms < 0 || remaining_ms < timeout_ms)
+                timeout_ms = remaining_ms;
+        }
+    }
+
     /* This thread owns the window, so it is the one Windows watches: five
      * seconds without pumping and the desktop replaces the window with a grey
      * "Not Responding" ghost while the game keeps rendering behind it. Report
@@ -5049,6 +5159,21 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
     evdev_poll_hotkeys();
     const Uint64 events_done_ns = SDL_GetTicksNS();
     const unsigned executed = drain_batches();
+    if (!executed && copy_host_frame() &&
+        s_overlay.frame.mode == HOST_FRAME_FULLSCREEN &&
+        (s_sdl.host_present_requested ||
+         s_overlay.presented_version != s_overlay.frame.version)) {
+        const Uint64 now = SDL_GetTicksNS();
+        const Uint64 interval = 1000000000ull / 60ull;
+        if (!s_sdl.host_last_present_ns ||
+            now - s_sdl.host_last_present_ns >= interval) {
+            if (present_host_frame_only() == 0) {
+                s_overlay.presented_version = s_overlay.frame.version;
+                s_sdl.host_last_present_ns = SDL_GetTicksNS();
+                s_sdl.host_present_requested = 0;
+            }
+        }
+    }
     const Uint64 end_ns = SDL_GetTicksNS();
 
     if (end_ns - iterate_start_ns > 250000000ull) {
@@ -5220,6 +5345,7 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
             SDL_ReleaseGPUGraphicsPipeline(s_sdl.device, s_overlay.pipeline);
         if (s_overlay.sampler)
             SDL_ReleaseGPUSampler(s_sdl.device, s_overlay.sampler);
+        free(s_overlay.pixels);
         SDL_zero(s_overlay);
         if (s_fps_overlay.texture)
             SDL_ReleaseGPUTexture(s_sdl.device, s_fps_overlay.texture);

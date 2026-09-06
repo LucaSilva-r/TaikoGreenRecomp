@@ -388,8 +388,10 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_init.c"       # title id + unbuffered log
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"        # cellHttp NID aliases
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"        # host TLS + online redirect
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_decoder.cpp" # shared NUB/RIFF decode and bounded PCM cache
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"    # in-process ATRAC3plus -> game/SPU PCM ring
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_offset.cpp" # persistent gameplay A/V latency calibration
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_audio.cpp" # Taiko+ cellAudio mix ownership
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_spu.c"  # raw lifted bnusCore mixer
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sail.cpp"     # cellSail async callback shim
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_usio.cpp"     # virtual System 357 I/O board
@@ -399,6 +401,7 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_input.cpp" # portable title input latch
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"  # host view of installed stock songs
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_frontend.cpp" # host-owned Player Entry/login shell
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_plus_runtime.cpp" # Taiko+ lifecycle and semantic queues
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pc_mode.cpp"  # custom PC mode scene & handoff
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_entry_overlay.cpp" # non-destructive Player Entry DDP overlay
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_lumen.cpp"    # title-local Lumen state fixes
@@ -461,6 +464,7 @@ if(TAIKO_INPROCESS_ATRAC)
     # line for ~300 MB of generated lifted code and needlessly recompiles every
     # guest chunk whenever the decoder prefix changes.
     set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_decoder.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"
         PROPERTIES
             COMPILE_DEFINITIONS TAIKO_HAVE_FFMPEG=1
@@ -501,6 +505,7 @@ set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pairing.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_MBEDTLS_ROOT}/include")
 target_link_libraries(taiko_boot PRIVATE ${TAIKO_MBEDTLS_LIBS})
 if(WIN32)
@@ -726,6 +731,8 @@ if(BUILD_TESTING AND TAIKO_RSX_BACKEND STREQUAL "null" AND
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME entry_lumen_patch_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/entry_lumen_patch_tests.py")
     add_executable(ppu_thread_lifecycle_tests
         "tests/ppu_thread_lifecycle_tests.c")
     target_include_directories(ppu_thread_lifecycle_tests PRIVATE
@@ -789,6 +796,92 @@ if(BUILD_TESTING AND NOT WIN32)
     target_include_directories(taiko_audio_offset_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_audio_offset_tests COMMAND taiko_audio_offset_tests)
+
+    add_executable(taiko_plus_runtime_tests
+        "tests/taiko_plus_runtime_tests.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_plus_runtime_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(taiko_plus_runtime_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_plus_runtime_tests COMMAND taiko_plus_runtime_tests)
+
+    add_executable(taiko_catalog_identity_tests
+        "tests/taiko_catalog_identity_tests.cpp"
+        "src/taiko_catalog.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_catalog_identity_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${TAIKO_MBEDTLS_ROOT}/include")
+    target_link_libraries(taiko_catalog_identity_tests PRIVATE
+        "${TAIKO_MBEDTLS_CRYPTO}" Threads::Threads)
+    add_test(NAME taiko_catalog_identity_tests
+        COMMAND taiko_catalog_identity_tests)
+
+    add_executable(taiko_host_audio_tests
+        "tests/taiko_host_audio_tests.cpp"
+        "src/taiko_host_audio.cpp"
+        "src/taiko_audio_decoder.cpp")
+    target_include_directories(taiko_host_audio_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/include"
+        "${PS3RECOMP_DIR}/libs/audio")
+    target_compile_definitions(taiko_host_audio_tests PRIVATE
+        TAIKO_HOST_AUDIO_TESTING=1)
+    target_link_libraries(taiko_host_audio_tests PRIVATE Threads::Threads)
+    if(TAIKO_INPROCESS_ATRAC)
+        if(TAIKO_FFMPEG_ROOT)
+            target_link_libraries(taiko_host_audio_tests PRIVATE
+                ${TAIKO_FFMPEG_LIBS})
+            if(MINGW)
+                target_link_libraries(taiko_host_audio_tests PRIVATE
+                    ole32 user32 atomic)
+            else()
+                target_link_libraries(taiko_host_audio_tests PRIVATE
+                    Threads::Threads m ${CMAKE_DL_LIBS})
+            endif()
+        else()
+            target_link_libraries(taiko_host_audio_tests PRIVATE
+                PkgConfig::TAIKO_FFMPEG)
+        endif()
+    endif()
+    add_test(NAME taiko_host_audio_tests COMMAND taiko_host_audio_tests)
+
+    add_executable(taiko_audio_decoder_tests
+        "tests/taiko_audio_decoder_tests.cpp"
+        "src/taiko_audio_decoder.cpp")
+    target_include_directories(taiko_audio_decoder_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(taiko_audio_decoder_tests PRIVATE Threads::Threads)
+    if(TAIKO_INPROCESS_ATRAC)
+        if(TAIKO_FFMPEG_ROOT)
+            target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                ${TAIKO_FFMPEG_LIBS})
+            if(MINGW)
+                target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                    ole32 user32 atomic)
+            else()
+                target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                    Threads::Threads m ${CMAKE_DL_LIBS})
+            endif()
+        else()
+            target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                PkgConfig::TAIKO_FFMPEG)
+        endif()
+    endif()
+    add_test(NAME taiko_audio_decoder_tests COMMAND taiko_audio_decoder_tests)
+
+    add_executable(taiko_host_frame_tests
+        "tests/taiko_host_frame_tests.cpp"
+        "src/taiko_overlay.c")
+    target_include_directories(taiko_host_frame_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video"
+        "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+    target_link_libraries(taiko_host_frame_tests PRIVATE
+        "${TAIKO_FREETYPE_LIB}" Threads::Threads)
+    add_test(NAME taiko_host_frame_tests COMMAND taiko_host_frame_tests)
+    set_tests_properties(taiko_host_frame_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 if(BUILD_TESTING AND TAIKO_AUDIO_BACKEND STREQUAL "sdl3" AND

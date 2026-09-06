@@ -9,6 +9,7 @@
 
 #include "ppu_recomp.h"
 #include "taiko_pc_mode.h"
+#include "taiko_entry_callback.h"
 
 #include <array>
 #include <atomic>
@@ -444,13 +445,16 @@ void configure_taiko_entry_trace_hooks()
 /* Verified Player Entry event boundary.  A temporary diagnostic line at the
  * start of lifted func_001ED74C preserves the incoming event ID and, crucially,
  * the return address of the producer before the lifted prologue saves it. */
-extern "C" void taiko_entry_event_trace(ppu_context* ctx)
+extern "C" int taiko_entry_event_trace(ppu_context* ctx)
 {
-    if (!ctx || !trace_enabled())
-        return;
+    if (!ctx)
+        return 0;
+
+    const uint32_t event = static_cast<uint32_t>(ctx->gpr[4]);
+    if (!trace_enabled())
+        return 0;
 
     const uint32_t object = static_cast<uint32_t>(ctx->gpr[3]);
-    const uint32_t event = static_cast<uint32_t>(ctx->gpr[4]);
     const uint32_t current = object ? vm_read32(object + 0x14) : UINT32_MAX;
     const uint32_t previous = object ? vm_read32(object + 0x10) : UINT32_MAX;
     trace_player_records("event", object, ctx, event);
@@ -460,43 +464,41 @@ extern "C" void taiko_entry_event_trace(ppu_context* ctx)
                  static_cast<unsigned long long>(ctx->thread_id),
                  static_cast<uint32_t>(ctx->lr), object, event, current,
                  previous);
+    return 0;
 }
 
-/* Game-mode confirmation callback.  This is the native transaction that
+/* SetNextScene callback (historically misnamed SetPlayerData in these logs).
+ * This is the native transaction that
  * appends a 12-byte selection record to the vector at player-record +0x4C0.
  * Its argument ABI is the same Lumen callback frame used by the no-card join,
  * but the argument count and values are different. */
-extern "C" void taiko_entry_game_mode_callback_trace(ppu_context* ctx)
+extern "C" void taiko_entry_set_player_data_trace(ppu_context* ctx)
 {
     if (!ctx)
         return;
 
     const uint32_t frame = static_cast<uint32_t>(ctx->gpr[3]);
-    if (frame) {
-        const uint32_t auxiliary = vm_read32(frame + 0x10);
-        const uint32_t current = vm_read32(frame + 0x1C);
-        const uint32_t count = auxiliary ? vm_read32(auxiliary + 0x28) : 0;
-        if (count >= 1 && current) {
-            const uint32_t game_mode = vm_read32(current + 4);
-            taiko_pc_mode_on_game_mode_selected(game_mode);
-            if (game_mode == TAIKO_PC_MODE_SENTINEL) {
-                /* 99 is private to the added Lumen item. Let the stock
-                 * callback complete its normal Play bookkeeping while the
-                 * pending flag redirects the outgoing sequence task later. */
-                vm_write32(current + 4, TAIKO_PC_MODE_SAFE_GAME_MODE);
-                std::fprintf(stderr,
-                             "[taiko_pc_mode] rewrote guest sentinel %u to "
-                             "safe stock mode %u\n",
-                             game_mode, TAIKO_PC_MODE_SAFE_GAME_MODE);
-            }
-        }
+    const uint32_t auxiliary = frame ? vm_read32(frame + 0x10) : 0;
+    const uint32_t current = frame ? vm_read32(frame + 0x1c) : 0;
+    const uint32_t count = auxiliary ? vm_read32(auxiliary + 0x28) : 0;
+    // SetNextScene reads only arguments 1..3. The movie appends argument 4
+    // only for Taiko+. Raw stack args descend by eight bytes (00399074).
+    const uint32_t type = count == 4 && current >= 24 ? vm_read32(current - 24) : 0;
+    const uint32_t value = count == 4 && current >= 24 ? vm_read32(current - 20) : 0;
+    const bool custom = taiko_entry::is_plus_marker(count, type, value);
+    taiko_pc_mode_on_game_mode_selected(custom ? TAIKO_PC_MODE_SENTINEL :
+                                               TAIKO_PC_MODE_SAFE_GAME_MODE);
+    if (custom || trace_enabled()) {
+        std::fprintf(stderr,
+                     "[entry-next-scene] callback=002287BC count=%u "
+                     "marker_type=%u marker=%u taiko_plus=%u\n",
+                     count, type, value, custom ? 1u : 0u);
     }
-
     if (!trace_enabled())
         return;
 
     std::fprintf(stderr,
-                 "[entry-game-mode-callback] tid=%llu lr=%08X frame=%08X "
+                 "[entry-set-player-data] tid=%llu lr=%08X frame=%08X "
                  "toc=%08X\n",
                  static_cast<unsigned long long>(ctx->thread_id),
                  static_cast<uint32_t>(ctx->lr), frame,
@@ -505,18 +507,15 @@ extern "C" void taiko_entry_game_mode_callback_trace(ppu_context* ctx)
         return;
 
     for (uint32_t base = 0; base < 0x40; base += 0x20) {
-        std::fprintf(stderr, "[entry-game-mode-frame %08X]", frame);
+        std::fprintf(stderr, "[entry-set-player-data-frame %08X]", frame);
         for (uint32_t offset = base; offset < base + 0x20; offset += 4)
             std::fprintf(stderr, " +%02X=%08X", offset,
                          vm_read32(frame + offset));
         std::fputc('\n', stderr);
     }
 
-    const uint32_t auxiliary = vm_read32(frame + 0x10);
-    const uint32_t current = vm_read32(frame + 0x1C);
-    const uint32_t count = auxiliary ? vm_read32(auxiliary + 0x28) : 0;
     std::fprintf(stderr,
-                 "[entry-game-mode-args] auxiliary=%08X current=%08X "
+                 "[entry-set-player-data-args] auxiliary=%08X current=%08X "
                  "count=%u",
                  auxiliary, current, count);
     const uint32_t printable = count < 8 ? count : 8;
@@ -526,6 +525,44 @@ extern "C" void taiko_entry_game_mode_callback_trace(ppu_context* ctx)
                      vm_read32(argument), vm_read32(argument + 4));
     }
     std::fputc('\n', stderr);
+}
+
+/* Historical lifted hook at 0x00226888, actually NotifyBnCoinUseResult.
+ * Keep trace-only; functional routing observes the SetNextScene commit above.
+ */
+extern "C" void taiko_entry_mode_select_end_trace(ppu_context* ctx)
+{
+    if (!ctx)
+        return;
+
+    const uint32_t frame = static_cast<uint32_t>(ctx->gpr[3]);
+    if (!trace_enabled())
+        return;
+    const uint32_t toc = static_cast<uint32_t>(ctx->gpr[2]);
+    const uint32_t holder = toc ? vm_read32(toc - 0x407c) : 0;
+    const uint32_t root = holder ? vm_read32(holder) : 0;
+    const uint32_t entry = root ? vm_read32(root + 8) : 0;
+    std::fprintf(stderr,
+                 "[entry-bncoin-result] tid=%llu lr=%08X frame=%08X "
+                 "toc=%08X holder=%08X root=%08X entry=%08X state=%u "
+                 "gpr4=%08X gpr5=%08X gpr6=%08X gpr7=%08X\n",
+                 static_cast<unsigned long long>(ctx->thread_id),
+                 static_cast<uint32_t>(ctx->lr), frame, toc, holder, root,
+                 entry, entry ? vm_read32(entry + 0x14) : UINT32_MAX,
+                 static_cast<uint32_t>(ctx->gpr[4]),
+                 static_cast<uint32_t>(ctx->gpr[5]),
+                 static_cast<uint32_t>(ctx->gpr[6]),
+                 static_cast<uint32_t>(ctx->gpr[7]));
+
+    if (!frame)
+        return;
+    for (uint32_t base = 0; base < 0x40; base += 0x20) {
+        std::fprintf(stderr, "[entry-bncoin-frame %08X]", frame);
+        for (uint32_t offset = base; offset < base + 0x20; offset += 4)
+            std::fprintf(stderr, " +%02X=%08X", offset,
+                         vm_read32(frame + offset));
+        std::fputc('\n', stderr);
+    }
 }
 
 /* Verified Player Entry transition boundary.  This is called by a temporary

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 
+#include "taiko_plus_runtime.h"
+
 struct TaikoCatalogSong {
     std::string music_id;
     std::string original_title;
@@ -29,5 +31,13 @@ std::size_t taiko_catalog_count();
 const TaikoCatalogSong* taiko_catalog_song(std::size_t index);
 const char* taiko_catalog_difficulty_name(unsigned difficulty);
 const char* taiko_catalog_genre_name(const std::string& genre);
+
+/* Resolve and hash the exact stock chart/audio pair used by a launch. */
+bool taiko_catalog_content_identity(std::size_t index, unsigned difficulty,
+                                    taiko_plus::ContentIdentity& identity,
+                                    std::string* error = nullptr);
+bool taiko_hash_file_sha256(const std::string& path,
+                            taiko_plus::Sha256& hash,
+                            std::string* error = nullptr);
 
 #endif

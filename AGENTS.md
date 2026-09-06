@@ -69,11 +69,11 @@ Budget **~3 GB per job** and set it from available RAM, not core count:
 cmake -S . -B build -DTAIKO_COMPILE_JOBS=8 ...   # ~24 GB peak, needs 32 GB+
 ```
 
-The default stays at 4 so builds run unattended. **Agents must use 4 on this
-development host**: an eight-job lifted-code rebuild made the desktop
+The default stays at 4 so builds run unattended. **Agents may use at most 6 on
+this development host**: an eight-job lifted-code rebuild makes the desktop
 unresponsive even with ample nominal RAM. Configure native build directories
-with `-DTAIKO_COMPILE_JOBS=4`, and invoke cross-build scripts as
-`TAIKO_COMPILE_JOBS=4 ./scripts/build_rpi_arm64.sh`. Never start a second build
+with `-DTAIKO_COMPILE_JOBS=6`, and invoke cross-build scripts as
+`TAIKO_COMPILE_JOBS=6 ./scripts/build_rpi_arm64.sh`. Never start a second build
 while one is active. The limit is a cache variable — pass it at configure time,
 or reconfigure an existing build directory before expecting it to apply.
 
@@ -807,7 +807,8 @@ sent to one configured host and port over TLS.
   no profile issued is rejected rather than silently wrong. The code is drawn
   on screen by `src/taiko_overlay.c` (FreeType, the game's own font, vendored
   by `scripts/build_freetype.sh`) on Zucchini's pill artwork, drawn through the
-  SDL_GPU backend's optional `g_rsx_overlay_frame` hook. That draw is an
+  SDL_GPU backend's optional copied `g_rsx_host_frame_copy` provider. That
+  draw is an
   alpha-blended quad, not `SDL_BlitGPUTexture` -- a blit cannot blend, so the
   pill's transparent ends would punch holes in the frame.
   The font is `fonts/font.ttf`, tracked, and CMake embeds the complete face via

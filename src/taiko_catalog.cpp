@@ -7,6 +7,7 @@
 #include "taiko_catalog.h"
 
 #include <charconv>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -15,6 +16,8 @@
 #include <unordered_map>
 #include <string_view>
 #include <vector>
+
+#include <mbedtls/sha256.h>
 
 namespace {
 
@@ -175,6 +178,38 @@ void load_once()
 
 } // namespace
 
+bool taiko_hash_file_sha256(const std::string& path,
+                            taiko_plus::Sha256& hash,
+                            std::string* error)
+{
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        if (error) *error = "cannot open " + path;
+        return false;
+    }
+    mbedtls_sha256_context context;
+    mbedtls_sha256_init(&context);
+    int result = mbedtls_sha256_starts(&context, 0);
+    std::array<unsigned char, 64 * 1024> buffer{};
+    while (result == 0 && stream) {
+        stream.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+        const std::streamsize count = stream.gcount();
+        if (count > 0)
+            result = mbedtls_sha256_update(
+                &context, buffer.data(), static_cast<std::size_t>(count));
+    }
+    if (result == 0 && !stream.eof()) result = -1;
+    if (result == 0)
+        result = mbedtls_sha256_finish(&context, hash.bytes.data());
+    mbedtls_sha256_free(&context);
+    if (result != 0) {
+        hash = {};
+        if (error) *error = "cannot hash " + path;
+        return false;
+    }
+    return true;
+}
+
 bool taiko_catalog_load()
 {
     std::call_once(g_once, load_once);
@@ -212,4 +247,47 @@ const char* taiko_catalog_genre_name(const std::string& genre)
     if (genre == "メドレー") return "MEDLEY";
     if (genre == "童謡") return "CHILDREN'S SONGS";
     return genre.c_str();
+}
+
+bool taiko_catalog_content_identity(std::size_t index, unsigned difficulty,
+                                    taiko_plus::ContentIdentity& identity,
+                                    std::string* error)
+{
+    const TaikoCatalogSong* song = taiko_catalog_song(index);
+    if (!song) {
+        if (error) *error = "catalog song is unavailable";
+        return false;
+    }
+    if (difficulty >= TAIKO_DIFFICULTY_COUNT ||
+        !(song->difficulty_mask & (1u << difficulty))) {
+        if (error) *error = "requested difficulty is unavailable";
+        return false;
+    }
+    static constexpr char suffixes[TAIKO_DIFFICULTY_COUNT] = {
+        'e', 'n', 'h', 'm', 'x'
+    };
+    const char* configured_root = std::getenv("PS3_VFS_ROOT");
+    const std::filesystem::path root = configured_root && configured_root[0]
+        ? configured_root : "game/vfs";
+    const std::filesystem::path chart =
+        root / "data/fumen" / song->music_id / "solo" /
+        (song->music_id + "_" + suffixes[difficulty] + ".bin");
+    std::string upper = song->music_id;
+    for (char& character : upper)
+        character = static_cast<char>(std::toupper(
+            static_cast<unsigned char>(character)));
+    const std::filesystem::path audio =
+        root / "data/sound/bgm/nub" / ("SONG_" + upper + ".nub");
+
+    taiko_plus::ContentIdentity next;
+    next.version = taiko_plus::kContractVersion;
+    next.game_revision = "S11100-1";
+    next.music_id = song->music_id;
+    next.unique_id = song->unique_id;
+    next.difficulty = static_cast<uint8_t>(difficulty);
+    if (!taiko_hash_file_sha256(chart.string(), next.chart_hash, error) ||
+        !taiko_hash_file_sha256(audio.string(), next.audio_hash, error))
+        return false;
+    identity = std::move(next);
+    return true;
 }

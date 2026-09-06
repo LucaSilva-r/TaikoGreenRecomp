@@ -9,6 +9,9 @@
 #define TAIKO_OVERLAY_H
 
 #include <stdint.h>
+#include <stddef.h>
+
+#include "rsx_host_frame.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,10 +71,10 @@ void taiko_overlay_show_song_browser(const char* player_name,
 void taiko_overlay_hide_host_screen(void);
 void taiko_overlay_clear(void);
 
-/* The image to draw over the frame, or NULL when there is nothing to show.
- * `version` changes whenever the pixels do, so the backend can skip uploads.
- * The buffer belongs to the overlay and stays valid until the next call. */
-const uint32_t* taiko_overlay_frame(int* width, int* height, uint32_t* version);
+/* Copy one coherent host-frame snapshot. Passing NULL as destination queries
+ * metadata only. No mutable overlay storage is borrowed by the caller. */
+int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
+                          size_t destination_bytes);
 
 #ifdef __cplusplus
 }

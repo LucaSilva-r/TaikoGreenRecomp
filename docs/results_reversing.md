@@ -39,8 +39,20 @@ showed why hooking only the final-session routine was insufficient.
 
 `func_001EBEB0` is not a state write. It allocates a normal `GameSongSelect`
 object of size `0xf6c`, copy-constructs it with the existing music manager,
-queues it through the scene owner, and removes Results when accepted. The host
-therefore keeps this operation intact.
+queues it through the scene owner, and removes Results when accepted. The
+validated legacy loop keeps this operation intact; standalone mode must use
+the same owner teardown contract without the Song Select allocation.
+
+More precisely, the allocation is `func_0035D1A0(0xf6c)` and construction is
+thunk `func_005C593C`, which transfers to
+`func_0062F0B8(new_scene, results->manager)`. The scene-owner virtual at
+vtable `+0x08` receives `(owner, new_scene, 0)`; the membership predicate at
+`+0x14` then receives `(owner, results)`, with the removal operation at
+`+0x0c` used on its nonzero byte result. These resolve to
+`func_008DA500`, `func_008D427C`, and `func_008DDD30`, respectively. The
+constructor stores the manager at scene `+0x0c`, `+0xe28`, and `+0xe64`, but
+this alone does not prove an independent retain operation. Standalone Taiko+
+must not preserve the raw pointer until that ownership contract is live-proved.
 
 Two guarded hooks implement the repeat loop when `TAIKO_HOST_FRONTEND=1`:
 

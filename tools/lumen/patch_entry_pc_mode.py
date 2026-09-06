@@ -3,9 +3,9 @@
 
 Green already ships the artwork/timeline for a dormant Campaign item. This
 patch gives that unused timeline a unique ``SetEntryPCMode`` label, appends it
-to the carousel independently of AI Battle, clones the fourth authored board
-as a fifth carousel controller, and makes ``GetMode`` return a host-only
-sentinel for it. AI Battle and its card-login predicate stay stock.
+to the carousel independently of AI Battle, and clones the normal-play board.
+Stock GetMode's default is normal Play. Only the existing final native
+SetNextScene call carries a host-only fourth argument for the new label.
 """
 
 from __future__ import annotations
@@ -14,13 +14,12 @@ import argparse
 import struct
 from pathlib import Path
 
-from dxt5_encoder import create_ntp3_nut_bytes
-from generate_pc_mode_textures import make_pc_mode_images
-
 
 ENTRY_RECORD = 97
-PC_MODE_STRING = 690          # Existing compact string: "SetEntryPCMode"
-CAMPAIGN_STRING = 288         # Existing compact string: "キャンペーン"
+PLAYER_ENTRY_RECORD = 98
+CONNECTION_RECORD = 65
+PC_MODE_STRING = 691          # Serialized string index: "SetEntryPCMode"
+CAMPAIGN_STRING = 289         # Serialized string index: "キャンペーン"
 PC_MODE_SENTINEL = 99
 PC_MODE_BOARD_SPRITES = {716, 731, 797}  # normal, focused, unavailable
 
@@ -191,19 +190,29 @@ def serialize_action_records(records: list[bytes]) -> bytes:
     return bytes(payload)
 
 
-def compact_strings(payload: bytes) -> list[str]:
+def parse_strings(payload: bytes) -> list[str]:
+    """Read F001 indices verbatim, including the valid empty string at zero.
+
+    Length excludes the NUL terminator; padding includes it. Dropping empty
+    entries shifts every symbol and makes plausible-looking disassembly wrong.
+    """
+    if len(payload) < 4:
+        raise ValueError("truncated Lumen string pool")
     declared = struct.unpack_from(">I", payload, 0)[0]
-    serialized = []
-    offset = 12
-    while offset < len(payload):
+    result = []
+    offset = 4
+    for _ in range(declared):
+        if offset + 4 > len(payload):
+            raise ValueError("truncated Lumen string length")
         size = struct.unpack_from(">I", payload, offset)[0]
+        end = offset + 4 + ((size + 4) & ~3)
+        if end > len(payload) or payload[offset + 4 + size] != 0:
+            raise ValueError("truncated or unterminated Lumen string")
         raw = payload[offset + 4:offset + 4 + size]
-        serialized.append(raw.rstrip(b"\0").decode("utf-8"))
-        offset += 4 + ((size + 3) & ~3)
-    result = [value for value in serialized if value]
-    result.append("")
-    if len(result) != declared:
-        raise ValueError("compact Lumen string pool count mismatch")
+        result.append(raw.decode("utf-8"))
+        offset = end
+    if offset != len(payload):
+        raise ValueError("Lumen string pool has trailing data")
     return result
 
 
@@ -221,94 +230,131 @@ def patch_entry_actions(record: bytes, debug_y_probe: bool = False) -> bytes:
         raise ValueError("stock AI Battle append block signature mismatch")
     pc_append = (
         record[0x474:0x48B]
-        + bytes.fromhex("96030009b202")  # Push string[690:"SetEntryPCMode"]
+        + bytes.fromhex("96030009b302")  # Push string[691:"SetEntryPCMode"]
         + record[0x4A8:0x4B9]
     )
 
-    # GetMode has just stored the selected board label in register 0. Return
-    # host sentinel 99 for our unique label; all stock labels continue through
-    # the original comparisons unchanged.
-    if record[0x1E3A:0x1E44] != bytes.fromhex("87010000960300094301"):
-        raise ValueError("Entry GetMode signature mismatch")
-    get_mode_match = (bytes.fromhex(
-        "9602000400"          # Push reg(0)
-        "96030009b202"        # Push string[690:"SetEntryPCMode"]
-        "66"                  # StrictEquals
-        "12"                  # Not
-        "9d02000900"          # If not equal, continue original GetMode
-        "96050007"            # Push integer
-    ) + struct.pack("<i", PC_MODE_SENTINEL) + b"\x3e")  # Return
+    # Unknown labels already return the numeric ModeSelect.MODE_GAME. Keep
+    # GetMode byte-for-byte stock; do not return LABEL_NAME_SRC[MODE_GAME],
+    # which is a display string, or dispatch a native event from this getter.
+    if record[0x1FB2:0x1FC1] != bytes.fromhex(
+            "9603000943011c960300098c054e3e"):
+        raise ValueError("Entry GetMode normal-play fallback mismatch")
 
-    # A fifth Tween_Move clip is cloned below. Let the stock layout and
+    # Unlike GetMode, FinishDecide switches on DISPLAY LABELS and its default
+    # returns without installing EnterFrame_Fadeout. Alias only its temporary
+    # switch value to Play's label; retain the actual board label for the final
+    # native completion marker. This runs after the authored confirmation.
+    if record[0xD3E:0xD5F] != bytes.fromhex(
+            "870100009603000943011c9603000986054e"
+            "9603000943011c960300098c054e4e"):
+        raise ValueError("Entry FinishDecide label switch signature mismatch")
+    play_label = record[0xD42:0xD5F]
+    substitute_label = b"\x17" + play_label + bytes.fromhex("87010000")
+    # A private static boolean survives until CppConnection.SendResultInfo.
+    # Do not depend on Proc_Mode's NotifyModeSelectEnd: the live route reaches
+    # SetNextScene without invoking that native callback.
+    remember_selection = bytes.fromhex(
+        "960300091e021c96030009b302"  # CppConnection.SetEntryPCMode
+        "960200040096030009b302664f"  # = (selected label == custom label)
+    )
+    finish_decide_alias = (remember_selection
+                           + bytes.fromhex("960200040096030009b30266129d0200")
+                           + struct.pack("<h", len(substitute_label))
+                           + substitute_label)
+
+    # A fifth board clip is cloned below. Let the stock layout and
     # navigation code initialize all five.
     if record[0x2664:0x2672] != bytes.fromhex(
             "960a00040109a40507040000004f"):
-        raise ValueError("Entry mcBoard signature mismatch")
+        raise ValueError("Entry BOARD_MAX signature mismatch")
     record = bytearray(record)
     struct.pack_into("<i", record, 0x2664 + 3 + 2 + 3 + 1, 5)
     record = bytes(record)
 
-    # Clone the fourth controller as Tween_Move4 before the initialization loop
-    # reads this["Tween_Move" + i]. The stock controller rebuilds its label list
-    # when card availability changes, so this block can execute more than once.
-    # Replace the dynamic clip on every rebuild: retaining the first clone lets
-    # the card refresh leave its nested board timeline in a hidden state. The
-    # loop below immediately replaces board[4] with the fresh controller.
-    #
-    # Lumen serializes multi-value ActionPush operands in reverse VM stack
-    # order. ActionCloneSprite pops depth, target, source, so serialize those
-    # values as source, target, depth. The authored carousel occupies
+    # Clone board0 as board4 ONCE per Init, before the loop's induction-variable
+    # initialization. Inserting at the loop header recreates the clip on every
+    # backedge, leaving mcBoard[4] pointing to a removed instance at loop exit.
+    # The authored carousel occupies
     # display-list depths 924 through 987, so put the dynamic clone at the first
     # round unused depth above that range.
     clone_body = bytes.fromhex(
-        "960a00040409a6050703000000"  # Push reg(4), string[1446], int(3)
-        "474e"                    # Add2, GetMember -> source Tween_Move3
+        "960a00040409a6050700000000"  # Push reg(4), string[1446], int(0)
+        "474e"                    # Add2, GetMember -> source board0
         "96080009a6050704000000"  # Push string[1446], int(4)
-        "47"                      # Add2 -> target name "Tween_Move4"
+        "47"                      # Add2 -> target name "board4"
         "96050007e8030000"        # Push depth 1000
         "24"                      # CloneSprite
     )
     fifth_controller = bytes.fromhex(
-        "960a00040409a6050704000000"  # Push reg(4), "Tween_Move", int(4)
-        "474e"                    # Add2, GetMember -> Tween_Move4
+        "960a00040409a6050704000000"  # Push reg(4), "board", int(4)
+        "474e"                    # Add2, GetMember -> board4
     )
     remove_existing = fifth_controller + b"\x25"  # RemoveSprite
     clone_fifth_controller = remove_existing + clone_body
 
     first_controller = bytes.fromhex(
-        "960a00040409a6050700000000"  # Push reg(4), "Tween_Move", int(0)
-        "474e"                    # Add2, GetMember -> Tween_Move0
+        "960a00040409a6050700000000"  # Push reg(4), "board", int(0)
+        "474e"                    # Add2, GetMember -> board0
     )
     align_fifth_controller = (
-        # Tween_Move4.posY = Tween_Move0.posY. Lumen's carousel drives its
-        # controller through posX/posY rather than the MovieClip wrapper's
-        # _x/_y properties. This must run after Left(0), because Init and Left
-        # are free to replace the transform installed at clone time. Keep the
-        # stack in the same value/name/object form used by the stock SetMember
-        # sequences in this function.
+        # board4._y = board0._y after Init's final Tween_Move().
         fifth_controller
-        + bytes.fromhex("96030009bc02")  # Push string[700:"posY"]
+        + bytes.fromhex("96030009bc02")  # Push string[700:"_y"]
         + first_controller
         + bytes.fromhex(
-            "96030009bc02"        # Push string[700:"posY"]
-            "4e"                  # GetMember -> Tween_Move0.posY
+            "96030009bc02"        # Push string[700:"_y"]
+            "4e"                  # GetMember -> board0._y
         )
         + (bytes.fromhex(
             "9605000764000000"    # Push integer 100
             "0b"                  # Subtract: unmistakable visual probe
         ) if debug_y_probe else b"")
-        + b"\x4f"                 # SetMember -> Tween_Move4.posY
+        + b"\x4f"                 # SetMember -> board4._y
     )
 
-    # GetMode is after both Init edits.  The PC append shifts the original
-    # controller-loop boundary from 0x592 to 0x5B3; insert the clone there.
-    patched = insert_action_code(record, 0x1E3E, get_mode_match)
-    # Original 0x743 is the End immediately after Init's final Left(0). Insert
+    # Insert from the highest original offset down so every following offset
+    # is still expressed against the clean action record.
+    # Original 0x743 is the End immediately after Init's final Tween_Move(). Insert
     # before it while its offset is still unchanged by the earlier edits below.
+    patched = insert_action_code(record, 0xD42, finish_decide_alias)
     patched = insert_action_code(patched, 0x743, align_fifth_controller)
+    patched = insert_action_code(patched, 0x585, clone_fifth_controller)
     patched = insert_action_code(patched, 0x4B9, pc_append)
-    patched = insert_action_code(patched, 0x5B3, clone_fifth_controller)
+    # Reset on every actual carousel initialization, including card refresh.
+    patched = insert_action_code(patched, 0x1FC, bytes.fromhex(
+        "960300091e021c96050009b30205004f"))
     return patched
+
+
+def patch_player_entry_actions(record: bytes) -> bytes:
+    """Leave the stock parent dispatcher and its callbacks unchanged."""
+    if len(record) != 10599:
+        raise ValueError("PlayerEntry action record signature mismatch")
+
+    # GetMode defaults to numeric normal Play, so dispatch remains unchanged.
+    if record[0x6B8:0x6D1] != bytes.fromhex(
+            "960a00070000000004010934034e96030009bc0552"
+            "87010000"):
+        raise ValueError("PlayerEntry post-decision dispatch signature mismatch")
+
+    return record
+
+
+def patch_connection_actions(record: bytes) -> bytes:
+    """Tag the live-proved SetNextScene call without changing stock arguments."""
+    if record[0x5B76:0x5B8B] != bytes.fromhex(
+            "960a0007030000000401091f024e960300095c0352"):
+        raise ValueError("CppConnection SetNextScene signature mismatch")
+    original_call = record[0x5B37:0x5B8B]
+    tagged_call = bytearray(original_call)
+    struct.pack_into('<i', tagged_call, 0x5B76 - 0x5B37 + 4, 4)
+    custom = (bytes.fromhex("9605000763000000")  # fourth arg below stock args
+              + tagged_call + b"\x99\x02\x00"
+              + struct.pack('<h',len(original_call)))
+    condition = bytes.fromhex("960300091e021c96030009b3024e129d0200")
+    return insert_action_code(record, 0x5B37,
+                              condition + struct.pack('<h',len(custom)) + custom)
 
 
 def patch_entry_lm(data: bytes, debug_y_probe: bool = False) -> bytes:
@@ -329,27 +375,30 @@ def patch_entry_lm(data: bytes, debug_y_probe: bool = False) -> bytes:
         payload = data[offset + 8:end]
 
         if tag == 0xF001:
-            strings = compact_strings(payload)
+            strings = parse_strings(payload)
             if (strings[CAMPAIGN_STRING] != "キャンペーン" or
                     strings[PC_MODE_STRING] != "SetEntryPCMode"):
                 raise ValueError("Entry string-pool signature mismatch")
             strings_checked = True
         elif tag == 0xF005:
             records = parse_action_records(payload)
-            if len(records) <= ENTRY_RECORD:
-                raise ValueError("Entry action record 97 is missing")
+            if len(records) <= PLAYER_ENTRY_RECORD:
+                raise ValueError("Entry action records 97/98 are missing")
             records[ENTRY_RECORD] = patch_entry_actions(
                 records[ENTRY_RECORD], debug_y_probe)
+            records[PLAYER_ENTRY_RECORD] = patch_player_entry_actions(
+                records[PLAYER_ENTRY_RECORD])
+            records[CONNECTION_RECORD] = patch_connection_actions(
+                records[CONNECTION_RECORD])
             payload = serialize_action_records(records)
             actions_patched = True
         elif tag == 0x0027:
             active_sprite = struct.unpack_from(">I", payload, 0)[0]
         elif tag == 0x002B and active_sprite in PC_MODE_BOARD_SPRITES:
             label, frame = struct.unpack_from(">II", payload, 0)
-            # Campaign's stock label starts at frame 20, whose held visual is
-            # Training. Move our replacement label to frame 30, where Campaign
-            # is actually placed. Shop's own frame-30 label remains untouched.
-            if label == CAMPAIGN_STRING and frame == 20:
+            # Campaign is index 289 at frame 30. Training (288/frame 20) and
+            # Shop (290/frame 40) must retain their authored labels.
+            if label == CAMPAIGN_STRING and frame == 30:
                 patched_payload = bytearray(payload)
                 struct.pack_into(">I", patched_payload, 0, PC_MODE_STRING)
                 struct.pack_into(">I", patched_payload, 4, 30)
@@ -369,6 +418,9 @@ def patch_entry_lm(data: bytes, debug_y_probe: bool = False) -> bytes:
 
 def build(source: Path, packlist: Path, font: Path, output: Path,
           debug_y_probe: bool = False) -> None:
+    from dxt5_encoder import create_ntp3_nut_bytes
+    from generate_pc_mode_textures import make_pc_mode_images
+
     data = bytearray(source.read_bytes())
     lm_entries, nut_entries, layout = parse_header(data)
     sections = parse_packlist(packlist)
@@ -431,7 +483,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--debug-y-probe", action="store_true",
-        help="move Tween_Move4.posY 100 units above Tween_Move0 for diagnosis")
+        help="move board4._y 100 units above board0 for diagnosis")
     args = parser.parse_args()
     build(args.source, args.packlist, args.font, args.output,
           args.debug_y_probe)

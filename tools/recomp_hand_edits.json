@@ -94,12 +94,41 @@
    "function": "func_001EBEB0"
   },
   {
-   "symbol": "taiko_entry_game_mode_callback_trace",
-   "text": "extern \"C\" void taiko_entry_game_mode_callback_trace(ppu_context* ctx);",
+   "symbol": "taiko_entry_set_player_data_trace",
+   "text": "extern \"C\" void taiko_entry_set_player_data_trace(ppu_context* ctx);",
    "function": "func_002287BC"
+  },
+  {
+   "symbol": "taiko_entry_mode_select_end_trace",
+   "text": "extern \"C\" void taiko_entry_mode_select_end_trace(ppu_context* ctx);",
+   "function": "func_00226888"
+  },
+  {
+   "symbol": "taiko_entry_event_trace",
+   "text": "extern \"C\" int taiko_entry_event_trace(ppu_context* ctx);",
+   "function": "func_001ED74C"
+  },
+  {
+   "symbol": "taiko_entry_state_transition_trace",
+   "text": "extern \"C\" void taiko_entry_state_transition_trace(ppu_context* ctx);",
+   "function": "func_001ED698"
+  },
+  {
+   "symbol": "taiko_pc_mode_destination_override",
+   "text": "extern \"C\" int taiko_pc_mode_destination_override(ppu_context* ctx);",
+   "function": "func_001FE470"
   }
  ],
  "functions": {
+  "func_001FE470": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_pc_mode_destination_override(ctx)) return;"
+    ]
+   }
+  ],
   "func_001EF214": [
    {
     "anchor": null,
@@ -141,7 +170,34 @@
     "anchor": null,
     "replaces": [],
     "lines": [
-     "        taiko_entry_game_mode_callback_trace(ctx);"
+     "        taiko_entry_set_player_data_trace(ctx);"
+    ]
+   }
+  ],
+  "func_00226888": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_entry_mode_select_end_trace(ctx);"
+    ]
+   }
+  ],
+  "func_001ED74C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_entry_event_trace(ctx)) return;"
+    ]
+   }
+  ],
+  "func_001ED698": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_entry_state_transition_trace(ctx);"
     ]
    }
   ],

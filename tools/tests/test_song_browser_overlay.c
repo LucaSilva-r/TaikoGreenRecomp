@@ -3,6 +3,7 @@
  *
  *   cc -DTAIKO_OVERLAY_FONT_EMBEDDED tools/tests/test_song_browser_overlay.c \
  *      src/taiko_overlay.c build-linux/taiko_overlay_font.c -I src \
+ *      -I ps3recomp/libs/video \
  *      -I third_party/freetype-linux/include/freetype2 \
  *      third_party/freetype-linux/lib64/libfreetype.a -pthread -lz -lm \
  *      -o /tmp/song-browser-overlay-test
@@ -13,19 +14,23 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static void write_frame(const char* output)
 {
-    int width = 0;
-    int height = 0;
-    uint32_t version = 0;
-    const uint32_t* pixels = taiko_overlay_frame(&width, &height, &version);
-    assert(pixels && width == 1280 && height == 720 && version != 0);
+    HostFrameInfo info = {0};
+    assert(taiko_host_frame_copy(&info, NULL, 0));
+    assert(info.mode == HOST_FRAME_FULLSCREEN &&
+           info.width == 1280 && info.height == 720 && info.version != 0);
+    const size_t bytes = (size_t)info.pitch * info.height;
+    uint32_t* pixels = (uint32_t*)malloc(bytes);
+    assert(pixels);
+    assert(taiko_host_frame_copy(&info, pixels, bytes));
 
     FILE* file = fopen(output, "wb");
     assert(file);
-    fprintf(file, "P6\n%d %d\n255\n", width, height);
-    for (int index = 0; index < width * height; ++index) {
+    fprintf(file, "P6\n%u %u\n255\n", info.width, info.height);
+    for (uint32_t index = 0; index < info.width * info.height; ++index) {
         const unsigned char rgb[3] = {
             (unsigned char)(pixels[index] & 0xffu),
             (unsigned char)((pixels[index] >> 8) & 0xffu),
@@ -34,8 +39,9 @@ static void write_frame(const char* output)
         assert(fwrite(rgb, sizeof(rgb), 1, file) == 1);
     }
     assert(fclose(file) == 0);
-    printf("song browser overlay ok: %dx%d version %u -> %s\n",
-           width, height, version, output);
+    printf("song browser overlay ok: %ux%u version %u -> %s\n",
+           info.width, info.height, info.version, output);
+    free(pixels);
 }
 
 int main(int argc, char** argv)

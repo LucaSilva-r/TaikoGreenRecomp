@@ -110,6 +110,12 @@ Select Lumen.
 
 ### 3. Host-owned stock Song Select — current milestone
 
+The replacement architecture, implemented host-frame/runtime foundation, and
+remaining native lifetime gate are maintained in
+[taiko_plus_runtime_plan.md](taiko_plus_runtime_plan.md). This section is the
+online roadmap; the linked document is authoritative for the local standalone
+transition.
+
 - Expose the installed Green catalog to the host.
 - Give each chart a stable identity containing song ID, difficulty, chart hash,
   and audio hash.
