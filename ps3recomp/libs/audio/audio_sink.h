@@ -14,6 +14,11 @@ enum {
 };
 
 int audio_sink_init(void);
+/* Experimental SDL demand-driven source. Called for one 256-frame block.
+ * Returns 1 when started, 0 when unsupported; no producer thread may submit
+ * concurrently. Shutdown waits for the callback before returning. */
+typedef void (*AudioSinkPull)(float* stereo);
+int audio_sink_start_pull(AudioSinkPull pull);
 void audio_sink_shutdown(void);
 int audio_sink_wait_for_block(uint32_t frames, const volatile int* running);
 int audio_sink_submit(const float* stereo_samples, uint32_t frames);

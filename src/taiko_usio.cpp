@@ -1009,6 +1009,18 @@ void build_input_frames()
                      g_usio.coin_counter, g_usio.test_on ? 1u : 0u,
                          oldest_hit_ms);
     }
+    static const bool drum_latency_trace =
+        std::getenv("TAIKO_DRUM_LATENCY_TRACE") != nullptr;
+    if (drum_latency_trace && ((rising[0] | rising[1]) & 15u)) {
+        const uint64_t now = ps3_host_monotonic_ns();
+        for (unsigned player = 0; player < 2; ++player)
+            for (unsigned hit = 0; hit < 4; ++hit)
+                if (rising[player] & kHitBits[hit])
+                    std::fprintf(stderr,
+                        "[drum-latency-usio] source_event_ns=%llu usio_ns=%llu player=%u hit=%u\n",
+                        static_cast<unsigned long long>(input.hit_timestamp_ns[player][hit]),
+                        static_cast<unsigned long long>(now), player + 1, hit);
+    }
 #endif
 
     /* A drum sensor is an analog piezo reading, not a switch: the board

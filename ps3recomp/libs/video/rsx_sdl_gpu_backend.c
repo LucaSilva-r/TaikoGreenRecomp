@@ -4633,6 +4633,21 @@ static void handle_event(const SDL_Event* event)
 #endif
         unsigned action = keyboard_action(event->key.scancode);
         const unsigned player = keyboard_player(event->key.scancode);
+        if (event->key.down && !event->key.repeat && (action & 15u) &&
+            getenv("TAIKO_DRUM_LATENCY_TRACE")) {
+            /* SDL event timestamps use SDL's epoch, not CLOCK_MONOTONIC.
+             * Convert the event's age before comparing with cellAudio. */
+            const Uint64 ticks = SDL_GetTicksNS();
+            const Uint64 received = sdl_host_monotonic_ns();
+            const Uint64 age = ticks >= event->key.timestamp
+                ? ticks - event->key.timestamp : 0;
+            fprintf(stderr,
+                "[drum-latency-input] event_ns=%llu received_ns=%llu "
+                "sdl_event_ns=%llu player=%u hits=%X\n",
+                (unsigned long long)(received >= age ? received - age : received),
+                (unsigned long long)received,
+                (unsigned long long)event->key.timestamp, player + 1, action & 15u);
+        }
         if (event->key.down)
             taiko_host_input_press(player, action, event->key.timestamp);
         else

@@ -8,6 +8,10 @@
 #include <string.h>
 #include <stdatomic.h>
 
+#if !defined(PS3RECOMP_AUDIO_BACKEND_SDL3)
+int audio_sink_start_pull(AudioSinkPull pull) { (void)pull; return 0; }
+#endif
+
 #if defined(PS3RECOMP_AUDIO_BACKEND_SDL3)
 
 #include <ps3emu/host_sdl.h>
@@ -26,6 +30,7 @@
 #define SDL_MAX_PREBUFFER_BLOCKS 32u
 
 static SDL_AudioStream* s_sdl_stream;
+static AudioSinkPull s_sdl_pull;
 static uint32_t s_sdl_submitted_blocks;
 static uint32_t s_sdl_device_buffer_frames;
 static uint32_t s_sdl_prebuffer_blocks = SDL_DEFAULT_PREBUFFER_BLOCKS;
@@ -46,6 +51,22 @@ static void SDLCALL sdl_audio_get_callback(void* userdata,
     (void)userdata;
     (void)stream;
     (void)total_amount;
+    if (s_sdl_pull && additional_amount > 0) {
+        float block[CELL_AUDIO_BLOCK_SAMPLES * 2];
+        /* Whole guest blocks only; SDL retains any fractional-block residue.
+         * Never wait for the guest producer from this callback. */
+        while (additional_amount > 0) {
+            s_sdl_pull(block);
+            if (!SDL_PutAudioStreamData(stream, block, sizeof(block))) {
+                atomic_fetch_add_explicit(&s_sdl_starvation_events, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&s_sdl_starvation_frames,
+                    (unsigned)additional_amount / AUDIO_FRAME_BYTES, memory_order_relaxed);
+                break;
+            }
+            additional_amount -= sizeof(block);
+        }
+        return;
+    }
     /* SDL calls this immediately before its playback device obtains data.
      * If additional input is required and we do not supply it synchronously,
      * that device pull will be short and SDL will pad it with silence.  Do not
@@ -67,7 +88,32 @@ const char* audio_sink_name(void)
 #ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
     if (s_alsa_pcm) return "alsa-direct";
 #endif
-    return "sdl3";
+    return s_sdl_pull ? "sdl3-pull" : "sdl3";
+}
+
+int audio_sink_start_pull(AudioSinkPull pull)
+{
+    if (!s_sdl_stream || !pull) return 0;
+    SDL_AudioSpec spec;
+    int frames;
+    if (!SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(s_sdl_stream), &spec, &frames) ||
+        spec.freq != CELL_AUDIO_SAMPLE_RATE || frames > CELL_AUDIO_BLOCK_SAMPLES) {
+        fprintf(stderr, "[cellAudio] pull requires a 48 kHz device period <=256 frames; keeping push sink\n");
+        return 0;
+    }
+    SDL_LockAudioStream(s_sdl_stream);
+    s_sdl_pull = pull;
+    SDL_UnlockAudioStream(s_sdl_stream);
+    atomic_store_explicit(&s_sdl_resumed, 1, memory_order_relaxed);
+    if (!SDL_ResumeAudioStreamDevice(s_sdl_stream)) {
+        SDL_LockAudioStream(s_sdl_stream);
+        s_sdl_pull = NULL;
+        SDL_UnlockAudioStream(s_sdl_stream);
+        atomic_store_explicit(&s_sdl_resumed, 0, memory_order_relaxed);
+        return 0;
+    }
+    fprintf(stderr, "[cellAudio] SDL pull active: guest ring -> conversion/mix -> SDL, no software prebuffer\n");
+    return 1;
 }
 
 int audio_sink_init(void)
@@ -171,6 +217,7 @@ void audio_sink_shutdown(void)
     }
 #endif
     if (s_sdl_stream) SDL_DestroyAudioStream(s_sdl_stream);
+    s_sdl_pull = NULL;
     s_sdl_stream = NULL;
     s_sdl_submitted_blocks = 0;
     s_sdl_device_buffer_frames = 0;
@@ -194,6 +241,7 @@ uint32_t audio_sink_queued_frames(void)
 
 uint32_t audio_sink_prebuffer_frames(void)
 {
+    if (s_sdl_pull) return 0;
 #ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
     if (s_alsa_pcm) return (uint32_t)s_alsa_buffer_frames;
 #endif
