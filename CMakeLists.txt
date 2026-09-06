@@ -797,6 +797,17 @@ if(BUILD_TESTING AND NOT WIN32)
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_audio_offset_tests COMMAND taiko_audio_offset_tests)
 
+    add_executable(taiko_pc_mode_tests
+        "tests/taiko_pc_mode_tests.cpp"
+        "src/taiko_pc_mode.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_pc_mode_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/pc_mode_stubs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video")
+    target_link_libraries(taiko_pc_mode_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_pc_mode_tests COMMAND taiko_pc_mode_tests)
+
     add_executable(taiko_plus_runtime_tests
         "tests/taiko_plus_runtime_tests.cpp"
         "src/taiko_plus_runtime.cpp")

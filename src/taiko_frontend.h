@@ -69,9 +69,10 @@ void taiko_frontend_song_select_tick(struct ppu_context* ctx);
 int taiko_frontend_results_end_override(struct ppu_context* ctx);
 
 /* Called whenever Results constructs Green's next normal Song Select. */
-void taiko_frontend_results_continue_tick(struct ppu_context* ctx);
+int taiko_frontend_results_continue_tick(struct ppu_context* ctx);
 
 /* Complete a standalone command without crossing host/guest ownership. */
+void taiko_frontend_standalone_gameplay(void);
 void taiko_frontend_standalone_failure(const char* detail);
 
 #undef TAIKO_FRONTEND_OPTIONAL

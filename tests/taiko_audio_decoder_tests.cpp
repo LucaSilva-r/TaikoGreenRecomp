@@ -151,6 +151,8 @@ int main()
     TaikoDecodedAudio song;
     CHECK(taiko_audio_decode_song("TEST", 48000, nullptr, song, failure));
     CHECK(song.pcm == decoded.pcm);
+    CHECK(taiko_audio_decode_song("test", 48000, nullptr, song, failure));
+    CHECK(song.pcm == decoded.pcm);
     std::error_code cleanup_error;
     std::filesystem::remove_all(root, cleanup_error);
     CHECK(!cleanup_error);

@@ -90,7 +90,7 @@
   },
   {
    "symbol": "taiko_frontend_results_continue_tick",
-   "text": "extern \"C\" void taiko_frontend_results_continue_tick(ppu_context* ctx);",
+   "text": "extern \"C\" int taiko_frontend_results_continue_tick(ppu_context* ctx);",
    "function": "func_001EBEB0"
   },
   {
@@ -117,6 +117,26 @@
    "symbol": "taiko_pc_mode_destination_override",
    "text": "extern \"C\" int taiko_pc_mode_destination_override(ppu_context* ctx);",
    "function": "func_001FE470"
+  },
+  {
+   "symbol": "taiko_pc_mode_frame_begin",
+   "text": "extern \"C\" void taiko_pc_mode_frame_begin(ppu_context* ctx);",
+   "function": "func_0026D530"
+  },
+  {
+   "symbol": "taiko_pc_mode_setup_complete",
+   "text": "extern \"C\" int taiko_pc_mode_setup_complete(uint32_t setup, uint32_t owner);",
+   "function": "func_000E4608"
+  },
+  {
+   "symbol": "taiko_pc_mode_frame_dispatch",
+   "text": "extern \"C\" void taiko_pc_mode_frame_dispatch(ppu_context* ctx);",
+   "function": "func_0026D530"
+  },
+  {
+   "symbol": "taiko_pc_mode_setup_tick",
+   "text": "extern \"C\" int taiko_pc_mode_setup_tick(ppu_context* ctx);",
+   "function": "func_000E4608"
   }
  ],
  "functions": {
@@ -161,7 +181,7 @@
     "anchor": null,
     "replaces": [],
     "lines": [
-     "        taiko_frontend_results_continue_tick(ctx);"
+     "        if (taiko_frontend_results_continue_tick(ctx)) return;"
     ]
    }
   ],
@@ -805,6 +825,38 @@
      "            }",
      "            fprintf(stderr, \"'\\n\");",
      "        }"
+    ]
+   }
+  ],
+  "func_0026D530": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_pc_mode_frame_begin(ctx);"
+    ]
+   },
+   {
+    "anchor": "        ctx->lr = 0x0026DE84; func_008D87D4(ctx); DRAIN_TRAMPOLINE(ctx);",
+    "replaces": [],
+    "lines": [
+     "        taiko_pc_mode_frame_dispatch(ctx);"
+    ]
+   }
+  ],
+  "func_000E4608": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_pc_mode_setup_tick(ctx)) return;"
+    ]
+   },
+   {
+    "anchor": "        if ((!((ctx->cr >> 0) & 2))) goto loc_000E4BD4;",
+    "replaces": [],
+    "lines": [
+     "        if (taiko_pc_mode_setup_complete((uint32_t)ctx->gpr[20], (uint32_t)ctx->gpr[18])) goto loc_000E467C;"
     ]
    }
   ]

@@ -599,9 +599,13 @@ bool taiko_audio_decode_song(std::string_view music_id,
         failure = "PS3_VFS_ROOT is not configured";
         return false;
     }
+    // Catalog IDs are lowercase; Green's installed song banks are uppercase.
+    // Normalize ASCII after validating the ID, including on case-sensitive VFS.
+    std::string bank_id(music_id);
+    for (char& c : bank_id)
+        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
     const std::filesystem::path path = std::filesystem::path(root) / "data" /
-        "sound" / "bgm" / "nub" /
-        (std::string("SONG_") + std::string(music_id) + ".nub");
+        "sound" / "bgm" / "nub" / ("SONG_" + bank_id + ".nub");
     std::vector<uint8_t> header;
     if (!read_nub_header(path.string(), header)) {
         failure = "song NUB is unavailable";

@@ -161,9 +161,9 @@ bool enabled()
 
 bool frontend_owns_input()
 {
-    if (taiko_pc_mode_is_active()) return true;
-    if (!enabled()) return false;
     const Phase phase = g_phase.load(std::memory_order_acquire);
+    if (taiko_pc_mode_is_active()) return phase != Phase::Passthrough;
+    if (!enabled()) return false;
     return phase != Phase::WaitingForEntry && phase != Phase::Passthrough &&
            phase != Phase::Failed;
 }
@@ -647,17 +647,25 @@ void request_song_launch()
         }
         match.players[1].slot = taiko_plus::PlayerSlot::P2;
         match.players[1].role = taiko_plus::PlayerRole::SyntheticRemote;
-        match.players[1].anonymous = false;
-        match.players[1].profile = taiko_plus::GuestPlayerProfile{
-            taiko_plus::kContractVersion, "development-remote",
-            "REMOTE", 0, 0, 0};
+        match.players[1].anonymous = true;
+        /* Publish the UI latch before the command becomes visible to the
+         * PPU consumer. A synchronous failure may clear it immediately. */
+        if (g_song_launch_requested.exchange(true, std::memory_order_acq_rel))
+            return;
         if (!taiko_plus::runtime().enqueue_launch(std::move(match))) {
+            g_song_launch_requested.store(false, std::memory_order_release);
             std::fprintf(stderr,
                          "[taiko_frontend] standalone command queue rejected "
                          "launch\n");
             show_current_song();
             return;
         }
+        taiko_host_audio_play_sfx(TaikoPlusSfx::Confirm);
+        std::fprintf(stderr,
+                     "[taiko_frontend] standalone launch queued id=%s difficulty=%u\n",
+                     song->music_id.c_str(), difficulty);
+        show_current_song();
+        return;
     }
 
     if (g_song_launch_requested.exchange(true, std::memory_order_acq_rel))
@@ -1324,6 +1332,9 @@ extern "C" void taiko_frontend_song_select_tick(ppu_context* ctx)
 
 extern "C" int taiko_frontend_results_end_override(ppu_context* ctx)
 {
+    if (ctx && taiko_pc_mode_is_active() && taiko_pc_mode_is_standalone())
+        return taiko_pc_mode_results_return(static_cast<uint32_t>(ctx->gpr[3]),
+                                            static_cast<uint32_t>(ctx->gpr[4]));
     if ((!enabled() && !taiko_pc_mode_is_active()) || !ctx ||
         g_phase.load(std::memory_order_acquire) != Phase::Passthrough)
         return 0;
@@ -1354,20 +1365,24 @@ extern "C" int taiko_frontend_results_end_override(ppu_context* ctx)
     return 1;
 }
 
-extern "C" void taiko_frontend_results_continue_tick(ppu_context* ctx)
+extern "C" int taiko_frontend_results_continue_tick(ppu_context* ctx)
 {
+    if (ctx && taiko_pc_mode_is_active() && taiko_pc_mode_is_standalone())
+        return taiko_pc_mode_results_return(static_cast<uint32_t>(ctx->gpr[3]),
+                                            static_cast<uint32_t>(ctx->gpr[4]));
     if ((!enabled() && !taiko_pc_mode_is_active()) || !ctx ||
         g_phase.load(std::memory_order_acquire) != Phase::Passthrough)
-        return;
+        return 0;
 
     const uint32_t results = static_cast<uint32_t>(ctx->gpr[3]);
-    if (!results || vm_read32(results) != kGameEnsoResultVtable) return;
+    if (!results || vm_read32(results) != kGameEnsoResultVtable) return 0;
 
     g_phase.store(Phase::SongSelect, std::memory_order_release);
     enter_song_select_shell();
     std::fprintf(stderr,
                  "[taiko_frontend] host Song Select reacquired after Results "
                  "results=%08X\n", results);
+    return 0;
 }
 
 extern "C" void taiko_frontend_standalone_failure(const char* detail)
@@ -1377,4 +1392,12 @@ extern "C" void taiko_frontend_standalone_failure(const char* detail)
     show_current_song();
     std::fprintf(stderr, "[taiko_frontend] standalone launch failed: %s\n",
                  detail ? detail : "unknown failure");
+}
+
+extern "C" void taiko_frontend_standalone_gameplay(void)
+{
+    g_song_launch_requested.store(false, std::memory_order_release);
+    g_phase.store(Phase::Passthrough, std::memory_order_release);
+    taiko_host_audio_begin_gameplay_handoff();
+    taiko_overlay_hide_host_screen();
 }

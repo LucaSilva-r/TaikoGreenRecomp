@@ -152,23 +152,16 @@ to native boolean 1. The hook reads raw stack cells, not converted values.
 
 The verified Player Entry dispatcher hook waits for state 39/40, after the
 stock fade and cleanup, before arming the handoff. With
-`TAIKO_PLUS_STANDALONE=1`, the beginning of destination factory
-`func_001FE470` runs its original outgoing-scene removal prefix and returns
-before allocating either Song Select variant. The later
-`SequenceController::push_task` interception remains a guarded fallback. With
-the flag unset or zero, the factory and task push run normally, preserving the
-validated GameSongSelect-backed diagnostic path. Other destinations and task
-pushes remain untouched.
+`TAIKO_PLUS_STANDALONE=1`, native `GameSongSetup` first populates the session
+catalog. Interception then prevents Song Select allocation and keeps completed
+setup as an idle session anchor. The anchor's update services host commands;
+the rest of the native frame transaction continues, including scene cleanup.
+With the flag unset or zero, the GameSongSelect-backed diagnostic path remains.
+Other arcade mode selections are unchanged.
 
-PC Mode then freezes the arcade sequence controller, gives input ownership to
-the host frontend, and displays the host song-browser shell. Stock arcade mode
-selections remain untouched.
-
-The standalone lifecycle and its current native ownership gate are tracked in
-[taiko_plus_runtime_plan.md](taiko_plus_runtime_plan.md). The legacy diagnostic
-path still uses a live stock Song Select manager; standalone launch remains a
-structured browser-safe failure until the manager/player/GameEnso ownership
-chain is live-proved.
+The standalone launch and Results adapters are tracked in
+[taiko_plus_runtime_plan.md](taiko_plus_runtime_plan.md). Live validation of
+gameplay and repeated Results returns is separate from the carousel handoff.
 
 ## Interactive verification
 
@@ -206,7 +199,7 @@ branch/function-boundary relocation. They do not emulate Lumen animation.
    [taiko_pc_mode] PC Mode selected in the stock carousel
    [entry-next-scene] callback=002287BC count=4 marker_type=3 marker=99 taiko_plus=1
    [taiko_pc_mode] Player Entry reached final state 39; handoff armed
-   [taiko_pc_mode] suppressing post-Entry arcade task ...
+   [taiko_pc_mode] native GameSongSetup complete; suppressed Song Select before allocation ...
    [taiko_pc_mode] host PC Mode activated ...
    ```
 
@@ -235,3 +228,15 @@ branch/function-boundary relocation. They do not emulate Lumen animation.
 - Claims that `board3` had a proven campaign-specific callback defect were
   unsupported. Training's frame-20 label was also accidentally renamed; it is
   now preserved, and only Campaign's actual frame-30 label is replaced.
+
+
+## Runtime follow-up (September 6)
+
+The browser's Play work is tracked in `taiko_plus_runtime_plan.md`.
+The old fallback's `0x00f8bae8` task is **GameSongSetup**, not Song Select.
+It must finish building the session catalog. A live trace confirmed that
+removing it without a replacement immediately returns the parent to attract
+and clears the catalog, explaining the subsequent no-op Play attempts.
+The current adapter keeps completed setup as an idle session anchor and
+intercepts before either setup removal or Song Select allocation. Gameplay
+and Results validation continues separately from the completed carousel work.

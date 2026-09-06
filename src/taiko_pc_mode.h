@@ -17,7 +17,7 @@ struct ppu_context;
 /* Returns 1 if Custom PC Mode is currently active, 0 otherwise. */
 int taiko_pc_mode_is_active(void);
 /* Development gate. Unset/zero keeps the validated GameSongSelect-backed
- * diagnostic path; one enables the host-only sequence freeze. */
+ * diagnostic path; one enables the host browser with a native session anchor. */
 int taiko_pc_mode_is_standalone(void);
 
 /* Called by the normal scene-commit callback (func_002287BC). */
@@ -40,8 +40,13 @@ void taiko_pc_mode_deactivate(void);
 /* Intercept SequenceController::push_task (0x008DA500). */
 void taiko_pc_mode_push_task_hook(struct ppu_context* ctx);
 
-/* Intercept SequenceController::update (0x008DA730). */
-void taiko_pc_mode_update_hook(struct ppu_context* ctx);
+/* Intercept the per-frame scene transaction (0x0026D530). 0x008DA730 is
+ * recursive removal, not update, and must retain its native implementation. */
+void taiko_pc_mode_frame_begin(struct ppu_context* ctx);
+void taiko_pc_mode_frame_dispatch(struct ppu_context* ctx);
+int taiko_pc_mode_results_return(uint32_t results, uint32_t owner);
+int taiko_pc_mode_setup_tick(struct ppu_context* ctx);
+int taiko_pc_mode_setup_complete(uint32_t setup, uint32_t owner);
 
 /* Main PPU tick hook to handle song launch while PC mode is active. */
 void taiko_pc_mode_tick(struct ppu_context* ctx);
