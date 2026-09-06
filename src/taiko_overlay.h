@@ -39,6 +39,7 @@ enum taiko_overlay_song_row_kind {
     TAIKO_OVERLAY_ROW_SONG = 0,
     TAIKO_OVERLAY_ROW_CATEGORY = 1,
     TAIKO_OVERLAY_ROW_EXIT = 2,
+    TAIKO_OVERLAY_ROW_DIFFICULTY = 3,
 };
 
 typedef struct taiko_overlay_song_row {
@@ -47,6 +48,10 @@ typedef struct taiko_overlay_song_row {
     unsigned catalog_index;
     int selected;
     int kind;
+    unsigned difficulty; /* Chart identity within the song; independent of row position. */
+    unsigned stars; /* Zero means the source has no rating. */
+    uint8_t cursors;
+    uint8_t ready;
 } taiko_overlay_song_row;
 
 void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,

@@ -816,6 +816,17 @@ if(BUILD_TESTING AND NOT WIN32)
     target_link_libraries(taiko_plus_runtime_tests PRIVATE Threads::Threads)
     add_test(NAME taiko_plus_runtime_tests COMMAND taiko_plus_runtime_tests)
 
+    add_executable(taiko_browser_tests
+        "tests/taiko_browser_tests.cpp"
+        "src/taiko_frontend.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_browser_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/pc_mode_stubs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video")
+    target_link_libraries(taiko_browser_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_browser_tests COMMAND taiko_browser_tests)
+
     add_executable(taiko_catalog_identity_tests
         "tests/taiko_catalog_identity_tests.cpp"
         "src/taiko_catalog.cpp"
@@ -880,6 +891,17 @@ if(BUILD_TESTING AND NOT WIN32)
         endif()
     endif()
     add_test(NAME taiko_audio_decoder_tests COMMAND taiko_audio_decoder_tests)
+
+    add_executable(taiko_overlay_cache_tests "tests/taiko_overlay_cache_tests.c")
+    target_include_directories(taiko_overlay_cache_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video"
+        "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+    target_link_libraries(taiko_overlay_cache_tests PRIVATE
+        "${TAIKO_FREETYPE_LIB}" Threads::Threads)
+    add_test(NAME taiko_overlay_cache_tests COMMAND taiko_overlay_cache_tests)
+    set_tests_properties(taiko_overlay_cache_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     add_executable(taiko_host_frame_tests
         "tests/taiko_host_frame_tests.cpp"
@@ -954,6 +976,20 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu" AND NOT ANDROID)
             -static -static-libgcc -static-libstdc++)
         taiko_copy_dxc_runtime(rsx_replay)
     endif()
+endif()
+
+if(TARGET rsx_replay)
+    get_target_property(_preview_sources rsx_replay SOURCES)
+    list(REMOVE_ITEM _preview_sources "tools/rsx_replay.c")
+    add_executable(taiko_browser_gpu_preview "tools/taiko_browser_gpu_preview.c"
+        "src/taiko_overlay.c" ${_preview_sources})
+    foreach(_property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS LINK_LIBRARIES)
+        get_target_property(_value rsx_replay ${_property})
+        if(_value)
+            set_property(TARGET taiko_browser_gpu_preview PROPERTY ${_property} "${_value}")
+        endif()
+    endforeach()
+    target_link_libraries(taiko_browser_gpu_preview PRIVATE "${TAIKO_FREETYPE_LIB}" Threads::Threads)
 endif()
 
 message(STATUS "Taiko host backends: RSX=${TAIKO_RSX_BACKEND}, input=${TAIKO_INPUT_BACKEND}, audio=${TAIKO_AUDIO_BACKEND}")

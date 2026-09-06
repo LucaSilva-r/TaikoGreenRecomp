@@ -8,6 +8,16 @@ namespace taiko_plus {
 
 // Value-only browser state. The frontend serializes access with its action lock.
 struct BrowserPlayers {
+    bool expanded = false;
+    void collapse() { expanded = false; ready = 0; }
+    void open(uint8_t available) { expanded = available != 0; ready = 0; normalize(available); }
+    uint8_t cursors(unsigned course) const {
+        if (!expanded) return 0;
+        uint8_t result = 0;
+        for (unsigned p = 0; p < 2; ++p)
+            if ((joined & (1u << p)) && difficulty[p] == course) result |= 1u << p;
+        return result;
+    }
     uint8_t joined = 0;
     uint8_t ready = 0;
     unsigned focus = 0;
@@ -21,7 +31,7 @@ struct BrowserPlayers {
         focus = player;
     }
     void song_changed(uint8_t available) {
-        ready = 0;
+        collapse();
         normalize(available);
     }
     void normalize(uint8_t available) {

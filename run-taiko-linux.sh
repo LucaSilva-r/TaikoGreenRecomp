@@ -21,9 +21,14 @@ export PS3_TOC_SET="${PS3_TOC_SET:-0x1027c58,0x1037a88,0x1047a38}"
 export FLOW_NOSPILL="${FLOW_NOSPILL:-1}"
 export TAIKO_DNS_LOOPBACK="${TAIKO_DNS_LOOPBACK:-1}"
 export TAIKO_OFFLINE_COMPLETE="${TAIKO_OFFLINE_COMPLETE:-1}"
+# Taiko+ owns its browser; the legacy path leaves stock Song Select running.
+# An explicit =0 retains that path for diagnostics.
+export TAIKO_PLUS_STANDALONE="${TAIKO_PLUS_STANDALONE:-1}"
 export TAIKO_FS_YIELD="${TAIKO_FS_YIELD:-0}"
 export TAIKO_AUDIO_DECODE="${TAIKO_AUDIO_DECODE:-1}"
 export TAIKO_AUDIO_SPU="${TAIKO_AUDIO_SPU:-1}"
+export TAIKO_VBLANK_HZ="${TAIKO_VBLANK_HZ:-240}"
+export TAIKO_ANIMATION_TIMING="${TAIKO_ANIMATION_TIMING:-1}"
 
 command=("${repo_dir}/build-linux/taiko_boot"
     "${repo_dir}/game/EBOOT.elf" "$@")

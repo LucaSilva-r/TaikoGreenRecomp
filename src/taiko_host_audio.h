@@ -12,8 +12,8 @@ enum class TaikoPlusSfx : uint8_t {
     Cancel,
 };
 
-/* Process-lifetime cellAudio mixer controls. These functions publish atomics
- * only and are safe to call outside the audio callback. */
+/* Process-lifetime cellAudio mixer controls; call outside the audio callback.
+ * Hits publish only atomics. Scene activation also starts background loading. */
 void taiko_host_audio_install();
 void taiko_host_audio_set_group_gain(uint32_t group, float gain);
 void taiko_host_audio_set_scene_active(bool active);
@@ -24,6 +24,7 @@ void taiko_host_audio_begin_gameplay_handoff();
 void taiko_host_audio_reacquire_menu();
 
 #ifdef TAIKO_HOST_AUDIO_TESTING
+void taiko_host_audio_test_install_drums(const float* mono, size_t frames);
 void taiko_host_audio_test_publish_pcm(const float* stereo, size_t frames,
                                        bool loop, uint64_t generation,
                                        size_t preview_start = 0, float song_gain = 1.0f);

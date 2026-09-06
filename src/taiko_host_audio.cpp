@@ -2,6 +2,9 @@
 
 #include "cellAudio.h"
 #include "taiko_audio_decoder.h"
+#include "taiko_menu_samples.h"
+#include <fstream>
+#include <cstdlib>
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +35,38 @@ std::string g_preview_music_id;
 
 constexpr uint32_t kOutputRate = 48000;
 constexpr uint32_t kRampFrames = 4800; /* 100 ms at cellAudio's 48 kHz. */
+
+struct MenuBank { TaikoMenuSample samples[2]; };
+std::atomic<const MenuBank*> g_menu_bank{nullptr};
+std::atomic<unsigned> g_sfx_hits[2]{};
+
+void preload_menu_samples()
+{
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::thread([] {
+            const char* root = std::getenv("PS3_VFS_ROOT");
+            if (!root || !*root) return;
+            std::ifstream file(std::string(root) + "/data/sound/se/SE_COM.nub",
+                               std::ios::binary | std::ios::ate);
+            if (!file || file.tellg() <= 0 || file.tellg() > 8 * 1024 * 1024) return;
+            const size_t size = size_t(file.tellg());
+            std::vector<uint8_t> bytes(size);
+            file.seekg(0);
+            if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) return;
+            auto bank = std::make_unique<MenuBank>();
+            // SE_COM 0/3 are the default Don/Ka waveforms, byte-identical to
+            // SE_GAME_NEIRO_000_C 0/1, with the menu volume group (5).
+            if (!taiko_decode_menu_sample(bytes, 0, bank->samples[0]) ||
+                !taiko_decode_menu_sample(bytes, 3, bank->samples[1])) {
+                std::fprintf(stderr, "[taiko_host_audio] invalid SE_COM drum samples\n");
+                return;
+            }
+            g_menu_bank.store(bank.release(), std::memory_order_release);
+            std::fprintf(stderr, "[taiko_host_audio] original Don/Ka samples ready\n");
+        }).detach();
+    });
+}
 
 struct PreviewVoice {
     std::shared_ptr<std::vector<float>> pcm;
@@ -205,6 +240,16 @@ void external_mix(float* stereo, u32 frames)
     static PreviewVoice* previous = nullptr;
     static uint32_t crossfade_left = 0;
     if (!stereo) return;
+    struct HitVoice { const TaikoMenuSample* sample = nullptr; size_t cursor = 0; };
+    static HitVoice hits[16];
+    static unsigned next_hit = 0;
+    const MenuBank* bank = g_menu_bank.load(std::memory_order_acquire);
+    for (unsigned sound = 0; sound < 2; ++sound) {
+        unsigned count = g_sfx_hits[sound].exchange(0, std::memory_order_acq_rel);
+        if (bank && g_host_target.load(std::memory_order_relaxed) > 0.0f)
+            for (unsigned n = 0; n < std::min(count, 8u); ++n)
+                hits[next_hit++ % 16] = {&bank->samples[sound], 0};
+    }
     const float guest_target =
         g_guest_target.load(std::memory_order_relaxed);
     const float host_target =
@@ -262,6 +307,15 @@ void external_mix(float* stereo, u32 frames)
         } else {
             mix_voice(current, 1.0f, host_left, host_right);
         }
+        float drum = 0.0f;
+        for (auto& hit : hits) {
+            if (!hit.sample) continue;
+            drum += hit.sample->pcm[hit.cursor++] * hit.sample->gain *
+                g_group_gain[hit.sample->group].load(std::memory_order_relaxed);
+            if (hit.cursor == hit.sample->pcm.size()) hit.sample = nullptr;
+        }
+        host_left += drum;
+        host_right += drum;
         stereo[frame * 2u] = std::clamp(
             stereo[frame * 2u] * guest_gain + host_left * host_gain,
             -1.0f, 1.0f);
@@ -275,6 +329,7 @@ void external_mix(float* stereo, u32 frames)
         previous = nullptr;
         current = nullptr;
         crossfade_left = 0;
+        for (auto& hit : hits) hit.sample = nullptr;
     }
 }
 
@@ -307,6 +362,7 @@ static void taiko_host_audio_register_process_mixer()
 void taiko_host_audio_set_scene_active(bool active)
 {
     taiko_host_audio_install();
+    if (active) preload_menu_samples();
     g_guest_target.store(active ? 0.0f : 1.0f,
                          std::memory_order_release);
     g_host_target.store(active ? 1.0f : 0.0f,
@@ -326,9 +382,15 @@ void taiko_host_audio_select_preview(std::string_view music_id,
 
 void taiko_host_audio_play_sfx(TaikoPlusSfx sound)
 {
-    (void)sound;
-    /* The fixed voice pool is populated only after SE_SELECT entry IDs have
-     * been traced. Unknown bank entries degrade to silence by contract. */
+    if (g_host_target.load(std::memory_order_relaxed) == 0.0f ||
+        !g_menu_bank.load(std::memory_order_acquire)) return;
+    const unsigned index = (sound == TaikoPlusSfx::Move ||
+                            sound == TaikoPlusSfx::Difficulty) ? 1 : 0;
+    // Bounded pending hits; multiple input producers never touch voice cursors.
+    unsigned count = g_sfx_hits[index].load(std::memory_order_relaxed);
+    while (count < 8 && !g_sfx_hits[index].compare_exchange_weak(
+        count, count + 1, std::memory_order_release, std::memory_order_relaxed)) {}
+
 }
 
 void taiko_host_audio_begin_gameplay_handoff()
@@ -347,6 +409,14 @@ void taiko_host_audio_reacquire_menu()
 }
 
 #ifdef TAIKO_HOST_AUDIO_TESTING
+void taiko_host_audio_test_install_drums(const float* mono, size_t frames)
+{
+    auto* bank = new MenuBank;
+    for (auto& sample : bank->samples)
+        sample.pcm.assign(mono, mono + frames);
+    g_menu_bank.store(bank, std::memory_order_release);
+}
+
 void taiko_host_audio_test_publish_pcm(const float* stereo, size_t frames,
                                        bool loop, uint64_t generation,
                                        size_t preview_start, float song_gain)

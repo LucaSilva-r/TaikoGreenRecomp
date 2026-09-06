@@ -2336,6 +2336,8 @@ static int overlay_pipeline_ready(SDL_GPUTextureFormat format)
     return s_overlay.sampler != NULL;
 }
 
+#include "rsx_host_ui_gpu.inc"
+
 static void fps_overlay_set_value(double fps)
 {
     char text[8];
@@ -2493,6 +2495,14 @@ static int draw_fps_overlay(SDL_GPUCommandBuffer* commands,
 
 static int copy_host_frame(void)
 {
+    ui_active = g_rsx_host_ui_visit && g_rsx_host_ui_visit(1.0f, NULL, NULL, &ui_info);
+    if (ui_active) {
+        s_overlay.frame.mode = HOST_FRAME_FULLSCREEN;
+        s_overlay.frame.width = 1280; s_overlay.frame.height = 720;
+        s_overlay.frame.pitch = 1280 * 4;
+        s_overlay.frame.version = ui_info.version;
+        return 1;
+    }
     HostFrameInfo queried;
     SDL_zero(queried);
     if (!g_rsx_host_frame_copy ||
@@ -2542,6 +2552,19 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
                          SDL_GPUTextureFormat target_format)
 {
     if (!copy_host_frame()) return;
+    if (ui_active && draw_host_ui(commands, swapchain, swapchain_width, swapchain_height,
+                                  frame_x, frame_y, frame_width, frame_height, target_format)) return;
+    if (ui_active) {
+        // GPU initialization failure: request the existing CPU fallback.
+        if (!g_rsx_host_frame_copy || !g_rsx_host_frame_copy(&s_overlay.frame, NULL, 0)) return;
+        size_t bytes = (size_t)s_overlay.frame.pitch * s_overlay.frame.height;
+        if (s_overlay.pixel_capacity < bytes) {
+            void* p = realloc(s_overlay.pixels, bytes);
+            if (!p) return;
+            s_overlay.pixels = p; s_overlay.pixel_capacity = bytes;
+        }
+        if (!g_rsx_host_frame_copy(&s_overlay.frame, s_overlay.pixels, s_overlay.pixel_capacity)) return;
+    }
     const int width = (int)s_overlay.frame.width;
     const int height = (int)s_overlay.frame.height;
     const uint32_t version = s_overlay.frame.version;
@@ -3126,10 +3149,11 @@ static int present_display(SDL_GPUCommandBuffer* commands)
 #ifdef RSX_SDL_KMS_PRESENT
     if (s_sdl.kms_present) return present_display_kms(commands);
 #endif
-    if (!s_sdl.display || !s_sdl.window) return -1;
+    if ((!s_sdl.display && !ui_active) || !s_sdl.window) return -1;
     Uint32 source_width, source_height;
     SDL_GPUTexture* source_texture = presentation_texture(
         &source_width, &source_height);
+    if (ui_active) { source_width = 1280; source_height = 720; }
     /* Keep the display render and its presentation blit in one command buffer.
      * Besides avoiding a needless submit boundary, this gives drivers an
      * explicit render-target-to-sampled-texture dependency.  V3DV on the Pi 5
@@ -3179,8 +3203,16 @@ static int present_display(SDL_GPUCommandBuffer* commands)
         blit.load_op = SDL_GPU_LOADOP_CLEAR;
         blit.clear_color.a = 1.0f;
         blit.filter = SDL_GPU_FILTER_LINEAR;
-        SDL_BlitGPUTexture(commands, &blit);
-        ++s_sdl.perf_blits;
+        if (ui_active) {
+            SDL_GPUColorTargetInfo clear = {0}; clear.texture = swapchain;
+            clear.load_op = SDL_GPU_LOADOP_CLEAR; clear.store_op = SDL_GPU_STOREOP_STORE;
+            clear.clear_color.a = 1;
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &clear, 1, NULL);
+            if (pass) SDL_EndGPURenderPass(pass);
+        } else {
+            SDL_BlitGPUTexture(commands, &blit);
+            ++s_sdl.perf_blits;
+        }
         draw_overlay(commands, swapchain, width, height,
                      blit.destination.x, blit.destination.y, draw_w, draw_h,
                      SDL_GetGPUSwapchainTextureFormat(s_sdl.device,
@@ -4854,7 +4886,7 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     s_sdl.kms_zero_copy = s_sdl.kms_present &&
         getenv("TAIKO_KMS_ZERO_COPY") != NULL;
 #endif
-    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (getenv("TAIKO_FULLSCREEN")) window_flags |= SDL_WINDOW_FULLSCREEN;
     if (!s_sdl.kms_present) {
         s_sdl.window = SDL_CreateWindow(s_sdl.base_title,
@@ -5125,13 +5157,14 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
     if (rsx_sdl_gpu_backend_has_pending_batches()) timeout_ms = 0;
 
     /* A full-screen host frame has no RSX producer to wake or present it.
-     * Poll its version before sleeping, while preserving the 60 Hz ceiling. */
+     * Poll before sleeping. GPU host UI follows the display; the CPU fallback
+     * retains its 60 Hz ceiling. Guest frame timing is independent. */
     if (copy_host_frame() &&
         s_overlay.frame.mode == HOST_FRAME_FULLSCREEN &&
-        (s_sdl.host_present_requested ||
+        (s_sdl.host_present_requested || (ui_active && ui_info.animated) ||
          s_overlay.presented_version != s_overlay.frame.version)) {
         const Uint64 now = SDL_GetTicksNS();
-        const Uint64 interval = 1000000000ull / 60ull;
+        const Uint64 interval = ui_active ? host_ui_interval() : 1000000000ull / 60ull;
         if (!s_sdl.host_last_present_ns ||
             now - s_sdl.host_last_present_ns >= interval) {
             timeout_ms = 0;
@@ -5161,15 +5194,15 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
     const unsigned executed = drain_batches();
     if (!executed && copy_host_frame() &&
         s_overlay.frame.mode == HOST_FRAME_FULLSCREEN &&
-        (s_sdl.host_present_requested ||
+        (s_sdl.host_present_requested || (ui_active && ui_info.animated) ||
          s_overlay.presented_version != s_overlay.frame.version)) {
         const Uint64 now = SDL_GetTicksNS();
-        const Uint64 interval = 1000000000ull / 60ull;
+        const Uint64 interval = ui_active ? host_ui_interval() : 1000000000ull / 60ull;
         if (!s_sdl.host_last_present_ns ||
             now - s_sdl.host_last_present_ns >= interval) {
             if (present_host_frame_only() == 0) {
                 s_overlay.presented_version = s_overlay.frame.version;
-                s_sdl.host_last_present_ns = SDL_GetTicksNS();
+                s_sdl.host_last_present_ns = now;
                 s_sdl.host_present_requested = 0;
             }
         }
@@ -5213,12 +5246,10 @@ int rsx_sdl_gpu_backend_submit_batch(const rsx_render_batch* batch)
     return consumer_submit(&s_sdl, batch);
 }
 
-int rsx_sdl_gpu_backend_save_display_bmp(const char* path)
+static int save_texture_bmp(const char* path, SDL_GPUTexture* source_texture,
+                             Uint32 source_width, Uint32 source_height)
 {
-    if (!path || !s_sdl.display) return -1;
-    Uint32 source_width, source_height;
-    SDL_GPUTexture* source_texture = presentation_texture(
-        &source_width, &source_height);
+    if (!path || !source_texture) return -1;
     const Uint32 pitch = source_width * 4u;
     const Uint32 bytes = pitch * source_height;
     SDL_GPUTransferBufferCreateInfo transfer_info;
@@ -5278,6 +5309,42 @@ fail:
     fprintf(stderr, "[SDL_GPU] display readback failed: %s\n", SDL_GetError());
     return -1;
 }
+
+int rsx_sdl_gpu_backend_save_display_bmp(const char* path)
+{
+    Uint32 width, height;
+    SDL_GPUTexture* texture = presentation_texture(&width, &height);
+    return save_texture_bmp(path, texture, width, height);
+}
+
+#ifdef RSX_SDL_REPLAY_STANDALONE
+int rsx_sdl_gpu_backend_save_host_ui_bmp(const char* path, unsigned width, unsigned height)
+{
+    if (!width || !height || width > 8192 || height > 8192) return -1;
+    SDL_GPUTextureCreateInfo info = {0};
+    info.type = SDL_GPU_TEXTURETYPE_2D; info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width = width; info.height = height; info.layer_count_or_depth = 1;
+    info.num_levels = 1; info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    SDL_GPUTexture* target = SDL_CreateGPUTexture(s_sdl.device, &info);
+    if (!target) return -1;
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+    if (!cmd) { SDL_ReleaseGPUTexture(s_sdl.device, target); return -1; }
+    SDL_GPUColorTargetInfo clear = {0}; clear.texture = target;
+    clear.load_op = SDL_GPU_LOADOP_CLEAR; clear.store_op = SDL_GPU_STOREOP_STORE;
+    clear.clear_color.a = 1;
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &clear, 1, NULL);
+    if (!pass) { SDL_CancelGPUCommandBuffer(cmd); SDL_ReleaseGPUTexture(s_sdl.device, target); return -1; }
+    SDL_EndGPURenderPass(pass);
+    unsigned w = width, h = (unsigned)((uint64_t)width * 720 / 1280);
+    if (h > height) { h = height; w = (unsigned)((uint64_t)height * 1280 / 720); }
+    int ok = draw_host_ui(cmd, target, width, height, (width-w)/2, (height-h)/2, w, h, info.format);
+    if (submit_commands_and_wait(cmd) != 0) ok = 0;
+    int result = ok ? save_texture_bmp(path, target, width, height) : -1;
+    SDL_ReleaseGPUTexture(s_sdl.device, target);
+    return result;
+}
+#endif
 
 void rsx_sdl_gpu_backend_main_shutdown(void)
 {
@@ -5339,6 +5406,7 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
             SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.white_texture);
         if (s_sdl.default_sampler)
             SDL_ReleaseGPUSampler(s_sdl.device, s_sdl.default_sampler);
+        shutdown_host_ui();
         if (s_overlay.texture)
             SDL_ReleaseGPUTexture(s_sdl.device, s_overlay.texture);
         if (s_overlay.pipeline)

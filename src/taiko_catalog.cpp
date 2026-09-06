@@ -5,6 +5,7 @@
  * exposed only when at least one of its solo e/n/h/m/x chart files exists.
  */
 #include "taiko_catalog.h"
+#include "taiko_catalog_tuning.h"
 
 #include <charconv>
 #include <cctype>
@@ -142,6 +143,8 @@ void load_once()
 
     const std::filesystem::path fumen_root = root / "data/fumen";
     const auto title_overrides = load_title_overrides();
+    const auto ratings = taiko_catalog_detail::parse_star_ratings(
+        read_file(fumen_root / "tuning.bin"));
     std::size_t position = 0;
     std::size_t metadata_count = 0;
     while ((position = xml.find("<Data", position)) != std::string::npos) {
@@ -158,6 +161,8 @@ void load_once()
         ++metadata_count;
         song.difficulty_mask = chart_mask(fumen_root, song.music_id);
         if (!song.difficulty_mask) continue;
+        const auto rating = ratings.find(song.music_id);
+        if (rating != ratings.end()) song.stars = rating->second;
         song.original_title = tag_value(block, "musicname");
         song.title = song.original_title;
         song.genre = tag_value(block, "genrename");
@@ -184,6 +189,7 @@ bool taiko_hash_file_sha256(const std::string& path,
 {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
+        hash = {};
         if (error) *error = "cannot open " + path;
         return false;
     }

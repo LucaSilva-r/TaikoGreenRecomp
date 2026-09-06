@@ -44,8 +44,14 @@ reported once and returns the authoritative runtime to a usable browser state.
 - Authored RIFF `smpl` loops are retained and scaled to 48 kHz. A file without
   loop metadata stops at end of stream. Standalone previews now read the NSH
   cue, song gain, and group, with sample zero as the invalid-cue fallback.
-  `SE_SELECT` entry IDs remain unverified, so UI SFX requests are silent.
-- `TAIKO_PLUS_STANDALONE=1` enables the standalone path. Unset or `0`
+  Browser drum feedback uses `SE_COM` entries 0 (Don) and 3 (Ka), whose
+  ADPCM payloads match default `SE_GAME_NEIRO_000_C` entries 0/1 exactly.
+  A background loader decodes them once; the mixer uses 16 fixed overlapping
+  voices, retaining the bank gain and menu volume group 5. Rim navigation
+  plays Ka; centre/open/back plays Don, once per input rather than again
+  for the resulting browser action.
+- `TAIKO_PLUS_STANDALONE=1` enables the standalone path (the graphical launchers
+  now default it to `1`). In the executable itself, unset or `0`
   retains the GameSongSelect-backed diagnostic path. Native frame processing,
   including deferred scene destruction, continues in both modes.
 - Standalone interception runs after `GameSongSetup` populates the session,
@@ -185,9 +191,9 @@ task tree, and only its current update facade may queue gameplay.
 
 After the native gate passes:
 
-1. Confirm the NSH preview-cue field across several stock traces and map move,
-   difficulty, confirm, and cancel in `SE_SELECT`; then add the minimal bank
-   entry extractor and fixed SFX voice pool.
+1. Confirm the NSH preview-cue field across several stock traces. Additional
+   scene-specific `SE_SELECT` effects remain unmapped; the original common
+   Don/Ka browser feedback and fixed SFX voice pool are implemented.
 2. Implement `GuestPlayerFactory` with Green's default/profile helpers and a
    development synthetic P2 fixture.
 3. Reproduce the native state-11 GameEnso transaction behind the semantic

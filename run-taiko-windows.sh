@@ -16,6 +16,9 @@ export PS3_TOC_SET="${PS3_TOC_SET:-0x1027c58,0x1037a88,0x1047a38}"
 export FLOW_NOSPILL="${FLOW_NOSPILL:-1}"
 export TAIKO_DNS_LOOPBACK="${TAIKO_DNS_LOOPBACK:-1}"
 export TAIKO_OFFLINE_COMPLETE="${TAIKO_OFFLINE_COMPLETE:-1}"
+# Taiko+ owns its browser; the legacy path leaves stock Song Select running.
+# An explicit =0 retains that path for diagnostics.
+export TAIKO_PLUS_STANDALONE="${TAIKO_PLUS_STANDALONE:-1}"
 export TAIKO_FS_YIELD="${TAIKO_FS_YIELD:-0}"
 # The decoded ATRAC path and the real bnusCore SPU mixer are the normal audio
 # configuration. Keep explicit =0 overrides for silent/headless diagnostics.

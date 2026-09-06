@@ -180,4 +180,26 @@ int main() {
     browser.change_difficulty(1,1,0x05);
     CHECK(browser.ready==1); CHECK(browser.confirm(1));
 
+    browser.open(0x05);
+    CHECK(browser.expanded && browser.ready == 0);
+    CHECK((browser.cursors(browser.difficulty[0]) & 1) != 0);
+    CHECK((browser.cursors(browser.difficulty[1]) & 2) != 0);
+    const auto p2_course = browser.difficulty[1];
+    CHECK(!browser.confirm(1));
+    browser.change_difficulty(0, -1, 0x05);
+    CHECK(browser.difficulty[1] == p2_course && browser.ready == 2);
+    CHECK(browser.confirm(0));
+    browser.collapse();
+    CHECK(!browser.expanded && browser.ready == 0 && browser.joined == 3);
+    CHECK(browser.cursors(browser.difficulty[0]) == 0);
+    browser.open(0x08);
+    CHECK(browser.cursors(3) == 3); // Both cursors remain visible on one row.
+    browser.change_difficulty(1, 1, 0x08);
+    CHECK(browser.cursors(3) == 3); // One-course songs cannot lose either cursor.
+    browser.song_changed(0x02);
+    CHECK(!browser.expanded && browser.ready == 0);
+    CHECK(browser.difficulty[0] == 1 && browser.difficulty[1] == 1);
+    browser.open(0);
+    CHECK(!browser.expanded);
+
 }

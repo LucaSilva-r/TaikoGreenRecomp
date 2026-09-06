@@ -3,11 +3,13 @@
  * The styling follows TaikoZucchini's core/title_render.c (MIT, same author):
  * white fill, and the outline built by disk-dilating the glyph's own coverage
  * mask rather than by stroking the outline, which is what gives the title's
- * text its rounded, even border. Only the parts a six-digit code needs are
- * here -- no title cache, no vertical text, no per-song prerender.
+ * text its rounded, even border. A bounded text-run cache retains metrics
+ * and transparent outlined bitmaps while browser rows animate.
  */
 #include "taiko_overlay.h"
+#include "rsx_host_ui.h"
 
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -17,6 +19,8 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_GLYPH_H
+#include FT_STROKER_H
 
 #include "taiko_pairing_pill.h"
 
@@ -41,9 +45,16 @@ static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
     (0xFF000000u | ((uint32_t)(blue) << 16) | \
      ((uint32_t)(green) << 8) | (uint32_t)(red))
 enum { TEXT_OUTLINE_RADIUS = 3 };
+static int g_outline_radius = TEXT_OUTLINE_RADIUS;
+static HostUiEmit g_ui_emit;
+static void* g_ui_user;
+static float g_ui_scale = 1.0f;
+static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* info);
+extern HostUiVisit g_rsx_host_ui_visit __attribute__((weak));
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t g_pixels[OVERLAY_MAX_WIDTH * OVERLAY_MAX_HEIGHT];
+static uint32_t g_frame_pixels[OVERLAY_MAX_WIDTH * OVERLAY_MAX_HEIGHT];
+static uint32_t* g_pixels = g_frame_pixels;
 static uint32_t g_version;
 static int      g_visible;
 static int      g_mode;             /* 1 pairing, 2 status, 3--5 host screens */
@@ -78,9 +89,15 @@ typedef struct song_row_storage {
     unsigned catalog_index;
     int selected;
     int kind;
+    unsigned difficulty, stars;
+    uint8_t cursors, ready;
+    float from_y, from_x;
 } song_row_storage;
 static song_row_storage g_song_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
 static unsigned g_song_row_count;
+static double g_song_animation_start, g_song_last_render;
+static int g_song_animating;
+static int g_gpu_animation_pending;
 static long     g_deadline;
 static int      g_drawn_remaining = -1;
 
@@ -96,6 +113,7 @@ extern void rsx_sdl_gpu_backend_wake(void) __attribute__((weak));
 __attribute__((constructor))
 static void taiko_overlay_register(void)
 {
+    if (&g_rsx_host_ui_visit) g_rsx_host_ui_visit = visit_host_ui;
     if (&g_rsx_host_frame_copy)
         g_rsx_host_frame_copy = taiko_host_frame_copy;
 }
@@ -110,6 +128,28 @@ static long monotonic_seconds(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long)ts.tv_sec;
+}
+
+static double monotonic_milliseconds(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+}
+
+static float song_ease(void)
+{
+    double t = (monotonic_milliseconds() - g_song_animation_start) / 180.0;
+    if (t >= 1.0) return 1.0f;
+    if (t < 0.0) t = 0.0;
+    double inverse = 1.0 - t;
+    return (float)(1.0 - inverse * inverse * inverse * inverse * inverse);
+}
+
+static int row_target_x(int kind, int selected)
+{
+    return kind == TAIKO_OVERLAY_ROW_DIFFICULTY ? (selected ? 652 : 674)
+                                               : (selected ? 594 : 628);
 }
 
 #ifdef TAIKO_OVERLAY_FONT_EMBEDDED
@@ -214,39 +254,37 @@ static void draw_glyph(const FT_Bitmap* bitmap, int origin_x, int origin_y,
                 put_pixel(px, py, COLOR_TEXT, coverage);
                 continue;
             }
-            for (int dy = -TEXT_OUTLINE_RADIUS; dy <= TEXT_OUTLINE_RADIUS; dy++)
-                for (int dx = -TEXT_OUTLINE_RADIUS; dx <= TEXT_OUTLINE_RADIUS; dx++)
-                    if (dx * dx + dy * dy <= TEXT_OUTLINE_RADIUS * TEXT_OUTLINE_RADIUS)
+            for (int dy = -g_outline_radius; dy <= g_outline_radius; dy++)
+                for (int dx = -g_outline_radius; dx <= g_outline_radius; dx++)
+                    if (dx * dx + dy * dy <= g_outline_radius * g_outline_radius)
                         put_pixel(px + dx, py + dy, COLOR_TEXT_OUTLINE, coverage);
         }
     }
 }
 
-static int text_width(const char* text, int pixels)
+static FT_ULong text_codepoint(const unsigned char** source)
+{
+    const unsigned char* cursor = *source;
+    FT_ULong value = *cursor++;
+    unsigned remaining = 0;
+    if ((value & 0xE0u) == 0xC0u) { value &= 0x1Fu; remaining = 1; }
+    else if ((value & 0xF0u) == 0xE0u) { value &= 0x0Fu; remaining = 2; }
+    else if ((value & 0xF8u) == 0xF0u) { value &= 0x07u; remaining = 3; }
+    while (remaining--) {
+        if ((*cursor & 0xC0u) != 0x80u) { value = 0xFFFDu; break; }
+        value = (value << 6) | (*cursor++ & 0x3Fu);
+    }
+    *source = cursor;
+    return value;
+}
+
+static int text_width_uncached(const char* text, int pixels)
 {
     int width = 0;
     if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return 0;
     const unsigned char* cursor = (const unsigned char*)text;
     while (*cursor) {
-        FT_ULong codepoint = *cursor++;
-        if ((codepoint & 0xE0u) == 0xC0u && (cursor[0] & 0xC0u) == 0x80u) {
-            codepoint = ((codepoint & 0x1Fu) << 6) | (cursor[0] & 0x3Fu);
-            cursor += 1;
-        } else if ((codepoint & 0xF0u) == 0xE0u &&
-                   (cursor[0] & 0xC0u) == 0x80u &&
-                   (cursor[1] & 0xC0u) == 0x80u) {
-            codepoint = ((codepoint & 0x0Fu) << 12) |
-                        ((cursor[0] & 0x3Fu) << 6) | (cursor[1] & 0x3Fu);
-            cursor += 2;
-        } else if ((codepoint & 0xF8u) == 0xF0u &&
-                   (cursor[0] & 0xC0u) == 0x80u &&
-                   (cursor[1] & 0xC0u) == 0x80u &&
-                   (cursor[2] & 0xC0u) == 0x80u) {
-            codepoint = ((codepoint & 0x07u) << 18) |
-                        ((cursor[0] & 0x3Fu) << 12) |
-                        ((cursor[1] & 0x3Fu) << 6) | (cursor[2] & 0x3Fu);
-            cursor += 3;
-        }
+        FT_ULong codepoint = text_codepoint(&cursor);
         if (FT_Load_Char(g_face, codepoint, FT_LOAD_DEFAULT) != 0)
             continue;
         width += (int)(g_face->glyph->advance.x >> 6);
@@ -257,32 +295,14 @@ static int text_width(const char* text, int pixels)
 /* Centred on `centre_x`, and vertically centred on the pill rather than sat on
  * a baseline: the strings here are digits and a hyphen, so their ink box is
  * what should look centred. */
-static void draw_text_at(const char* text, int pixels, int centre_x, int centre_y)
+static void draw_text_uncached(const char* text, int pixels, int centre_x, int centre_y)
 {
     if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return;
 
-    int top = g_height, bottom = 0;
+    int top = INT_MAX, bottom = 0;
     const unsigned char* cursor = (const unsigned char*)text;
     while (*cursor) {
-        FT_ULong codepoint = *cursor++;
-        if ((codepoint & 0xE0u) == 0xC0u && (cursor[0] & 0xC0u) == 0x80u) {
-            codepoint = ((codepoint & 0x1Fu) << 6) | (cursor[0] & 0x3Fu);
-            cursor += 1;
-        } else if ((codepoint & 0xF0u) == 0xE0u &&
-                   (cursor[0] & 0xC0u) == 0x80u &&
-                   (cursor[1] & 0xC0u) == 0x80u) {
-            codepoint = ((codepoint & 0x0Fu) << 12) |
-                        ((cursor[0] & 0x3Fu) << 6) | (cursor[1] & 0x3Fu);
-            cursor += 2;
-        } else if ((codepoint & 0xF8u) == 0xF0u &&
-                   (cursor[0] & 0xC0u) == 0x80u &&
-                   (cursor[1] & 0xC0u) == 0x80u &&
-                   (cursor[2] & 0xC0u) == 0x80u) {
-            codepoint = ((codepoint & 0x07u) << 18) |
-                        ((cursor[0] & 0x3Fu) << 12) |
-                        ((cursor[1] & 0x3Fu) << 6) | (cursor[2] & 0x3Fu);
-            cursor += 3;
-        }
+        FT_ULong codepoint = text_codepoint(&cursor);
         if (FT_Load_Char(g_face, codepoint, FT_LOAD_DEFAULT) != 0)
             continue;
         const FT_Glyph_Metrics* metrics = &g_face->glyph->metrics;
@@ -291,46 +311,224 @@ static void draw_text_at(const char* text, int pixels, int centre_x, int centre_
         if (glyph_top > bottom) bottom = glyph_top;
         if (glyph_bottom < top) top = glyph_bottom;
     }
+    if (top == INT_MAX) return;
     const int baseline = centre_y + (bottom + top) / 2;
 
     /* Two passes, so every outline stays behind every fill. */
     for (int pass = 0; pass < 2; pass++) {
-        int pen_x = centre_x - text_width(text, pixels) / 2;
+        int pen_x = centre_x - text_width_uncached(text, pixels) / 2;
         if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return;
         cursor = (const unsigned char*)text;
         while (*cursor) {
-            FT_ULong codepoint = *cursor++;
-            if ((codepoint & 0xE0u) == 0xC0u &&
-                (cursor[0] & 0xC0u) == 0x80u) {
-                codepoint = ((codepoint & 0x1Fu) << 6) | (cursor[0] & 0x3Fu);
-                cursor += 1;
-            } else if ((codepoint & 0xF0u) == 0xE0u &&
-                       (cursor[0] & 0xC0u) == 0x80u &&
-                       (cursor[1] & 0xC0u) == 0x80u) {
-                codepoint = ((codepoint & 0x0Fu) << 12) |
-                            ((cursor[0] & 0x3Fu) << 6) | (cursor[1] & 0x3Fu);
-                cursor += 2;
-            } else if ((codepoint & 0xF8u) == 0xF0u &&
-                       (cursor[0] & 0xC0u) == 0x80u &&
-                       (cursor[1] & 0xC0u) == 0x80u &&
-                       (cursor[2] & 0xC0u) == 0x80u) {
-                codepoint = ((codepoint & 0x07u) << 18) |
-                            ((cursor[0] & 0x3Fu) << 12) |
-                            ((cursor[1] & 0x3Fu) << 6) | (cursor[2] & 0x3Fu);
-                cursor += 3;
-            }
+            FT_ULong codepoint = text_codepoint(&cursor);
             if (FT_Load_Char(g_face, codepoint, FT_LOAD_RENDER) != 0)
                 continue;
             const FT_GlyphSlot glyph = g_face->glyph;
-            draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
-                       baseline - glyph->bitmap_top, pass == 0);
+            if (g_ui_emit && pass == 0) {
+                // Vector stroke at drawable scale: rasterizing a wide outline
+                // once avoids O(radius^2) disk compositing at 4K/HiDPI sizes.
+                FT_Glyph outline = NULL;
+                FT_Stroker stroker = NULL;
+                if (FT_Load_Char(g_face, codepoint, FT_LOAD_NO_BITMAP) == 0 &&
+                    FT_Get_Glyph(g_face->glyph, &outline) == 0 &&
+                    FT_Stroker_New(g_library, &stroker) == 0) {
+                    FT_Stroker_Set(stroker, g_outline_radius * 64,
+                        FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
+                    if (FT_Glyph_StrokeBorder(&outline, stroker, 0, 1) == 0 &&
+                        FT_Glyph_To_Bitmap(&outline, FT_RENDER_MODE_NORMAL, NULL, 1) == 0) {
+                        FT_BitmapGlyph bitmap = (FT_BitmapGlyph)outline;
+                        for (unsigned y = 0; y < bitmap->bitmap.rows; ++y)
+                            for (unsigned x = 0; x < bitmap->bitmap.width; ++x)
+                                put_pixel(pen_x + bitmap->left + x,
+                                    baseline - bitmap->top + y, COLOR_TEXT_OUTLINE,
+                                    bitmap->bitmap.buffer[y * bitmap->bitmap.pitch + x]);
+                    }
+                }
+                if (stroker) FT_Stroker_Done(stroker);
+                if (outline) FT_Done_Glyph(outline);
+            } else {
+                draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
+                           baseline - glyph->bitmap_top, pass == 0);
+            }
             pen_x += (int)(glyph->advance.x >> 6);
         }
     }
 }
 
+/* Runs are keyed by UTF-8 text and pixel size. Font/colours are fixed for the
+ * process, and g_lock protects both FreeType and the cache. Metrics-only hits
+ * also avoid repeatedly loading glyphs during fitting and alignment. */
+enum { TEXT_CACHE_COUNT = 256, TEXT_CACHE_KEY_BYTES = 512,
+       TEXT_CACHE_MAX_BYTES = 16 * 1024 * 1024 };
+typedef struct text_cache_entry {
+    char text[TEXT_CACHE_KEY_BYTES];
+    int pixels, outline, advance, baseline_shift;
+    uint64_t texture_id;
+    int left, top, width, height, rasterized;
+    uint32_t hash;
+    uint64_t used;
+    uint32_t* bitmap;
+} text_cache_entry;
+static text_cache_entry g_text_cache[TEXT_CACHE_COUNT];
+static size_t g_text_cache_bytes;
+static uint64_t g_text_cache_clock, g_text_texture_id;
+
+static void release_text_bitmap(text_cache_entry* entry)
+{
+    if (entry->bitmap) {
+        g_text_cache_bytes -= (size_t)entry->width * entry->height * sizeof(uint32_t);
+        free(entry->bitmap);
+        entry->bitmap = NULL;
+    }
+    entry->rasterized = 0;
+}
+
+static text_cache_entry* get_text(const char* text, int pixels)
+{
+    if (!text || !text[0] || pixels <= 0) return NULL;
+    const size_t length = strlen(text);
+    if (length >= TEXT_CACHE_KEY_BYTES) return NULL;
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < length; ++i) hash = (hash ^ (unsigned char)text[i]) * 16777619u;
+    text_cache_entry* oldest = &g_text_cache[0];
+    for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) {
+        text_cache_entry* entry = &g_text_cache[i];
+        if (entry->pixels == pixels && entry->outline == g_outline_radius && entry->hash == hash && !strcmp(entry->text, text)) {
+            entry->used = ++g_text_cache_clock;
+            return entry;
+        }
+        if (entry->used < oldest->used) oldest = entry;
+    }
+    if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)pixels) != 0) return NULL;
+    release_text_bitmap(oldest);
+    memset(oldest, 0, sizeof(*oldest));
+    memcpy(oldest->text, text, length + 1);
+    oldest->pixels = pixels;
+    oldest->outline = g_outline_radius;
+    oldest->hash = hash;
+    oldest->used = ++g_text_cache_clock;
+    int top = INT_MAX, bottom = 0;
+    const unsigned char* cursor = (const unsigned char*)text;
+    while (*cursor) {
+        if (FT_Load_Char(g_face, text_codepoint(&cursor), FT_LOAD_DEFAULT) != 0) continue;
+        const FT_Glyph_Metrics* metrics = &g_face->glyph->metrics;
+        const int glyph_top = (int)(metrics->horiBearingY >> 6);
+        const int glyph_bottom = glyph_top - (int)(metrics->height >> 6);
+        if (glyph_top > bottom) bottom = glyph_top;
+        if (glyph_bottom < top) top = glyph_bottom;
+        oldest->advance += (int)(g_face->glyph->advance.x >> 6);
+    }
+    oldest->baseline_shift = top == INT_MAX ? 0 : (top + bottom) / 2;
+    return oldest;
+}
+
+static int rasterize_text(text_cache_entry* entry)
+{
+    if (entry->rasterized) return 1;
+    if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)entry->pixels) != 0) return 0;
+    int left = 0, right = 0, top = 0, bottom = 0, pen = 0;
+    const unsigned char* cursor = (const unsigned char*)entry->text;
+    while (*cursor) {
+        if (FT_Load_Char(g_face, text_codepoint(&cursor), FT_LOAD_RENDER) != 0) continue;
+        const FT_GlyphSlot glyph = g_face->glyph;
+        if (glyph->bitmap.width && glyph->bitmap.rows) {
+            const int x = pen + glyph->bitmap_left, y = -glyph->bitmap_top;
+            if (x < left) left = x;
+            if (y < top) top = y;
+            if (x + (int)glyph->bitmap.width > right) right = x + (int)glyph->bitmap.width;
+            if (y + (int)glyph->bitmap.rows > bottom) bottom = y + (int)glyph->bitmap.rows;
+        }
+        pen += (int)(glyph->advance.x >> 6);
+    }
+    entry->left = left - g_outline_radius;
+    entry->top = top - g_outline_radius;
+    entry->width = right - left + 2 * g_outline_radius;
+    entry->height = bottom - top + 2 * g_outline_radius;
+    if (entry->width > 16384 || entry->height > 4096) return 0;
+    const size_t bytes = (size_t)entry->width * entry->height * sizeof(uint32_t);
+    if (bytes > TEXT_CACHE_MAX_BYTES) return 0;
+    while (g_text_cache_bytes + bytes > TEXT_CACHE_MAX_BYTES) {
+        text_cache_entry* oldest = NULL;
+        for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) {
+            text_cache_entry* candidate = &g_text_cache[i];
+            if (candidate == entry || !candidate->bitmap) continue;
+            if (!oldest || candidate->used < oldest->used) oldest = candidate;
+        }
+        if (!oldest) return 0;
+        release_text_bitmap(oldest);
+    }
+    entry->bitmap = (uint32_t*)calloc(1, bytes);
+    if (!entry->bitmap) return 0;
+    g_text_cache_bytes += bytes;
+    // Use the original two-pass outline/fill rasterizer on a transparent run.
+    // This retains outline ordering and glyph bearings, including Japanese text.
+    uint32_t* frame = g_pixels;
+    const int frame_width = g_width, frame_height = g_height;
+    g_pixels = entry->bitmap;
+    g_width = entry->width;
+    g_height = entry->height;
+    draw_text_uncached(entry->text, entry->pixels,
+                       entry->advance / 2 - entry->left,
+                       -entry->top - entry->baseline_shift);
+    g_pixels = frame;
+    g_width = frame_width;
+    g_height = frame_height;
+    entry->texture_id = ++g_text_texture_id;
+    entry->rasterized = 1;
+    return 1;
+}
+
+static int text_width(const char* text, int pixels)
+{
+    text_cache_entry* entry = get_text(text, pixels);
+    return entry ? entry->advance : text_width_uncached(text, pixels);
+}
+
+static void draw_text_at(const char* text, int pixels, float centre_x, float centre_y)
+{
+    if (g_ui_emit) {
+        const int native_pixels = (int)ceilf(pixels * g_ui_scale);
+        g_outline_radius = (int)ceilf(TEXT_OUTLINE_RADIUS * g_ui_scale);
+        text_cache_entry* native = get_text(text, native_pixels);
+        if (native && rasterize_text(native)) {
+            HostUiDraw draw = {0};
+            draw.x = centre_x + (native->left - native->advance / 2) / g_ui_scale;
+            draw.y = centre_y + (native->top + native->baseline_shift) / g_ui_scale;
+            draw.w = native->width / g_ui_scale;
+            draw.h = native->height / g_ui_scale;
+            draw.colour = 0xffffffffu;
+            draw.texture_id = native->texture_id;
+            draw.pixels = native->bitmap;
+            draw.width = native->width;
+            draw.height = native->height;
+            g_ui_emit(g_ui_user, &draw);
+        }
+        g_outline_radius = TEXT_OUTLINE_RADIUS;
+        return;
+    }
+    text_cache_entry* entry = get_text(text, pixels);
+    if (!entry || !rasterize_text(entry)) {
+        draw_text_uncached(text, pixels, centre_x, centre_y);
+        return;
+    }
+    const int left = centre_x - entry->advance / 2 + entry->left;
+    const int top = centre_y + entry->baseline_shift + entry->top;
+    for (int y = 0; y < entry->height; ++y) {
+        if (top + y < 0 || top + y >= g_height) continue;
+        const uint32_t* row = entry->bitmap + (size_t)y * entry->width;
+        for (int x = 0; x < entry->width; ++x) {
+            if (left + x < 0 || left + x >= g_width) continue;
+            const uint32_t colour = row[x];
+            if ((colour >> 24) == 255)
+                g_pixels[(size_t)(top + y) * g_width + left + x] = colour;
+            else if (colour >> 24)
+                put_pixel(left + x, top + y, colour, 255);
+        }
+    }
+}
+
 static void draw_text_fit(const char* text, int preferred_pixels,
-                          int maximum_width, int centre_x, int centre_y)
+                          int maximum_width, float centre_x, float centre_y)
 {
     int pixels = preferred_pixels;
     while (pixels > 20 && text_width(text, pixels) > maximum_width)
@@ -339,7 +537,7 @@ static void draw_text_fit(const char* text, int preferred_pixels,
 }
 
 static void draw_text_left_fit(const char* text, int preferred_pixels,
-                               int maximum_width, int left, int centre_y)
+                               int maximum_width, float left, float centre_y)
 {
     int pixels = preferred_pixels;
     while (pixels > 15 && text_width(text, pixels) > maximum_width)
@@ -348,15 +546,22 @@ static void draw_text_left_fit(const char* text, int preferred_pixels,
                  centre_y);
 }
 
-static void draw_text_right(const char* text, int pixels, int right,
-                            int centre_y)
+static void draw_text_right(const char* text, int pixels, float right,
+                            float centre_y)
 {
     draw_text_at(text, pixels, right - text_width(text, pixels) / 2,
                  centre_y);
 }
 
-static void fill_rect(int left, int top, int right, int bottom, uint32_t colour)
+static void fill_rect(float left, float top, float right, float bottom, uint32_t colour)
 {
+    if (g_ui_emit) {
+        HostUiDraw draw = {0};
+        draw.x = left; draw.y = top; draw.w = right - left; draw.h = bottom - top;
+        draw.radius = 0; draw.colour = colour;
+        g_ui_emit(g_ui_user, &draw);
+        return;
+    }
     if (left < 0) left = 0;
     if (top < 0) top = 0;
     if (right > g_width) right = g_width;
@@ -366,9 +571,16 @@ static void fill_rect(int left, int top, int right, int bottom, uint32_t colour)
             g_pixels[(size_t)y * g_width + x] = colour;
 }
 
-static void fill_rounded_rect(int left, int top, int right, int bottom,
+static void fill_rounded_rect(float left, float top, float right, float bottom,
                               int radius, uint32_t colour)
 {
+    if (g_ui_emit) {
+        HostUiDraw draw = {0};
+        draw.x = left; draw.y = top; draw.w = right - left; draw.h = bottom - top;
+        draw.radius = radius; draw.colour = colour;
+        g_ui_emit(g_ui_user, &draw);
+        return;
+    }
     if (radius <= 0) {
         fill_rect(left, top, right, bottom, colour);
         return;
@@ -463,10 +675,12 @@ static void render_host(void)
         return;
     }
 
-    /* Song Select borrows osu!lazer's high-level composition: persistent
-     * details on the left, search above a dense right-side carousel, and the
-     * selected card pulled toward the centre. It stays deliberately static --
-     * this surface is CPU-rasterized only when input changes. */
+    /* Persistent song details and an animated song/difficulty carousel. Only
+     * the 180 ms input transitions redraw; settled screens retain their frame. */
+    const float ease = song_ease();
+    int expanded = 0;
+    for (unsigned r = 0; r < g_song_row_count; ++r)
+        expanded |= g_song_rows[r].kind == TAIKO_OVERLAY_ROW_DIFFICULTY;
     fill_rect(0, 0, g_width, g_height, RGB_COLOUR(0x10, 0x18, 0x25));
     fill_rect(0, 0, 570, 660, RGB_COLOUR(0x19, 0x28, 0x3A));
     fill_rect(570, 0, g_width, 660, RGB_COLOUR(0x11, 0x1B, 0x29));
@@ -568,36 +782,16 @@ static void render_host(void)
                      g_song_index + 1, g_song_match_total);
             draw_text_left_fit(position, 19, 450, 57, 345);
 
-            if (!g_browser_players_enabled) {
-                draw_text_left_fit("DIFFICULTY", 21, 460, 34, 420);
-                static const char* difficulty_names[] = {
-                    "EASY", "NORMAL", "HARD", "ONI", "URA"
-                };
-                for (unsigned difficulty = 0; difficulty < 5; ++difficulty) {
-                    const int left = 28 + (int)difficulty * 102;
-                    const int available =
-                        (g_song_difficulty_mask & (1u << difficulty)) != 0;
-                    const int selected = strcmp(
-                        g_song_difficulty, difficulty_names[difficulty]) == 0;
-                    const uint32_t colour = !available
-                        ? RGB_COLOUR(0x20, 0x2A, 0x36)
-                        : selected ? RGB_COLOUR(0xE6, 0x5B, 0x91)
-                                   : RGB_COLOUR(0x34, 0x4A, 0x60);
-                    fill_rounded_rect(left, 446, left + 92, 493, 9, colour);
-                    draw_text_at(difficulty_names[difficulty], 16,
-                                 left + 46, 469);
-                }
+            draw_text_left_fit(expanded ? "RIMS / UP / DOWN  CHOOSE CHART"
+                                        : "RIMS / UP / DOWN  CHOOSE SONG", 18, 500, 34, 415);
+            draw_text_left_fit(expanded ? "RIGHT CENTRE / ENTER  READY"
+                                        : "RIGHT CENTRE / ENTER  OPEN SONG", 18, 500, 34, 451);
+            draw_text_left_fit(expanded ? "LEFT CENTRE / ESC  CLOSE SONG"
+                                        : "LEFT CENTRE / ESC  CATEGORIES", 17, 500, 34, 487);
 
-                draw_text_left_fit("LEFT / RIGHT  CHANGE DIFFICULTY", 17, 490,
-                                   34, 530);
-                draw_text_left_fit("ENTER OR RIGHT CENTRE  PLAY", 19, 490,
-                                   34, 565);
-                draw_text_left_fit("R  RANDOM SONG", 17, 490, 34, 600);
-            }
         }
 
         if (g_browser_players_enabled) {
-            static const char* names[] = {"EASY", "NORMAL", "HARD", "ONI", "URA"};
             const int songs = g_song_browser_level == TAIKO_OVERLAY_BROWSER_SONGS &&
                               !g_song_selection_is_exit;
             for (unsigned slot = 0; slot < 2; ++slot) {
@@ -608,17 +802,11 @@ static void render_host(void)
                 fill_rounded_rect(28, top, 537, top + 57, 9,
                     joined ? colour : RGB_COLOUR(0x29, 0x39, 0x49));
                 char line[112];
-                const unsigned difficulty = g_browser_difficulties[slot];
                 snprintf(line, sizeof line, "P%u  %s", slot + 1,
-                    !joined ? "HIT DRUM TO JOIN" : songs && difficulty < 5 ? names[difficulty] : "JOINED");
+                    !joined ? "HIT DRUM TO JOIN" : "JOINED");
                 draw_text_left_fit(line, 22, 345, 43, top + 27);
-                if (joined && songs)
+                if (joined && songs && expanded)
                     draw_text_right((g_browser_ready & (1u << slot)) ? "READY" : "CHOOSE", 17, 523, top + 28);
-            }
-            if (songs) {
-                draw_text_left_fit("LEFT CENTRE  YOUR DIFFICULTY", 18, 500, 34, 415);
-                draw_text_left_fit("RIGHT CENTRE  READY / PLAY", 18, 500, 34, 451);
-                draw_text_left_fit("BOTH DRUMS CAN BROWSE WITH RIMS", 17, 500, 34, 487);
             }
         }
 
@@ -626,8 +814,31 @@ static void render_host(void)
         const int row_step = 59;
         for (unsigned row = 0; row < g_song_row_count; ++row) {
             const song_row_storage* item = &g_song_rows[row];
-            const int top = first_y + (int)row * row_step;
-            const int left = item->selected ? 594 : 628;
+            const int target_y = first_y + (int)row * row_step;
+            const float top = item->from_y + (target_y - item->from_y) * ease;
+            const int target_x = row_target_x(item->kind, item->selected);
+            const float left = item->from_x + (target_x - item->from_x) * ease;
+            if (top < 100 || top > 607) continue;
+            if (item->kind == TAIKO_OVERLAY_ROW_DIFFICULTY) {
+                fill_rounded_rect(left, top, 1252, top + 53, 10,
+                    item->selected ? RGB_COLOUR(0x3C, 0x52, 0x69) : RGB_COLOUR(0x22, 0x30, 0x42));
+                draw_text_left_fit(item->title, 22, 165, left + 18, top + 27);
+                char rating[24];
+                if (item->stars) snprintf(rating, sizeof rating, "★ %u", item->stars);
+                else snprintf(rating, sizeof rating, "★ --");
+                draw_text_right(rating, 20, 1032, top + 27);
+                for (unsigned p = 0; p < 2; ++p) {
+                    if (!(item->cursors & (1u << p))) continue;
+                    const int x = 1052 + p * 94;
+                    fill_rounded_rect(x, top + 8, x + 88, top + 45, 8,
+                        p ? RGB_COLOUR(0x32, 0xA8, 0xDA) : RGB_COLOUR(0xE5, 0x59, 0x73));
+                    char badge[20];
+                    snprintf(badge, sizeof badge, "P%u%s", p + 1,
+                             item->ready & (1u << p) ? " OK" : " <");
+                    draw_text_at(badge, 17, x + 44, top + 27);
+                }
+                continue;
+            }
             const uint32_t colour = item->kind == TAIKO_OVERLAY_ROW_EXIT
                 ? (item->selected ? RGB_COLOUR(0xD8, 0x58, 0x70)
                                   : RGB_COLOUR(0x4B, 0x2A, 0x38))
@@ -664,14 +875,16 @@ static void render_host(void)
     }
 
     fill_rect(0, 660, g_width, g_height, RGB_COLOUR(0x0B, 0x11, 0x1B));
-    draw_text_left_fit("RIM / WHEEL  BROWSE", 18, 290, 30, 690);
+    draw_text_left_fit(expanded ? "RIM / WHEEL  CHOOSE CHART" : "RIM / WHEEL  BROWSE",
+                       18, 290, 30, 690);
     draw_text_at(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
                      ? "ENTER  OPEN FOLDER"
-                     : "UP/DOWN  BROWSE     PAGEUP/DOWN  SKIP",
+                     : expanded ? "P1 RED / P2 BLUE   CHOOSE YOUR CHART"
+                                : "UP/DOWN  BROWSE     PAGEUP/DOWN  SKIP",
                  16, 655, 690);
     draw_text_right(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
                         ? "9 ORIGINAL CATEGORIES"
-                        : "ESC  BACK / CLEAR FILTER",
+                        : expanded ? "ESC  CLOSE SONG" : "ESC  BACK / CLEAR FILTER",
                     17, 1245, 690);
 }
 
@@ -803,6 +1016,7 @@ void taiko_overlay_show_song_select(const char* player_name)
     g_song_search_active = 0;
     g_song_browser_level = TAIKO_OVERLAY_BROWSER_CATEGORIES;
     g_song_selection_is_exit = 0;
+    g_song_animating = 0;
     g_mode = 5;
     g_visible = 1;
     g_deadline = 0;
@@ -865,6 +1079,11 @@ void taiko_overlay_show_song_browser(const char* player_name,
     g_song_search_active = search_active != 0;
     g_song_browser_level = browser_level;
     g_song_selection_is_exit = selection_is_exit != 0;
+    song_row_storage previous[TAIKO_OVERLAY_SONG_ROW_COUNT];
+    memcpy(previous, g_song_rows, sizeof previous);
+    const unsigned previous_count = g_song_row_count;
+    const float old_ease = song_ease();
+    int changed = previous_count != row_count;
     g_song_row_count = row_count < TAIKO_OVERLAY_SONG_ROW_COUNT
         ? row_count : TAIKO_OVERLAY_SONG_ROW_COUNT;
     for (unsigned row = 0; row < g_song_row_count; ++row) {
@@ -876,6 +1095,38 @@ void taiko_overlay_show_song_browser(const char* player_name,
         g_song_rows[row].selected = rows && rows[row].selected;
         g_song_rows[row].kind = rows ? rows[row].kind
                                     : TAIKO_OVERLAY_ROW_SONG;
+        song_row_storage* item = &g_song_rows[row];
+        item->difficulty = rows ? rows[row].difficulty : 0;
+        item->stars = rows ? rows[row].stars : 0;
+        item->cursors = rows ? rows[row].cursors : 0;
+        item->ready = rows ? rows[row].ready : 0;
+        item->from_y = 111 + row * 59;
+        item->from_x = row_target_x(item->kind, item->selected) + 36;
+        int found = -1;
+        for (unsigned old = 0; old < previous_count; ++old) {
+            const song_row_storage* prior = &previous[old];
+            if (prior->kind == item->kind && prior->catalog_index == item->catalog_index &&
+                prior->difficulty == item->difficulty && !strcmp(prior->title, item->title)) {
+                found = (int)old;
+                item->from_y = prior->from_y + (111 + old * 59 - prior->from_y) * old_ease;
+                item->from_x = prior->from_x + (row_target_x(prior->kind, prior->selected) - prior->from_x) * old_ease;
+                changed |= old != row || prior->selected != item->selected ||
+                           prior->cursors != item->cursors || prior->ready != item->ready;
+                break;
+            }
+        }
+        changed |= found < 0;
+    }
+    if (changed) {
+        g_song_animation_start = monotonic_milliseconds();
+        g_song_animating = 1;
+        g_gpu_animation_pending = 1;
+    } else {
+        /* Repeated publications (including held input) must not restart easing. */
+        for (unsigned row = 0; row < g_song_row_count; ++row) {
+            g_song_rows[row].from_y = previous[row].from_y;
+            g_song_rows[row].from_x = previous[row].from_x;
+        }
     }
     g_mode = 5;
     g_visible = 1;
@@ -946,7 +1197,13 @@ int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (remaining != g_drawn_remaining) render(remaining);
+    const double now = monotonic_milliseconds();
+    if (remaining != g_drawn_remaining ||
+        (g_mode == 5 && g_song_animating && now - g_song_last_render >= 16.0)) {
+        render(remaining);
+        g_song_last_render = now;
+        if (song_ease() >= 1.0f) g_song_animating = 0;
+    }
 
     info->mode = g_mode >= 3 ? HOST_FRAME_FULLSCREEN : HOST_FRAME_OVERLAY;
     info->width = (uint32_t)g_width;
@@ -960,6 +1217,32 @@ int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
             return 0;
         }
         memcpy(destination, g_pixels, required);
+    }
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
+
+static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* info)
+{
+    if (!info) return 0;
+    pthread_mutex_lock(&g_lock);
+    if (!g_visible || g_mode < 3 || !font_ready()) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (g_mode == 4 && g_code[0] && monotonic_seconds() >= g_deadline) {
+        g_code[0] = '\0'; ++g_version; g_drawn_remaining = -1;
+    }
+    info->version = g_version;
+    info->animated = g_mode == 5 && g_gpu_animation_pending;
+    if (g_mode == 4 && g_code[0]) info->animated = 1;
+    if (emit) {
+        g_ui_scale = isfinite(scale) && scale > 0 ? scale : 1.0f;
+        g_ui_emit = emit; g_ui_user = user;
+        render_host();
+        if (song_ease() >= 1.0f) g_gpu_animation_pending = 0;
+        g_ui_emit = NULL; g_ui_user = NULL;
+        g_ui_scale = 1.0f;
     }
     pthread_mutex_unlock(&g_lock);
     return 1;

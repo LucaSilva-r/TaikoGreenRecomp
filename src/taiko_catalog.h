@@ -1,6 +1,7 @@
 #ifndef TAIKO_CATALOG_H
 #define TAIKO_CATALOG_H
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -14,6 +15,7 @@ struct TaikoCatalogSong {
     std::string genre;
     uint32_t unique_id = 0;
     uint8_t difficulty_mask = 0;
+    std::array<uint8_t, 5> stars{}; /* Authored Green ratings; zero means unknown. */
 };
 
 /* Difficulty order matches Green's chart suffixes e/n/h/m/x. */
