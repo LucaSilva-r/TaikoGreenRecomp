@@ -1,6 +1,7 @@
 #include "taiko_plus_runtime.h"
 #include "taiko_entry_callback.h"
 
+#undef NDEBUG
 #include <cassert>
 #include <atomic>
 #include <thread>
@@ -17,10 +18,14 @@ static MatchConfig match()
     result.players[0].slot = PlayerSlot::P1;
     result.players[0].role = PlayerRole::Local;
     result.players[1].slot = PlayerSlot::P2;
-    result.players[1].role = PlayerRole::SyntheticRemote;
+    result.players[1].role = PlayerRole::Local;
     result.players[1].anonymous = false;
     result.players[1].profile = GuestPlayerProfile{
         kContractVersion, "remote-id", "REMOTE", 0, 0, 0};
+    for (auto& player : result.players) {
+        player.enabled = true;
+        player.chart_hash = result.content.chart_hash;
+    }
     return result;
 }
 
@@ -35,6 +40,20 @@ int main()
     assert(!taiko_entry::is_plus_marker(2, 3, 99));
     assert(!taiko_entry::is_plus_marker(3, 3, 99));
     assert(!taiko_entry::is_plus_marker(4, 3, 1));
+    Runtime invalid_runtime;
+    invalid_runtime.activate();
+    auto empty_players = match();
+    empty_players.players[0].enabled = false;
+    empty_players.players[1].enabled = false;
+    assert(!invalid_runtime.enqueue_launch(empty_players));
+    auto missing_chart = match();
+    missing_chart.players[1].chart_hash = {};
+    assert(!invalid_runtime.enqueue_launch(missing_chart));
+    auto p2_only = match();
+    p2_only.players[0].enabled = false;
+    p2_only.players[0].chart_hash = {};
+    assert(invalid_runtime.enqueue_launch(p2_only));
+
     Runtime runtime;
     const uint64_t activation = runtime.activate();
     assert(activation != 0);
@@ -49,7 +68,7 @@ int main()
     assert(runtime.try_pop_command(command));
     assert(command.kind == CommandKind::ConfigureAndLaunch);
     assert(command.match.generation == generation);
-    assert(command.match.players[1].role == PlayerRole::SyntheticRemote);
+    assert(command.match.players[1].role == PlayerRole::Local);
     assert(!runtime.try_pop_command(command));
 
     assert(runtime.transition(generation, State::PreparingMatch,

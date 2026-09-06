@@ -1,7 +1,9 @@
 #include "taiko_host_audio.h"
 #include "cellAudio.h"
 
+#include <algorithm>
 #include <array>
+#include <vector>
 #include <cmath>
 #include <cstdlib>
 
@@ -17,6 +19,7 @@ extern "C" void cellAudioSetExternalMixer(CellAudioExternalMixer mixer)
 int main()
 {
     taiko_host_audio_install();
+    taiko_host_audio_set_group_gain(11, 1.0f);
     CHECK(captured_mixer);
 
     taiko_host_audio_set_scene_active(true);
@@ -71,5 +74,26 @@ int main()
         captured_mixer(block.data(), CELL_AUDIO_BLOCK_SAMPLES);
     }
     CHECK(std::abs(block.back() + 0.25f) < 0.0001f);
+    taiko_host_audio_set_group_gain(11, 0.2f);
+    for (unsigned i = 0; i < 20; ++i) {
+        block.fill(0.0f);
+        captured_mixer(block.data(), CELL_AUDIO_BLOCK_SAMPLES);
+    }
+    CHECK(std::abs(block.back() + 0.05f) < 0.0001f);
+    taiko_host_audio_set_group_gain(11, 0.0f);
+    for (unsigned i = 0; i < 20; ++i) {
+        block.fill(0.0f);
+        captured_mixer(block.data(), CELL_AUDIO_BLOCK_SAMPLES);
+    }
+    CHECK(block.back() == 0.0f);
+    std::vector<float> cued(24000, 0.5f);
+    std::fill(cued.begin()+12000, cued.end(), -0.5f);
+    taiko_host_audio_set_group_gain(11, 0.5f);
+    taiko_host_audio_test_publish_pcm(cued.data(),12000,false,22,6000,0.5f);
+    for (unsigned i = 0; i < 20; ++i) {
+        block.fill(0.0f);
+        captured_mixer(block.data(), CELL_AUDIO_BLOCK_SAMPLES);
+    }
+    CHECK(std::abs(block.back()+0.125f)<0.0001f); // Cue and both gain factors.
     return 0;
 }

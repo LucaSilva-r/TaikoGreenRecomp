@@ -66,6 +66,9 @@ static char     g_song_category[64];
 static unsigned g_song_category_index;
 static unsigned g_song_category_total;
 static uint8_t  g_song_difficulty_mask;
+static int g_browser_players_enabled;
+static uint8_t g_browser_joined, g_browser_ready;
+static uint8_t g_browser_difficulties[2];
 static int      g_song_search_active;
 static int      g_song_browser_level;
 static int      g_song_selection_is_exit;
@@ -565,30 +568,58 @@ static void render_host(void)
                      g_song_index + 1, g_song_match_total);
             draw_text_left_fit(position, 19, 450, 57, 345);
 
-            draw_text_left_fit("DIFFICULTY", 21, 460, 34, 420);
-            static const char* difficulty_names[] = {
-                "EASY", "NORMAL", "HARD", "ONI", "URA"
-            };
-            for (unsigned difficulty = 0; difficulty < 5; ++difficulty) {
-                const int left = 28 + (int)difficulty * 102;
-                const int available =
-                    (g_song_difficulty_mask & (1u << difficulty)) != 0;
-                const int selected = strcmp(
-                    g_song_difficulty, difficulty_names[difficulty]) == 0;
-                const uint32_t colour = !available
-                    ? RGB_COLOUR(0x20, 0x2A, 0x36)
-                    : selected ? RGB_COLOUR(0xE6, 0x5B, 0x91)
-                               : RGB_COLOUR(0x34, 0x4A, 0x60);
-                fill_rounded_rect(left, 446, left + 92, 493, 9, colour);
-                draw_text_at(difficulty_names[difficulty], 16,
-                             left + 46, 469);
-            }
+            if (!g_browser_players_enabled) {
+                draw_text_left_fit("DIFFICULTY", 21, 460, 34, 420);
+                static const char* difficulty_names[] = {
+                    "EASY", "NORMAL", "HARD", "ONI", "URA"
+                };
+                for (unsigned difficulty = 0; difficulty < 5; ++difficulty) {
+                    const int left = 28 + (int)difficulty * 102;
+                    const int available =
+                        (g_song_difficulty_mask & (1u << difficulty)) != 0;
+                    const int selected = strcmp(
+                        g_song_difficulty, difficulty_names[difficulty]) == 0;
+                    const uint32_t colour = !available
+                        ? RGB_COLOUR(0x20, 0x2A, 0x36)
+                        : selected ? RGB_COLOUR(0xE6, 0x5B, 0x91)
+                                   : RGB_COLOUR(0x34, 0x4A, 0x60);
+                    fill_rounded_rect(left, 446, left + 92, 493, 9, colour);
+                    draw_text_at(difficulty_names[difficulty], 16,
+                                 left + 46, 469);
+                }
 
-            draw_text_left_fit("LEFT / RIGHT  CHANGE DIFFICULTY", 17, 490,
-                               34, 530);
-            draw_text_left_fit("ENTER OR RIGHT CENTRE  PLAY", 19, 490,
-                               34, 565);
-            draw_text_left_fit("R  RANDOM SONG", 17, 490, 34, 600);
+                draw_text_left_fit("LEFT / RIGHT  CHANGE DIFFICULTY", 17, 490,
+                                   34, 530);
+                draw_text_left_fit("ENTER OR RIGHT CENTRE  PLAY", 19, 490,
+                                   34, 565);
+                draw_text_left_fit("R  RANDOM SONG", 17, 490, 34, 600);
+            }
+        }
+
+        if (g_browser_players_enabled) {
+            static const char* names[] = {"EASY", "NORMAL", "HARD", "ONI", "URA"};
+            const int songs = g_song_browser_level == TAIKO_OVERLAY_BROWSER_SONGS &&
+                              !g_song_selection_is_exit;
+            for (unsigned slot = 0; slot < 2; ++slot) {
+                const int top = 520 + (int)slot * 64;
+                const int joined = (g_browser_joined & (1u << slot)) != 0;
+                const uint32_t colour = slot ? RGB_COLOUR(0x32, 0x80, 0xAC)
+                                             : RGB_COLOUR(0xB6, 0x46, 0x55);
+                fill_rounded_rect(28, top, 537, top + 57, 9,
+                    joined ? colour : RGB_COLOUR(0x29, 0x39, 0x49));
+                char line[112];
+                const unsigned difficulty = g_browser_difficulties[slot];
+                snprintf(line, sizeof line, "P%u  %s", slot + 1,
+                    !joined ? "HIT DRUM TO JOIN" : songs && difficulty < 5 ? names[difficulty] : "JOINED");
+                draw_text_left_fit(line, 22, 345, 43, top + 27);
+                if (joined && songs)
+                    draw_text_right((g_browser_ready & (1u << slot)) ? "READY" : "CHOOSE", 17, 523, top + 28);
+            }
+            if (songs) {
+                draw_text_left_fit("LEFT CENTRE  YOUR DIFFICULTY", 18, 500, 34, 415);
+                draw_text_left_fit("RIGHT CENTRE  READY / PLAY", 18, 500, 34, 451);
+                draw_text_left_fit("BOTH DRUMS CAN BROWSE WITH RIMS", 17, 500, 34, 487);
+            }
         }
 
         const int first_y = 111;
@@ -779,6 +810,18 @@ void taiko_overlay_show_song_select(const char* player_name)
     ++g_version;
     pthread_mutex_unlock(&g_lock);
     wake_renderer();
+}
+
+void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,
+                                      const uint8_t difficulties[2])
+{
+    pthread_mutex_lock(&g_lock);
+    g_browser_players_enabled = enabled;
+    g_browser_joined = joined;
+    g_browser_ready = ready;
+    for (unsigned i = 0; i < 2; ++i)
+        g_browser_difficulties[i] = difficulties ? difficulties[i] : 0;
+    pthread_mutex_unlock(&g_lock);
 }
 
 void taiko_overlay_show_song_browser(const char* player_name,

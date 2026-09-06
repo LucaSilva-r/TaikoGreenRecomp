@@ -584,6 +584,41 @@ bool taiko_audio_decode_riff(const std::vector<uint8_t>& riff,
 #endif
 }
 
+bool taiko_audio_apply_nsh(const std::vector<uint8_t>& nsh,
+                            TaikoDecodedAudio& decoded)
+{
+    decoded.preview_start = 0;
+    decoded.song_gain = 1.0f;
+    decoded.volume_group = 11;
+    const auto be32 = [&nsh](size_t at) {
+        return (uint32_t(nsh[at]) << 24) | (uint32_t(nsh[at + 1]) << 16) |
+               (uint32_t(nsh[at + 2]) << 8) | nsh[at + 3];
+    };
+    if (nsh.size() < 0x24 || be32(0) != 0x00020100 || be32(0xc) != 1)
+        return false;
+    const size_t table = be32(0x18);
+    if (table > nsh.size() - 4) return false;
+    const size_t entry = be32(table);
+    if (entry > nsh.size() || nsh.size() - entry < 0xb4 ||
+        be32(entry) != 0x61743300 || be32(entry + 0x90) != 20)
+        return false;
+    // CnuSound2 (003FE8E0): entry+34 is dB, entry+60 is the group.
+    const uint32_t bits = be32(entry + 0x34);
+    float db;
+    std::memcpy(&db, &bits, sizeof db);
+    const uint32_t group = be32(entry + 0x60);
+    if (!std::isfinite(db) || db < -100.0f || db > 24.0f || group >= 68)
+        return false;
+    decoded.song_gain = db <= -100.0f ? 0.0f : std::pow(10.0f, db / 20.0f);
+    decoded.volume_group = group;
+    // Green's 20-byte user data ends with the preview cue in milliseconds.
+    const uint64_t cue = uint64_t(be32(entry + 0xb0)) * decoded.sample_rate / 1000;
+    const size_t frames = decoded.pcm ? decoded.pcm->size() / 2 : 0;
+    if (cue < frames && (!decoded.has_loop || cue < decoded.loop_end))
+        decoded.preview_start = static_cast<size_t>(cue);
+    return true;
+}
+
 bool taiko_audio_decode_song(std::string_view music_id,
                              uint32_t output_rate,
                              const std::atomic<bool>* stop,
@@ -629,5 +664,12 @@ bool taiko_audio_decode_song(std::string_view music_id,
         failure = cancelled(stop) ? "cancelled" : "could not read song RIFF";
         return false;
     }
-    return taiko_audio_decode_riff(riff, output_rate, stop, decoded, failure);
+    if (!taiko_audio_decode_riff(riff, output_rate, stop, decoded, failure))
+        return false;
+    std::vector<uint8_t> nsh;
+    const auto nsh_path = path.parent_path().parent_path() / "nsh" /
+                          ("SONG_" + bank_id + ".nsh");
+    read_nub_header(nsh_path.string(), nsh);
+    taiko_audio_apply_nsh(nsh, decoded);
+    return true;
 }

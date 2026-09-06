@@ -42,9 +42,9 @@ reported once and returns the authoritative runtime to a usable browser state.
   The callback allocates nothing, takes no lock, performs no file access or
   logging, and returns retired PCM to the worker for destruction.
 - Authored RIFF `smpl` loops are retained and scaled to 48 kHz. A file without
-  loop metadata stops at end of stream. The NSH cue field and `SE_SELECT` bank
-  entry IDs are not yet trace-proven, so previews currently use the locked
-  sample-zero fallback and UI SFX requests intentionally degrade to silence.
+  loop metadata stops at end of stream. Standalone previews now read the NSH
+  cue, song gain, and group, with sample zero as the invalid-cue fallback.
+  `SE_SELECT` entry IDs remain unverified, so UI SFX requests are silent.
 - `TAIKO_PLUS_STANDALONE=1` enables the standalone path. Unset or `0`
   retains the GameSongSelect-backed diagnostic path. Native frame processing,
   including deferred scene destruction, continues in both modes.
@@ -267,3 +267,55 @@ checks in Release builds and covers missing IDs, one-shot transition
 acceptance, the 120-frame wait, native player pointers, duplicate Results
 callbacks, and a second launch. A real `saoali` decode with a lowercase ID
 also passes after the preview path fix.
+
+## Local drum participation (work after checkpoint 7066db1)
+
+The hardcoded synthetic P2 fixture is replaced by local browser participation.
+The first hit on a drum joins that physical slot: DFJK is P1 and ZXCV is P2.
+Either slot can browse the shared library. Each joined player has an independent
+course and confirmation; changing songs clears both confirmations. Left centre
+cycles that player's course, right centre confirms, and all joined players
+must confirm before launch. Joining another player clears existing confirmations.
+The two coloured player panels show inactive, choosing, and ready states.
+Joined slots persist across Results, while confirmations reset.
+
+Match contract version 2 carries enabled slots and each player's difficulty
+and chart hash. The native participation mask is 1 for P1, 2 for P2-only, or 3
+for both. Only participating missing player records are default-constructed;
+existing native data remains intact, including P2-only entry sessions. Player
+pointers are reacquired after flat-map insertions, and the native course PODs
+contain independent choices. Remote players are not auto-created.
+
+The native-call regression checks all three masks and different courses, and
+the browser-state checks cover P2 joining first, second-player joining, ready
+invalidation, and available-course normalization. All 15 CTest targets pass.
+Live preview and local-player validation uses `taiko-plus-local-players-05.log`.
+The previous process still ran the executable predating the preview filename
+fix; this run includes the already committed uppercase bank lookup.
+
+
+### Standalone preview cue and volume (September 6)
+
+The audible host preview initially began at PCM frame zero and mixed at unity,
+bypassing NSH metadata and native service-menu attenuation. The standalone song
+loader now reads the matching uppercase NSH, validates its version, single-entry
+table, AT3 record, and 20-byte user-data layout, and applies the cue in
+milliseconds at the requested output rate. Invalid/out-of-range cues fall back
+to zero. Metadata stays on each decoded result/voice; shared full-song PCM is
+unchanged, so gameplay still opens the cache at its own cursor.
+
+Native `003FE8E0` supplies the song dB adjustment from entry+0x34 and volume
+group from entry+0x60 (`003FDE18` sets stream+0x198). The host voice uses those
+fields. The retained setup task snapshots the native group hierarchy using
+`003EEF00`'s group gains (+4, +0x28, +0x30), `003EFA0C`'s inherited mute, and
+`003FDCC4`'s normalization reference (core+0x1c1c). Only atomic gain values cross
+to the audio callback; guest memory is read on the PPU thread. Gain changes
+ramp over 100 ms, including mute. Cyclic/invalid group ancestry fails silent.
+
+Validation: all 15 CTest targets pass; focused tests additionally verify the
+actual voice begins at the cue, song and service gains multiply, service mute,
+invalid metadata, shared PCM isolation, and cyclic group ancestry. Real
+`mikugv` decoding selects 2,176,512 frames at 48 kHz (45.344 seconds), gain
+0.794328 (-2 dB), group 11. The user confirmed smooth preview playback and
+approved the result in the live test using
+`build-linux/taiko-plus-preview-volume-06.log`.

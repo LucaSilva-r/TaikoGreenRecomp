@@ -8,7 +8,7 @@
 
 namespace taiko_plus {
 
-inline constexpr uint32_t kContractVersion = 1;
+inline constexpr uint32_t kContractVersion = 2;
 inline constexpr std::size_t kCommandCapacity = 8;
 inline constexpr std::size_t kEventCapacity = 16;
 
@@ -56,6 +56,9 @@ struct GuestPlayerProfile {
 };
 
 struct PlayerSpec {
+    bool enabled = false;
+    uint8_t difficulty = 0;
+    Sha256 chart_hash;
     PlayerSlot slot = PlayerSlot::P1;
     PlayerRole role = PlayerRole::Local;
     bool anonymous = true;

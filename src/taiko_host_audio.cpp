@@ -25,6 +25,7 @@ namespace {
 std::atomic<bool> g_installed{false};
 std::atomic<float> g_guest_target{1.0f};
 std::atomic<float> g_host_target{0.0f};
+std::atomic<float> g_group_gain[68]{};
 std::atomic<uint64_t> g_preview_generation{0};
 std::mutex g_control_lock;
 std::string g_preview_music_id;
@@ -35,12 +36,29 @@ constexpr uint32_t kRampFrames = 4800; /* 100 ms at cellAudio's 48 kHz. */
 struct PreviewVoice {
     std::shared_ptr<std::vector<float>> pcm;
     size_t cursor = 0;
+    float song_gain = 1.0f;
+    float volume_gain = 0.0f;
+    uint32_t volume_group = 11;
     size_t loop_start = 0;
     size_t loop_end = 0;
     bool has_loop = false;
     uint64_t generation = 0;
     PreviewVoice* retired_next = nullptr;
 };
+
+PreviewVoice* make_voice(TaikoDecodedAudio decoded, uint64_t generation)
+{
+    auto* voice = new PreviewVoice;
+    voice->pcm = std::move(decoded.pcm);
+    voice->cursor = decoded.preview_start;
+    voice->song_gain = decoded.song_gain;
+    voice->volume_group = decoded.volume_group;
+    voice->loop_start = decoded.loop_start;
+    voice->loop_end = decoded.loop_end;
+    voice->has_loop = decoded.has_loop;
+    voice->generation = generation;
+    return voice;
+}
 
 std::atomic<PreviewVoice*> g_pending_voice{nullptr};
 std::atomic<PreviewVoice*> g_retired_voices{nullptr};
@@ -133,12 +151,11 @@ private:
                 !request.cancelled->load(std::memory_order_relaxed) &&
                 request.generation ==
                     g_preview_generation.load(std::memory_order_acquire)) {
-                voice = new PreviewVoice;
-                voice->pcm = std::move(decoded.pcm);
-                voice->loop_start = decoded.loop_start;
-                voice->loop_end = decoded.loop_end;
-                voice->has_loop = decoded.has_loop;
-                voice->generation = request.generation;
+                std::fprintf(stderr,
+                    "[taiko_host_audio] preview %s cue=%.3fs song_gain=%.4f group=%u cache=%u\n",
+                    request.music_id.c_str(), double(decoded.preview_start) / kOutputRate,
+                    decoded.song_gain, decoded.volume_group, unsigned(decoded.cache_hit));
+                voice = make_voice(std::move(decoded), request.generation);
                 publish_voice(voice);
             } else if (!failure.empty() && failure != "cancelled" &&
                        request.generation ==
@@ -223,6 +240,9 @@ void external_mix(float* stereo, u32 frames)
                     return;
                 }
             }
+            ramp(voice->volume_gain, std::min(1.0f, voice->song_gain *
+                g_group_gain[voice->volume_group].load(std::memory_order_relaxed)));
+            gain *= voice->volume_gain;
             left += (*voice->pcm)[voice->cursor * 2u] * gain;
             right += (*voice->pcm)[voice->cursor * 2u + 1u] * gain;
             ++voice->cursor;
@@ -259,6 +279,13 @@ void external_mix(float* stereo, u32 frames)
 }
 
 } // namespace
+
+void taiko_host_audio_set_group_gain(uint32_t group, float gain)
+{
+    if (group < 68)
+        g_group_gain[group].store(std::isfinite(gain) && gain >= 0.0f ? gain : 0.0f,
+                                 std::memory_order_relaxed);
+}
 
 void taiko_host_audio_install()
 {
@@ -321,15 +348,17 @@ void taiko_host_audio_reacquire_menu()
 
 #ifdef TAIKO_HOST_AUDIO_TESTING
 void taiko_host_audio_test_publish_pcm(const float* stereo, size_t frames,
-                                       bool loop, uint64_t generation)
+                                       bool loop, uint64_t generation,
+                                       size_t preview_start, float song_gain)
 {
-    auto* voice = new PreviewVoice;
-    voice->pcm = std::make_shared<std::vector<float>>(
+    TaikoDecodedAudio decoded;
+    decoded.pcm = std::make_shared<std::vector<float>>(
         stereo, stereo + frames * 2u);
-    voice->loop_start = 0;
-    voice->loop_end = frames;
-    voice->has_loop = loop && frames != 0;
-    voice->generation = generation;
+    decoded.preview_start = preview_start;
+    decoded.song_gain = song_gain;
+    decoded.loop_end = frames;
+    decoded.has_loop = loop && frames != 0;
+    auto* voice = make_voice(std::move(decoded), generation);
     uint64_t current = g_preview_generation.load(std::memory_order_relaxed);
     while (generation > current &&
            !g_preview_generation.compare_exchange_weak(

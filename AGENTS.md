@@ -1053,12 +1053,15 @@ over the saved file. Example:
 TAIKO_AUDIO_OFFSET_MS=60 ./run-taiko-linux.sh
 ```
 
-Preview cues need no title-specific NSH parser in the host. Green reads the
+On the native Song Select path, preview cues need no host NSH parser. Green reads the
 `.nsh` itself and passes its absolute PCM cue as `uiSample` to
 `cellAtracResetPlayPosition`; the shim must set the decode cursor to that sample,
 not zero. Live validation scrolled several uncached songs, played
 `SONG_MIKUGV` beyond its old corruption point, and confirmed that previews start
-at their intended cues.
+at their intended cues. The standalone Taiko+ browser bypasses that native
+loader, so `taiko_audio_decoder.cpp` now reads the NSH cue and song gain itself;
+`taiko_pc_mode.cpp` publishes native audio-group gain and mute settings to the
+host mixer from the PPU thread.
 
 Looping is carried by the standard RIFF `smpl` chunk, not by a separate host
 filename rule. The shim parses its start/end/play-count fields during SetData,

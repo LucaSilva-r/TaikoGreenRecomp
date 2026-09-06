@@ -19,6 +19,7 @@
 #include "taiko_host_input.h"
 #include "taiko_overlay.h"
 #include "taiko_plus_runtime.h"
+#include "taiko_browser_players.h"
 
 #include <algorithm>
 #include <array>
@@ -104,6 +105,9 @@ std::atomic<Phase> g_phase{Phase::WaitingForEntry};
 std::atomic<unsigned> g_selection{0};
 std::atomic<unsigned> g_song_selection{0};
 std::atomic<unsigned> g_song_difficulty{TAIKO_DIFFICULTY_ONI};
+std::recursive_mutex g_browser_action_lock;
+taiko_plus::BrowserPlayers g_browser_players;
+unsigned g_player_song_index = ~0u;
 std::atomic<bool> g_song_launch_requested{false};
 std::atomic<bool> g_song_search_active{false};
 std::mutex g_song_browser_lock;
@@ -334,6 +338,9 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
 
 void show_current_song()
 {
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    taiko_overlay_set_browser_players(taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active(),
+        g_browser_players.joined, g_browser_players.ready, g_browser_players.difficulty.data());
     const std::size_t count = taiko_catalog_count();
     if (!count) {
         publish_preview({});
@@ -355,6 +362,8 @@ void show_current_song()
             static_cast<unsigned>(kSongCategories.size());
     }
     if (category_browser) {
+        g_browser_players.ready = 0;
+        g_player_song_index = ~0u;
         publish_preview({});
         for (unsigned row = 0; row < kSongCategories.size(); ++row) {
             unsigned category_song_count = 0;
@@ -452,6 +461,8 @@ void show_current_song()
     }
 
     if (selection_is_exit) {
+        g_browser_players.ready = 0;
+        g_player_song_index = ~0u;
         publish_preview({});
         taiko_overlay_show_song_browser(
             g_session_label, "", "BACK TO CATEGORIES",
@@ -467,6 +478,12 @@ void show_current_song()
 
     const TaikoCatalogSong* song = taiko_catalog_song(selection);
     if (!song) return;
+    if (g_player_song_index != selection) {
+        g_browser_players.song_changed(song->difficulty_mask);
+        g_player_song_index = selection;
+    } else g_browser_players.normalize(song->difficulty_mask);
+    taiko_overlay_set_browser_players(taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active(),
+        g_browser_players.joined, g_browser_players.ready, g_browser_players.difficulty.data());
     publish_preview(song->music_id);
     unsigned difficulty = g_song_difficulty.load(std::memory_order_acquire);
     difficulty = normalize_difficulty(*song, difficulty);
@@ -486,6 +503,8 @@ void show_current_song()
 
 void enter_song_select_shell()
 {
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    g_browser_players.ready = 0;
     g_song_launch_requested.store(false, std::memory_order_release);
     (void)taiko_catalog_load();
     {
@@ -501,6 +520,7 @@ void enter_song_select_shell()
 
 extern "C" void taiko_frontend_enter_song_select_shell(void)
 {
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     g_phase.store(Phase::SongSelect, std::memory_order_release);
     enter_song_select_shell();
 }
@@ -587,7 +607,7 @@ void select_random_song()
     show_current_song();
 }
 
-void change_song_difficulty(int direction)
+void change_song_difficulty(int direction, unsigned player = 2)
 {
     unsigned selection = 0;
     {
@@ -600,15 +620,20 @@ void change_song_difficulty(int direction)
     }
     const TaikoCatalogSong* song = taiko_catalog_song(selection);
     if (!song) return;
-    const unsigned current =
-        g_song_difficulty.load(std::memory_order_relaxed);
-    g_song_difficulty.store(cycle_difficulty(*song, current, direction),
-                            std::memory_order_release);
+    if (taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active()) {
+        if (player > 1) player = g_browser_players.focus;
+        g_browser_players.change_difficulty(player, direction, song->difficulty_mask);
+        g_song_difficulty.store(g_browser_players.difficulty[player], std::memory_order_release);
+    } else {
+        const unsigned current = g_song_difficulty.load(std::memory_order_relaxed);
+        g_song_difficulty.store(cycle_difficulty(*song, current, direction),
+                                std::memory_order_release);
+    }
     taiko_host_audio_play_sfx(TaikoPlusSfx::Difficulty);
     show_current_song();
 }
 
-void request_song_launch()
+void request_song_launch(unsigned player = 2)
 {
     unsigned selection = 0;
     {
@@ -626,28 +651,31 @@ void request_song_launch()
         g_song_difficulty.load(std::memory_order_relaxed);
 
     if (taiko_pc_mode_is_active() && taiko_pc_mode_is_standalone()) {
-        taiko_plus::MatchConfig match;
-        std::string error;
-        if (!taiko_catalog_content_identity(selection, difficulty,
-                                            match.content, &error)) {
-            std::fprintf(stderr,
-                         "[taiko_frontend] standalone launch rejected: %s\n",
-                         error.c_str());
+        if (player > 1) player = g_browser_players.focus;
+        if (!g_browser_players.confirm(player)) {
             show_current_song();
             return;
         }
-        match.players[0].slot = taiko_plus::PlayerSlot::P1;
-        match.players[0].role = taiko_plus::PlayerRole::Local;
-        match.players[0].anonymous =
-            std::strcmp(g_session_label, "BANAPASSPORT PLAYER") != 0;
-        if (!match.players[0].anonymous) {
-            match.players[0].profile = taiko_plus::GuestPlayerProfile{
-                taiko_plus::kContractVersion, "existing-local-session",
-                g_session_label, 0, 0, 0};
+        taiko_plus::MatchConfig match;
+        std::string error;
+        bool first = true;
+        for (unsigned slot = 0; slot < 2; ++slot) {
+            auto& spec = match.players[slot];
+            spec.slot = static_cast<taiko_plus::PlayerSlot>(slot);
+            spec.role = taiko_plus::PlayerRole::Local;
+            spec.enabled = (g_browser_players.joined & (1u << slot)) != 0;
+            spec.difficulty = g_browser_players.difficulty[slot];
+            if (!spec.enabled) continue;
+            taiko_plus::ContentIdentity content;
+            if (!taiko_catalog_content_identity(selection, spec.difficulty, content, &error)) {
+                g_browser_players.ready = 0;
+                std::fprintf(stderr, "[taiko_frontend] P%u launch rejected: %s\n", slot+1, error.c_str());
+                show_current_song();
+                return;
+            }
+            spec.chart_hash = content.chart_hash;
+            if (first) { match.content = std::move(content); first = false; }
         }
-        match.players[1].slot = taiko_plus::PlayerSlot::P2;
-        match.players[1].role = taiko_plus::PlayerRole::SyntheticRemote;
-        match.players[1].anonymous = true;
         /* Publish the UI latch before the command becomes visible to the
          * PPU consumer. A synchronous failure may clear it immediately. */
         if (g_song_launch_requested.exchange(true, std::memory_order_acq_rel))
@@ -662,8 +690,9 @@ void request_song_launch()
         }
         taiko_host_audio_play_sfx(TaikoPlusSfx::Confirm);
         std::fprintf(stderr,
-                     "[taiko_frontend] standalone launch queued id=%s difficulty=%u\n",
-                     song->music_id.c_str(), difficulty);
+                     "[taiko_frontend] standalone launch queued id=%s mask=%u courses=%u/%u\n",
+                     song->music_id.c_str(), g_browser_players.joined,
+                     g_browser_players.difficulty[0], g_browser_players.difficulty[1]);
         show_current_song();
         return;
     }
@@ -677,7 +706,7 @@ void request_song_launch()
     show_current_song();
 }
 
-void activate_browser_selection()
+void activate_browser_selection(unsigned player = 2)
 {
     bool launch_song = false;
     bool leaving_song_list = false;
@@ -702,7 +731,7 @@ void activate_browser_selection()
         }
     }
     if (launch_song)
-        request_song_launch();
+        request_song_launch(player);
     else {
         taiko_host_audio_play_sfx(leaving_song_list
             ? TaikoPlusSfx::Cancel : TaikoPlusSfx::Confirm);
@@ -712,10 +741,14 @@ void activate_browser_selection()
 
 void handle_rising(unsigned player, uint32_t rising)
 {
-    if (player != 0 || !rising) return;
+    if (player > 1 || !rising) return;
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     const Phase phase = g_phase.load(std::memory_order_acquire);
     if (phase == Phase::SongSelect) {
         if (g_song_launch_requested.load(std::memory_order_acquire)) return;
+        if (taiko_pc_mode_is_active() && taiko_pc_mode_is_standalone())
+            g_browser_players.join(player);
+        else if (player != 0) return;
         const std::size_t count = taiko_catalog_count();
         if (!count) return;
         if (rising & TAIKO_ACTION_UP)
@@ -728,12 +761,13 @@ void handle_rising(unsigned player, uint32_t rising)
             move_song_selection(1);
 
         if (rising & TAIKO_ACTION_HIT_CL)
-            change_song_difficulty(-1);
+            change_song_difficulty(-1, player);
         else if (rising & (TAIKO_ACTION_HIT_CR | TAIKO_ACTION_ENTER))
-            activate_browser_selection();
+            activate_browser_selection(player);
+        show_current_song();
         return;
     }
-    if (phase != Phase::LoginMenu) return;
+    if (player != 0 || phase != Phase::LoginMenu) return;
 
     const uint32_t rims = TAIKO_ACTION_HIT_SL | TAIKO_ACTION_HIT_SR |
                           TAIKO_ACTION_UP | TAIKO_ACTION_DOWN;
@@ -984,6 +1018,7 @@ extern "C" uint32_t taiko_frontend_filter_levels(unsigned player,
 
 extern "C" int taiko_frontend_browser_command(unsigned command)
 {
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     if (g_phase.load(std::memory_order_acquire) != Phase::SongSelect ||
         g_song_launch_requested.load(std::memory_order_acquire))
         return 0;
@@ -1095,6 +1130,7 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
 
 extern "C" int taiko_frontend_browser_text(const char* text)
 {
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     if (!text || !text[0] ||
         g_phase.load(std::memory_order_acquire) != Phase::SongSelect ||
         !g_song_search_active.load(std::memory_order_acquire) ||
@@ -1387,6 +1423,8 @@ extern "C" int taiko_frontend_results_continue_tick(ppu_context* ctx)
 
 extern "C" void taiko_frontend_standalone_failure(const char* detail)
 {
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    g_browser_players.ready = 0;
     if (!taiko_pc_mode_is_active() || !taiko_pc_mode_is_standalone()) return;
     g_song_launch_requested.store(false, std::memory_order_release);
     show_current_song();
@@ -1400,4 +1438,11 @@ extern "C" void taiko_frontend_standalone_gameplay(void)
     g_phase.store(Phase::Passthrough, std::memory_order_release);
     taiko_host_audio_begin_gameplay_handoff();
     taiko_overlay_hide_host_screen();
+}
+
+extern "C" void taiko_frontend_standalone_session_begin(void)
+{
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    g_browser_players = {};
+    g_player_song_index = ~0u;
 }

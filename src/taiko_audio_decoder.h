@@ -17,6 +17,9 @@ struct TaikoDecodedAudio {
     bool has_loop = false;
     bool cache_hit = false;
     uint64_t asset_hash = 0;
+    size_t preview_start = 0;
+    float song_gain = 1.0f;
+    uint32_t volume_group = 11;
 };
 
 /* Resolve a RIFF prefix supplied through cellAtrac back to its complete NUB
@@ -44,6 +47,10 @@ bool taiko_audio_decode_song(std::string_view music_id,
                              const std::atomic<bool>* cancelled,
                              TaikoDecodedAudio& decoded,
                              std::string& failure);
+
+/* Green NSH bank metadata; invalid/absent headers retain safe defaults. */
+bool taiko_audio_apply_nsh(const std::vector<uint8_t>& nsh,
+                            TaikoDecodedAudio& decoded);
 
 uint64_t taiko_audio_hash_bytes(const std::vector<uint8_t>& bytes);
 

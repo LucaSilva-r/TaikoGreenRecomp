@@ -6,6 +6,8 @@
 #include "taiko_host_audio.h"
 
 #include <atomic>
+#include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 
@@ -70,6 +72,56 @@ uint32_t native(uint32_t code, uint32_t a = 0, uint32_t b = 0,
     return static_cast<uint32_t>(ppu_guest_call_ct(code, kToc, a, b, c, 0));
 }
 
+// Mirror NuSound's group ancestry (003EEF00/003EFA0C) and gain reference
+// (003FDCC4). This runs on the PPU thread; the host mixer only sees atomics.
+void publish_audio_volume()
+{
+    const auto pointer = [](uint32_t p) { return p >= 0x10000 && p < 0xc0000000u; };
+    const auto read_float = [](uint32_t p) {
+        const uint32_t bits = vm_read32(p);
+        float value;
+        std::memcpy(&value, &bits, sizeof value);
+        return value;
+    };
+    const uint32_t global = vm_read32(kToc + 0x448c);
+    const uint32_t table = vm_read32(kToc + 0x4508);
+    if (!pointer(global) || !pointer(table)) return;
+    const uint32_t core = vm_read32(global);
+    if (!pointer(core)) return;
+    const float reference = read_float(core + 0x1c1c);
+    const float floor = read_float(core + 0x1c20);
+    if (!std::isfinite(reference) || !std::isfinite(floor)) return;
+    for (uint32_t group = 0; group < 68; ++group) {
+        float db = 0.0f;
+        bool valid = false;
+        int32_t ancestor = group;
+        for (unsigned depth = 0; depth < 68; ++depth) {
+            if (ancestor < 0) { valid = true; break; }
+            if (ancestor >= 68) break;
+            const uint32_t entry = table + uint32_t(ancestor) * 0x40;
+            if (!vm_read8(entry + 0x14) || vm_read32(entry + 0x3c) == 1) break;
+            db += read_float(entry + 4) + read_float(entry + 0x30) +
+                  read_float(entry + 0x28);
+            const uint32_t parent = vm_read32(entry);
+            if (!pointer(parent)) break;
+            ancestor = static_cast<int32_t>(vm_read32(parent));
+        }
+        const float gain = valid && std::isfinite(db) && db > floor &&
+                           db - reference > floor
+            ? std::pow(10.0f, (db - reference) / 20.0f) : 0.0f;
+        taiko_host_audio_set_group_gain(group, gain);
+        if (group == 11) {
+            static float previous = -1.0f;
+            if (gain != previous) {
+                std::fprintf(stderr,
+                    "[taiko_host_audio] native music group gain=%.4f db=%.2f reference=%.2f\n",
+                    gain, db, reference);
+                previous = gain;
+            }
+        }
+    }
+}
+
 bool live_song(uint32_t manager, const std::string& id, uint32_t& index)
 {
     const uint32_t begin = vm_read32(manager + 0x434);
@@ -100,43 +152,48 @@ void prepare_match(const taiko_plus::MatchConfig& match)
                      "selected song is absent from the native session catalog");
         return;
     }
-    if (!match.players[1].anonymous) {
-        runtime.fail(match.generation, taiko_plus::GuestErrorCode::PlayerUnavailable,
-                     "remote profile import is not implemented; use a guest P2");
-        return;
-    }
-    // operator[] constructs default native user data and stats on insertion.
-    // Inserting P2 can move P1, so acquire both pointers after insertion.
     const uint32_t map = manager + 0x370;
     const uint32_t old_count = vm_read32(map + 4);
-    if (!vm_read32(map) || !old_count || old_count > 2 ||
-        vm_read32(vm_read32(map)) != 0) {
+    if (old_count > 2 || (old_count && !vm_read32(map))) {
         runtime.fail(match.generation, taiko_plus::GuestErrorCode::PlayerUnavailable,
-                     "native Player Entry did not populate P1");
+                     "native player map is invalid");
         return;
     }
-    vm_write32(kScratch, 1);
-    native(0x005c59bc, map, kScratch);
-    vm_write32(kScratch, 0);
-    const uint32_t p1 = native(0x005c59bc, map, kScratch);
-    vm_write32(kScratch, 1);
-    const uint32_t p2 = native(0x005c59bc, map, kScratch);
-    if (!p1 || !p2) {
-        runtime.fail(match.generation, taiko_plus::GuestErrorCode::PlayerUnavailable,
-                     "native player construction failed");
-        return;
+    uint8_t mask = 0;
+    uint8_t inserted = 0;
+    std::array<uint32_t, 2> players{};
+    // Only participating slots are constructed. Insertions can relocate the
+    // whole flat map, so reacquire all pointers after the final insertion.
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        if (!match.players[slot].enabled) continue;
+        mask |= 1u << slot;
+        const uint32_t before = vm_read32(map + 4);
+        vm_write32(kScratch, slot);
+        native(0x005c59bc, map, kScratch);
+        if (vm_read32(map + 4) != before) inserted |= 1u << slot;
     }
-    if (vm_read32(map + 4) != old_count)
-        ppu_guest_call_ct(0x00717aec, 0x01027c58, manager + 0x430, p2, 0, 0);
-    vm_write32(manager + 0x400, 3); // Native participation mask: P1 and P2.
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        if (!(mask & (1u << slot))) continue;
+        vm_write32(kScratch, slot);
+        players[slot] = native(0x005c59bc, map, kScratch);
+        if (!players[slot]) {
+            runtime.fail(match.generation, taiko_plus::GuestErrorCode::PlayerUnavailable,
+                         "native player construction failed");
+            return;
+        }
+        if (inserted & (1u << slot))
+            ppu_guest_call_ct(0x00717aec, 0x01027c58, manager + 0x430,
+                              players[slot], 0, 0);
+    }
+    vm_write32(manager + 0x400, mask); // 1=P1, 2=P2-only, 3=both.
     for (uint32_t offset = 0; offset < 0x90; offset += 4)
         vm_write32(kScratch + offset, 0);
     for (unsigned slot = 0; slot < 2; ++slot) {
         const uint32_t course = kScratch + 0x10 + slot * 0x30;
-        vm_write8(course, 1);
-        vm_write32(course + 4, match.content.difficulty);
-        vm_write32(course + 0x28, slot ? p2 : p1);
-        vm_write32(course + 0x2c, (slot ? p2 : p1) + 0x4d0);
+        vm_write8(course, match.players[slot].enabled);
+        vm_write32(course + 4, match.players[slot].difficulty);
+        vm_write32(course + 0x28, players[slot]);
+        vm_write32(course + 0x2c, players[slot] ? players[slot] + 0x4d0 : 0);
     }
     vm_write32(kScratch, index);
     vm_write32(kScratch + 4, kScratch + 0x10);
@@ -150,8 +207,9 @@ void prepare_match(const taiko_plus::MatchConfig& match)
         taiko_plus::State::PreparingMatch, taiko_plus::State::LaunchingGameplay,
         taiko_plus::EventKind::MatchAccepted);
     std::fprintf(stderr, "[taiko_plus] native selection committed id=%s index=%u "
-        "difficulty=%u players=%08X/%08X generation=%llu\n",
-        match.content.music_id.c_str(), index, match.content.difficulty, p1, p2,
+        "difficulty=%u/%u mask=%u players=%08X/%08X generation=%llu\n",
+        match.content.music_id.c_str(), index, match.players[0].difficulty,
+        match.players[1].difficulty, mask, players[0], players[1],
         static_cast<unsigned long long>(match.generation));
 }
 
@@ -264,6 +322,7 @@ void taiko_pc_mode_activate(uint32_t controller)
 {
     s_pc_mode_active.store(true, std::memory_order_release);
     taiko_plus::runtime().activate();
+    taiko_frontend_standalone_session_begin();
     if (taiko_pc_mode_is_standalone())
         taiko_host_audio_set_scene_active(true);
     std::fprintf(stderr,
@@ -454,6 +513,7 @@ void taiko_pc_mode_frame_dispatch(ppu_context* ctx)
 void taiko_pc_mode_tick(ppu_context* ctx)
 {
     if (!ctx || !taiko_pc_mode_is_active()) return;
+    publish_audio_volume();
     ++s_lifetime_probe_ticks;
     if (s_lifetime_probe_manager &&
         (s_lifetime_probe_ticks == 1u ||

@@ -126,6 +126,8 @@ int main()
         }
         CHECK(real_song.pcm && !real_song.pcm->empty());
         CHECK(real_song.sample_rate == 48000);
+        std::fprintf(stderr, "real song cue=%zu gain=%f group=%u\n",
+                     real_song.preview_start, real_song.song_gain, real_song.volume_group);
     }
 
     const auto nonce = std::chrono::steady_clock::now()
@@ -153,6 +155,28 @@ int main()
     CHECK(song.pcm == decoded.pcm);
     CHECK(taiko_audio_decode_song("test", 48000, nullptr, song, failure));
     CHECK(song.pcm == decoded.pcm);
+    // Metadata belongs to a voice, never to the shared full-song PCM cache.
+    std::vector<uint8_t> nsh(2048);
+    const auto be = [&nsh](size_t at, uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i) nsh[at + i] = value >> (24 - i * 8);
+    };
+    be(0, 0x00020100); be(0xc, 1); be(0x18, 0x20); be(0x20, 0x30);
+    be(0x30, 0x61743300); be(0xc0, 20); be(0x90, 11);
+    be(0x64, 0xc0c00000); // -6 dB
+    be(0xe0, 3); // 3 ms = 144 frames at 48 kHz
+    CHECK(taiko_audio_apply_nsh(nsh, song));
+    CHECK(song.preview_start == 144 && song.volume_group == 11);
+    CHECK(std::abs(song.song_gain - 0.501187f) < 0.00001f);
+    CHECK(song.pcm == decoded.pcm && decoded.preview_start == 0);
+    be(0xe0, 0xffffffff); // Cue outside the song cannot escape the PCM buffer.
+    CHECK(taiko_audio_apply_nsh(nsh, song) && song.preview_start == 0);
+    be(0x64, 0x7fc00000);
+    CHECK(!taiko_audio_apply_nsh(nsh, song));
+    CHECK(song.song_gain == 1.0f && song.preview_start == 0);
+    be(0x20, 0xfffffff0);
+    CHECK(!taiko_audio_apply_nsh(nsh, song));
+    nsh.resize(16);
+    CHECK(!taiko_audio_apply_nsh(nsh, song));
     std::error_code cleanup_error;
     std::filesystem::remove_all(root, cleanup_error);
     CHECK(!cleanup_error);

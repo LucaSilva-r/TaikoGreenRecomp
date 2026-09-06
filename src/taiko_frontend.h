@@ -72,6 +72,7 @@ int taiko_frontend_results_end_override(struct ppu_context* ctx);
 int taiko_frontend_results_continue_tick(struct ppu_context* ctx);
 
 /* Complete a standalone command without crossing host/guest ownership. */
+void taiko_frontend_standalone_session_begin(void);
 void taiko_frontend_standalone_gameplay(void);
 void taiko_frontend_standalone_failure(const char* detail);
 

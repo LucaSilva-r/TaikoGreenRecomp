@@ -49,6 +49,8 @@ typedef struct taiko_overlay_song_row {
     int kind;
 } taiko_overlay_song_row;
 
+void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,
+                                      const uint8_t difficulties[2]);
 void taiko_overlay_show_song_browser(const char* player_name,
                                      const char* music_id,
                                      const char* title,

@@ -131,13 +131,15 @@ bool Runtime::enqueue_launch(MatchConfig match)
         match.content.difficulty < 5 &&
         !match.content.chart_hash.empty() &&
         !match.content.audio_hash.empty();
-    const bool players_valid =
-        match.players[0].slot == PlayerSlot::P1 &&
-        match.players[1].slot == PlayerSlot::P2 &&
-        match.players[0].role == PlayerRole::Local &&
-        match.players[1].role == PlayerRole::SyntheticRemote &&
-        valid_profile(match.players[0]) &&
-        valid_profile(match.players[1]);
+    bool players_valid = match.players[0].enabled || match.players[1].enabled;
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        const auto& player = match.players[slot];
+        if (!player.enabled) continue;
+        players_valid = players_valid &&
+            static_cast<unsigned>(player.slot) == slot &&
+            player.role == PlayerRole::Local && valid_profile(player) &&
+            player.difficulty < 5 && !player.chart_hash.empty();
+    }
     if (!content_valid || !players_valid) {
         impl_->fail_locked(impl_->generation,
             !content_valid ? GuestErrorCode::InvalidContent
