@@ -57,6 +57,7 @@ extern "C" void taiko_overlay_show_song_browser(const char*, const char*, const 
 extern "C" void taiko_overlay_set_browser_players(int, uint8_t j, uint8_t r, const uint8_t*) { joined = j; ready = r; }
 extern "C" void taiko_overlay_show_song_select(const char*) {}
 extern "C" void taiko_overlay_hide_host_screen() {}
+extern "C" void taiko_overlay_animate_browser(int) {}
 extern "C" void taiko_overlay_clear() {}
 extern "C" void taiko_overlay_show_entry_menu(int) {}
 extern "C" void taiko_overlay_show_entry_progress(const char*) {}

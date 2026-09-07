@@ -561,6 +561,7 @@ extern "C" void taiko_frontend_enter_song_select_shell(void)
     std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     g_phase.store(Phase::SongSelect, std::memory_order_release);
     enter_song_select_shell();
+    taiko_overlay_animate_browser(0);
 }
 
 void change_song_category(int direction)
@@ -1437,7 +1438,7 @@ extern "C" void taiko_frontend_song_select_tick(ppu_context* ctx)
                  song->music_id.c_str(), difficulty);
     g_song_launch_requested.store(false, std::memory_order_release);
     g_phase.store(Phase::Passthrough, std::memory_order_release);
-    taiko_overlay_hide_host_screen();
+    taiko_overlay_animate_browser(1);
 }
 
 extern "C" int taiko_frontend_results_end_override(ppu_context* ctx)
@@ -1489,6 +1490,7 @@ extern "C" int taiko_frontend_results_continue_tick(ppu_context* ctx)
 
     g_phase.store(Phase::SongSelect, std::memory_order_release);
     enter_song_select_shell();
+    taiko_overlay_animate_browser(0);
     std::fprintf(stderr,
                  "[taiko_frontend] host Song Select reacquired after Results "
                  "results=%08X\n", results);
@@ -1511,7 +1513,7 @@ extern "C" void taiko_frontend_standalone_gameplay(void)
     g_song_launch_requested.store(false, std::memory_order_release);
     g_phase.store(Phase::Passthrough, std::memory_order_release);
     taiko_host_audio_begin_gameplay_handoff();
-    taiko_overlay_hide_host_screen();
+    taiko_overlay_animate_browser(1);
 }
 
 extern "C" void taiko_frontend_standalone_session_begin(void)

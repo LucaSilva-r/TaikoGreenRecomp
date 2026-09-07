@@ -30,6 +30,8 @@ static unsigned failures=0, menus=0, commits=0, removals=0;
 static std::vector<uint32_t> calls;
 extern "C" void ppu_register_function(uint64_t, void (*)(ppu_context*)) {}
 extern "C" void ppu_set_project_register_hooks(void (*)(void)) {}
+static uint32_t animation_ticks = 1;
+extern "C" uint32_t taiko_animation_frame_ticks(void) { return animation_ticks; }
 void func_008DA500(ppu_context*) {}
 extern "C" void taiko_overlay_clear() {}
 extern "C" void taiko_frontend_enter_song_select_shell() { ++menus; }
@@ -117,7 +119,17 @@ int main() {
     CHECK(commits==1 && !gameplay); // Cannot launch merely because 120 frames elapsed.
     ready=true;
     taiko_pc_mode_setup_tick(&ctx); // One-shot acceptance switches the service to busy.
-    for (unsigned i=0;i<120;++i) taiko_pc_mode_setup_tick(&ctx);
+    // At 240 Hz the 120 authored-frame wipe still takes two seconds.
+    // Three render frames without an animation tick must not retire it.
+    for (unsigned i=0;i<120;++i) {
+        animation_ticks = 0;
+        for (unsigned j=0;j<3;++j) {
+            taiko_pc_mode_setup_tick(&ctx);
+            CHECK(!gameplay);
+        }
+        animation_ticks = 1;
+        taiko_pc_mode_setup_tick(&ctx);
+    }
     CHECK(!gameplay);
     taiko_pc_mode_setup_tick(&ctx);
     CHECK(gameplay && runtime.state()==taiko_plus::State::Gameplay);

@@ -98,6 +98,15 @@ static unsigned g_song_row_count;
 static double g_song_animation_start, g_song_last_render;
 static int g_song_animating;
 static int g_gpu_animation_pending;
+/* Three cached, opaque panels keep overlapping text/cards fading as one layer.
+ * Only the short handoff uses these 1280x720 snapshots; normal UI stays native
+ * resolution. No per-frame text rasterization or GPU texture uploads. */
+static uint32_t g_handoff_pixels[HOST_WIDTH * HOST_HEIGHT];
+static int g_handoff; /* 1 entering, -1 leaving */
+static double g_handoff_start;
+static int g_handoff_snapshot;
+static uint64_t g_handoff_ids[3];
+static const double HANDOFF_MS = 320.0;
 static long     g_deadline;
 static int      g_drawn_remaining = -1;
 
@@ -888,13 +897,90 @@ static void render_host(void)
                     17, 1245, 690);
 }
 
+static void finish_handoff_if_due(void)
+{
+    if (g_mode != 5) { g_handoff = 0; g_handoff_snapshot = 0; }
+    if (!g_handoff || !g_handoff_snapshot ||
+        monotonic_milliseconds() - g_handoff_start < HANDOFF_MS) return;
+    if (g_handoff < 0) { g_mode = 0; g_visible = 0; }
+    g_handoff = 0;
+    g_handoff_snapshot = 0;
+    g_drawn_remaining = -1;
+    ++g_version;
+}
+
+static void render_handoff(void)
+{
+    static const int xs[3] = {0, 570, 0}, ys[3] = {0, 0, 660};
+    static const int widths[3] = {570, 710, 1280}, heights[3] = {660, 660, 60};
+    if (!g_handoff_snapshot) {
+        HostUiEmit emit = g_ui_emit;
+        g_ui_emit = NULL;
+        if (g_handoff > 0) g_song_animation_start = monotonic_milliseconds() - 180.0;
+        render_host();
+        size_t offset = 0;
+        for (unsigned panel = 0; panel < 3; ++panel) {
+            for (int y = 0; y < heights[panel]; ++y)
+                memcpy(g_handoff_pixels + offset + y * widths[panel],
+                       g_pixels + (ys[panel] + y) * HOST_WIDTH + xs[panel],
+                       widths[panel] * sizeof(uint32_t));
+            offset += widths[panel] * heights[panel];
+            g_handoff_ids[panel] = ++g_text_texture_id;
+        }
+        g_ui_emit = emit;
+        g_handoff_snapshot = 1;
+        /* Begin on the first rendered frame, not before synchronous loading. */
+        g_handoff_start = monotonic_milliseconds();
+    }
+    double t = (monotonic_milliseconds() - g_handoff_start) / HANDOFF_MS;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    const double eased = t * t * (3.0 - 2.0 * t);
+    const float hidden = (float)(g_handoff < 0 ? eased : 1.0 - eased);
+    const unsigned alpha = (unsigned)(255.0f * (1.0f - hidden) + 0.5f);
+    g_width = HOST_WIDTH; g_height = HOST_HEIGHT;
+    if (!g_ui_emit || g_handoff > 0)
+        fill_rect(0, 0, HOST_WIDTH, HOST_HEIGHT, g_handoff > 0 ? 0xff000000u : 0);
+    size_t offset = 0;
+    for (unsigned panel = 0; panel < 3; ++panel) {
+        const int slide = (int)(96 * hidden + 0.5f);
+        const int x = xs[panel] + (panel == 0 ? -slide : panel == 1 ? slide : 0);
+        const int y = ys[panel] + (panel == 2 ? (int)(48 * hidden + 0.5f) : 0);
+        const uint32_t* pixels = g_handoff_pixels + offset;
+        if (g_ui_emit) {
+            HostUiDraw draw = {0};
+            draw.x = x; draw.y = y; draw.w = widths[panel]; draw.h = heights[panel];
+            draw.colour = (alpha << 24) | 0xffffffu;
+            draw.texture_id = g_handoff_ids[panel]; draw.pixels = pixels;
+            draw.width = widths[panel]; draw.height = heights[panel];
+            g_ui_emit(g_ui_user, &draw);
+        } else {
+            for (int py = 0; py < heights[panel] && y + py < HOST_HEIGHT; ++py) {
+                for (int px = 0; px < widths[panel]; ++px) {
+                    if (x + px < 0 || x + px >= HOST_WIDTH) continue;
+                    uint32_t colour = pixels[py * widths[panel] + px];
+                    if (g_handoff > 0) {
+                        uint32_t faded = 0xff000000u;
+                        for (unsigned shift = 0; shift < 24; shift += 8)
+                            faded |= (((colour >> shift) & 255) * alpha / 255) << shift;
+                        colour = faded;
+                    } else colour = (colour & 0xffffffu) | (alpha << 24);
+                    g_pixels[(y + py) * HOST_WIDTH + x + px] = colour;
+                }
+            }
+        }
+        offset += widths[panel] * heights[panel];
+    }
+}
+
 static void render(int remaining)
 {
     char code[16];
     char countdown[4];
 
     if (g_mode >= 3) {
-        render_host();
+        if (g_handoff) render_handoff();
+        else render_host();
         g_drawn_remaining = remaining;
         ++g_version;
         return;
@@ -1059,6 +1145,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
                                      unsigned row_count)
 {
     pthread_mutex_lock(&g_lock);
+    /* A fresh selection or a failed launch takes ownership immediately. */
+    g_handoff = 0;
+    g_handoff_snapshot = 0;
     snprintf(g_player_name, sizeof(g_player_name), "%s",
              player_name && player_name[0] ? player_name : "P1");
     snprintf(g_song_id, sizeof(g_song_id), "%s", music_id ? music_id : "");
@@ -1140,10 +1229,25 @@ void taiko_overlay_show_song_browser(const char* player_name,
 void taiko_overlay_hide_host_screen(void)
 {
     pthread_mutex_lock(&g_lock);
+    g_handoff = 0;
+    g_handoff_snapshot = 0;
     if (g_mode >= 3) {
         g_mode = 0;
         g_visible = 0;
         g_code[0] = '\0';
+        ++g_version;
+    }
+    pthread_mutex_unlock(&g_lock);
+    wake_renderer();
+}
+
+void taiko_overlay_animate_browser(int leaving)
+{
+    pthread_mutex_lock(&g_lock);
+    if (g_visible && g_mode == 5) {
+        g_handoff = leaving ? -1 : 1;
+        g_handoff_snapshot = 0;
+        g_drawn_remaining = -1;
         ++g_version;
     }
     pthread_mutex_unlock(&g_lock);
@@ -1177,6 +1281,7 @@ int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
 {
     if (!info) return 0;
     pthread_mutex_lock(&g_lock);
+    finish_handoff_if_due();
 
     int remaining = (int)(g_deadline - monotonic_seconds());
     if (remaining < 0) remaining = 0;
@@ -1199,13 +1304,13 @@ int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
     }
     const double now = monotonic_milliseconds();
     if (remaining != g_drawn_remaining ||
-        (g_mode == 5 && g_song_animating && now - g_song_last_render >= 16.0)) {
+        (g_mode == 5 && (g_song_animating || g_handoff) && now - g_song_last_render >= 16.0)) {
         render(remaining);
         g_song_last_render = now;
         if (song_ease() >= 1.0f) g_song_animating = 0;
     }
 
-    info->mode = g_mode >= 3 ? HOST_FRAME_FULLSCREEN : HOST_FRAME_OVERLAY;
+    info->mode = g_mode >= 3 && g_handoff >= 0 ? HOST_FRAME_FULLSCREEN : HOST_FRAME_OVERLAY;
     info->width = (uint32_t)g_width;
     info->height = (uint32_t)g_height;
     info->pitch = (uint32_t)g_width * sizeof(uint32_t);
@@ -1226,6 +1331,7 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
 {
     if (!info) return 0;
     pthread_mutex_lock(&g_lock);
+    finish_handoff_if_due();
     if (!g_visible || g_mode < 3 || !font_ready()) {
         pthread_mutex_unlock(&g_lock);
         return 0;
@@ -1234,12 +1340,14 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
         g_code[0] = '\0'; ++g_version; g_drawn_remaining = -1;
     }
     info->version = g_version;
-    info->animated = g_mode == 5 && g_gpu_animation_pending;
+    info->animated = g_mode == 5 && (g_gpu_animation_pending || g_handoff);
+    info->overlay = g_handoff < 0;
     if (g_mode == 4 && g_code[0]) info->animated = 1;
     if (emit) {
         g_ui_scale = isfinite(scale) && scale > 0 ? scale : 1.0f;
         g_ui_emit = emit; g_ui_user = user;
-        render_host();
+        if (g_handoff) render_handoff();
+        else render_host();
         if (song_ease() >= 1.0f) g_gpu_animation_pending = 0;
         g_ui_emit = NULL; g_ui_user = NULL;
         g_ui_scale = 1.0f;

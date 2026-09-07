@@ -773,6 +773,14 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING AND NOT WIN32)
+    add_executable(taiko_animation_timing_tests
+        "tests/taiko_animation_timing_tests.cpp" "src/taiko_lumen.cpp")
+    target_include_directories(taiko_animation_timing_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/recomp" "${PS3RECOMP_DIR}/include")
+    add_test(NAME taiko_animation_timing_tests COMMAND taiko_animation_timing_tests)
+    add_test(NAME taiko_animation_timing_disabled_tests
+        COMMAND taiko_animation_timing_tests disabled)
+
     add_executable(taiko_audio_header_tests
         "tests/taiko_audio_header_tests.c")
     target_include_directories(taiko_audio_header_tests PRIVATE

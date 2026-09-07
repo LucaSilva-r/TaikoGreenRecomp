@@ -76,6 +76,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
                                      const taiko_overlay_song_row* rows,
                                      unsigned row_count);
 void taiko_overlay_hide_host_screen(void);
+/* Animate the browser away over live gameplay (leaving=1), or bring its
+ * panels in after Results (leaving=0). Does not delay guest scene lifetimes. */
+void taiko_overlay_animate_browser(int leaving);
 void taiko_overlay_clear(void);
 
 /* Copy one coherent host-frame snapshot. Passing NULL as destination queries

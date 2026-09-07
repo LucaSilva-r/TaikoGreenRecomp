@@ -15,7 +15,11 @@ typedef struct HostUiDraw {
     uint32_t width, height;
 } HostUiDraw;
 typedef void (*HostUiEmit)(void*, const HostUiDraw*);
-typedef struct HostUiInfo { uint32_t version; int animated; } HostUiInfo;
+typedef struct HostUiInfo {
+    uint32_t version;
+    int animated;
+    int overlay; /* Transparent handoff over the live guest, not a host-only screen. */
+} HostUiInfo;
 typedef int (*HostUiVisit)(float scale, HostUiEmit emit, void* user, HostUiInfo* info);
 extern HostUiVisit g_rsx_host_ui_visit;
 #ifdef __cplusplus

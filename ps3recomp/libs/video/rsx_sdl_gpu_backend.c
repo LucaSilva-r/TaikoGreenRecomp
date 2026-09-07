@@ -2497,7 +2497,7 @@ static int copy_host_frame(void)
 {
     ui_active = g_rsx_host_ui_visit && g_rsx_host_ui_visit(1.0f, NULL, NULL, &ui_info);
     if (ui_active) {
-        s_overlay.frame.mode = HOST_FRAME_FULLSCREEN;
+        s_overlay.frame.mode = ui_info.overlay ? HOST_FRAME_OVERLAY : HOST_FRAME_FULLSCREEN;
         s_overlay.frame.width = 1280; s_overlay.frame.height = 720;
         s_overlay.frame.pitch = 1280 * 4;
         s_overlay.frame.version = ui_info.version;

@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 int main(int argc, char** argv)
 {
     if (ps3_host_sdl_init(PS3_HOST_SDL_VIDEO | PS3_HOST_SDL_GAMEPAD) != 0 ||
@@ -32,8 +33,12 @@ int main(int argc, char** argv)
     }
     unsigned errors=rsx_sdl_gpu_backend_error_count();
     if (argc > 3) {
-        for (unsigned i = 0; i < 2; ++i)
+        /* Optional final argument: enter/leave captures the handoff midpoint. */
+        if (argc > 4) taiko_overlay_animate_browser(!strcmp(argv[4], "leave"));
+        for (unsigned i = 0; i < 2; ++i) {
+            if (i && argc > 4) SDL_Delay(160);
             if (rsx_sdl_gpu_backend_save_host_ui_bmp(argv[3], atoi(argv[1]), atoi(argv[2])) != 0) ++errors;
+        }
     }
     rsx_sdl_gpu_backend_main_shutdown(); ps3_host_sdl_shutdown();
     return errors?1:0;

@@ -17,6 +17,7 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
 
 extern "C" void ppu_register_function(uint64_t addr, void (*fn)(ppu_context*));
 extern "C" void ppu_set_project_register_hooks(void (*register_hooks)(void));
+extern "C" uint32_t taiko_animation_frame_ticks(void);
 
 namespace {
 
@@ -239,10 +240,11 @@ void advance_launch(uint32_t owner)
                     service, service ? static_cast<int32_t>(vm_read32(service + 8)) : -1);
             return;
         }
-        std::fprintf(stderr, "[taiko_plus] native transition accepted; waiting 120 frames\n");
+        std::fprintf(stderr, "[taiko_plus] native transition accepted; waiting 120 animation ticks\n");
         return;
     }
-    if (++s_ready_frames <= 120) return;
+    s_ready_frames += taiko_animation_frame_ticks();
+    if (s_ready_frames <= 120) return;
     s_preloading = false;
     const uint32_t sound = native(0x005c544c, manager);
     if (sound) native(0x005c535c, sound, 0);

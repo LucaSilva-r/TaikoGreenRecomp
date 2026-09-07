@@ -29,6 +29,46 @@
  ],
  "declarations": [
   {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_00238AF0"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_0005DA38"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E2E00"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E42A0"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E4CDC"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E690C"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_0005D864"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E2114"
+  },
+  {
    "symbol": "taiko_lumen_skip_redundant_face_seek",
    "text": "extern \"C\" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx);",
    "function": "func_003E1338"
@@ -140,6 +180,62 @@
   }
  ],
  "functions": {
+  "func_00238AF0": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((11) ? ctx->gpr[11] : 0) + 0x38);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_0005D864": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((29) ? ctx->gpr[29] : 0) + 0x0);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_0005DA38": [
+   {
+    "anchor": "        ctx->gpr[11] = vm_read32(((9) ? ctx->gpr[9] : 0) + 0x0);",
+    "replaces": ["        ctx->gpr[11] = ctx->gpr[11] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[11] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E2114": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((31) ? ctx->gpr[31] : 0) + 0x170);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E2E00": [
+   {
+    "anchor": "        ctx->gpr[3] = vm_read32(((3) ? ctx->gpr[3] : 0) + 0x18);",
+    "replaces": ["        ctx->gpr[3] = ctx->gpr[3] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[3] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E42A0": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((27) ? ctx->gpr[27] : 0) + 0x18);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E4CDC": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((27) ? ctx->gpr[27] : 0) + 0x18);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E690C": [
+   {
+    "anchor": "        if (((ctx->cr >> 0) & 4)) goto loc_001E71FC;",
+    "replaces": ["        ctx->gpr[0] = ctx->gpr[9] + (int64_t)(1);"],
+    "lines": ["        ctx->gpr[0] = ctx->gpr[9] + taiko_animation_frame_ticks();"]
+   }
+  ],
   "func_001FE470": [
    {
     "anchor": null,
