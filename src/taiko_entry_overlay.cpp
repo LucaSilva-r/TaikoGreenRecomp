@@ -12,6 +12,15 @@
 #include <mutex>
 #include <utility>
 #include <vector>
+#include <cerrno>
+#include <cwchar>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 extern "C" const unsigned char taiko_entry_overlay_patch_data[];
 extern "C" const unsigned taiko_entry_overlay_patch_size;
@@ -26,6 +35,49 @@ constexpr uint32_t kCellFsReadOnly = 0;
 
 std::once_flag g_prepare_once;
 std::vector<uint8_t> g_overlay;
+
+FILE* temporary_stream()
+{
+#ifdef _WIN32
+    // The MinGW/MSVCRT tmpfile path can require access to the drive root.
+    // Use the user's temp directory instead; CREATE_NEW prevents collisions
+    // and the handle owns deletion even if the process exits unexpectedly.
+    wchar_t directory[MAX_PATH + 1];
+    const DWORD length = GetTempPathW(MAX_PATH + 1, directory);
+    if (!length || length > MAX_PATH) {
+        std::fprintf(stderr, "[taiko_entry_overlay] GetTempPathW failed: %lu\n",
+                     static_cast<unsigned long>(GetLastError()));
+        return nullptr;
+    }
+    for (unsigned attempt = 0; attempt < 128; ++attempt) {
+        wchar_t path[MAX_PATH + 96];
+        std::swprintf(path, sizeof(path) / sizeof(path[0]),
+                      L"%lstaiko-entry-%lu-%llu-%u.tmp", directory,
+                      static_cast<unsigned long>(GetCurrentProcessId()),
+                      static_cast<unsigned long long>(GetTickCount64()), attempt);
+        HANDLE handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0,
+                                    nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+                                    nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            const DWORD error = GetLastError();
+            if (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS) continue;
+            std::fprintf(stderr, "[taiko_entry_overlay] CreateFileW(temp) failed: %lu\n",
+                         static_cast<unsigned long>(error));
+            return nullptr;
+        }
+        const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(handle),
+                                      _O_RDWR | _O_BINARY);
+        if (fd < 0) { CloseHandle(handle); return nullptr; }
+        FILE* stream = _fdopen(fd, "w+b");
+        if (!stream) _close(fd); // Also closes/deletes the underlying handle.
+        return stream;
+    }
+    return nullptr;
+#else
+    return std::tmpfile();
+#endif
+}
 
 uint32_t crc32(const uint8_t* data, size_t size)
 {
@@ -216,14 +268,15 @@ extern "C" FILE* taiko_fs_open_overlay(const char* guest_path,
     prepare_overlay(host_path);
     if (g_overlay.empty()) return nullptr;
 
-    FILE* stream = std::tmpfile();
+    FILE* stream = temporary_stream();
     if (!stream || std::fwrite(g_overlay.data(), 1, g_overlay.size(), stream) !=
                        g_overlay.size() ||
         std::fflush(stream) != 0 || std::fseek(stream, 0, SEEK_SET) != 0) {
+        const int error = errno;
         if (stream) std::fclose(stream);
         std::fprintf(stderr,
-                     "[taiko_entry_overlay] temporary stream creation failed; "
-                     "using original archive\n");
+                     "[taiko_entry_overlay] temporary stream creation/write failed "
+                     "(errno=%d); using original archive\n", error);
         return nullptr;
     }
     return stream;
