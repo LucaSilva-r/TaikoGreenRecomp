@@ -349,7 +349,7 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
      * the caller no longer reads [r1+0x28] to restore r2, so this ABI TOC-spill is
      * unnecessary — and in the frameless-cascade it can clobber a caller frame slot
      * (e.g. the deserializer's this-pointer). Skip it to test that theory. */
-    { static int _ns=-1; if(_ns<0)_ns=getenv("FLOW_NOSPILL")?1:0;
+    { static int _ns=-1; if(_ns<0) { const char* v=getenv("FLOW_NOSPILL"); _ns=v&&v[0]!='0'; }
       if(!_ns) vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]); }
 
     /* Real libsre (loaded PRX) takes priority over the HLE stub. */

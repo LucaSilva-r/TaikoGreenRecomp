@@ -54,17 +54,22 @@ system::GameContent::GameContent() cellGameGetParamString() CELL_GAME_RET_OK
 [D3D12] draw_arrays #9000 prim=8 first=0 count=4
 ```
 
-Run it with the flags that matter:
+Run it directly:
 
 ```sh
-PS3_VFS_ROOT=game/vfs \
-PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38 \
-FLOW_NOSPILL=1 \
-TAIKO_DNS_LOOPBACK=1 \
 wine build/taiko_boot.exe game/EBOOT.elf
 ```
 
-`FLOW_NOSPILL=1` is **required**, not a debug option -- see *The TOC spill* below.
+`taiko_config.cfg` contains the runtime defaults, online/card credentials,
+audio offset, and normal game/video/input settings. It is read beside the
+executable, beside an explicitly supplied EBOOT, or from the working directory;
+`TAIKO_CONFIG` overrides the path. Existing environment switches remain
+available and take precedence for one-off diagnostics. The executable embeds
+the current schema: it creates the file when missing and repairs an old version
+while preserving recognized values.
+
+`FLOW_NOSPILL=1` remains **required**, not a debug option, and is enabled by the
+default config and the executable fallback -- see *The TOC spill* below.
 
 ### Standalone USRDIR release
 

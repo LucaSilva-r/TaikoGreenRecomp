@@ -378,6 +378,20 @@ file(GLOB GEN_SOURCES    "src/gen/*.c" "src/gen/*.cpp")
 # on `rchcnt(SPU_RdInMbox) == 0`, so the SPU never answered the PPU.
 file(GLOB SPU_GEN_SOURCES "src/spu_gen/*/spu_recomp.c" "src/spu_gen/*.c")
 
+set(TAIKO_CONFIG_DEFAULT_C "${CMAKE_BINARY_DIR}/taiko_config_default.c")
+add_custom_command(
+    OUTPUT "${TAIKO_CONFIG_DEFAULT_C}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+            --input "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
+            --out "${TAIKO_CONFIG_DEFAULT_C}"
+            --name taiko_config_default
+    DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+    COMMENT "Embedding default Taiko configuration"
+    VERBATIM)
+
 set(TAIKO_BOOT_SOURCES
     "${PS3RECOMP_DIR}/runtime/ppu/tests/boot_main.cpp"   # generic boot harness
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"        # vm + ELF loader + run
@@ -386,6 +400,8 @@ set(TAIKO_BOOT_SOURCES
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_fs.cpp"            # cellFs VFS
     "${PS3RECOMP_DIR}/runtime/host/frame_driver.cpp"     # shared vblank/FIFO clock
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_init.c"       # title id + unbuffered log
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_config.c"     # unified runtime/game configuration
+    "${TAIKO_CONFIG_DEFAULT_C}"                         # embedded default/schema
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"        # cellHttp NID aliases
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"        # host TLS + online redirect
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_decoder.cpp" # shared NUB/RIFF decode and bounded PCM cache
@@ -417,6 +433,12 @@ if(ANDROID)
 else()
     add_executable(taiko_boot ${TAIKO_BOOT_SOURCES})
 endif()
+
+add_custom_command(TARGET taiko_boot POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
+            "$<TARGET_FILE_DIR:taiko_boot>/taiko_config.example.cfg"
+    VERBATIM)
 if(ANDROID)
     set_target_properties(taiko_boot PROPERTIES OUTPUT_NAME main)
 endif()
@@ -792,10 +814,25 @@ if(BUILD_TESTING AND NOT WIN32)
 
     add_executable(taiko_audio_offset_tests
         "tests/taiko_audio_offset_tests.cpp"
-        "src/taiko_audio_offset.cpp")
+        "src/taiko_audio_offset.cpp"
+        "src/taiko_config.c"
+        "${TAIKO_CONFIG_DEFAULT_C}")
+    target_compile_definitions(taiko_audio_offset_tests PRIVATE
+        TAIKO_CONFIG_NO_CONSTRUCTOR=1)
     target_include_directories(taiko_audio_offset_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_audio_offset_tests COMMAND taiko_audio_offset_tests)
+
+    add_executable(taiko_config_tests
+        "tests/taiko_config_tests.c"
+        "src/taiko_config.c"
+        "${TAIKO_CONFIG_DEFAULT_C}")
+    target_compile_definitions(taiko_config_tests PRIVATE
+        TAIKO_CONFIG_NO_CONSTRUCTOR=1)
+    target_include_directories(taiko_config_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_config_tests COMMAND taiko_config_tests)
+    add_test(NAME taiko_config_create_tests COMMAND taiko_config_tests create)
 
     add_executable(taiko_pc_mode_tests
         "tests/taiko_pc_mode_tests.cpp"

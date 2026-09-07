@@ -17,15 +17,15 @@ int main()
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() /
         ("taiko-audio-offset-test-" + std::to_string(getpid()));
-    const std::filesystem::path file = directory / "audio_offset_ms";
+    const std::filesystem::path file = directory / "taiko_config.cfg";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     FILE* initial = std::fopen(file.string().c_str(), "wb");
-    if (!expect(initial && std::fputs("7\n", initial) >= 0,
+    if (!expect(initial && std::fputs("[audio]\noffset_ms = 7\n", initial) >= 0,
                 "create saved value"))
         return 1;
     std::fclose(initial);
-    setenv("TAIKO_AUDIO_OFFSET_FILE", file.string().c_str(), 1);
+    setenv("TAIKO_CONFIG", file.string().c_str(), 1);
     unsetenv("TAIKO_AUDIO_OFFSET_MS");
 
     if (!expect(taiko_audio_offset_get_ms() == 7, "load saved value") ||
@@ -37,9 +37,13 @@ int main()
 
     FILE* saved = std::fopen(file.string().c_str(), "rb");
     char text[32] = {};
-    const bool readable = saved && std::fgets(text, sizeof(text), saved);
-    if (saved) std::fclose(saved);
-    if (!expect(readable && std::string(text) == "65\n",
+    std::string contents;
+    if (saved) {
+        while (std::fgets(text, sizeof(text), saved)) contents += text;
+        std::fclose(saved);
+    }
+    if (!expect(!contents.empty() &&
+                    contents.find("offset_ms = 65\n") != std::string::npos,
                 "saved value is durable"))
         return 1;
 

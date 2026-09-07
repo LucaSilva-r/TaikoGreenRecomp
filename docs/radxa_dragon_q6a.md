@@ -38,7 +38,7 @@ The runtime uses the same paths as the Pi:
 /var/lib/taikos/recomp/EBOOT.elf
 /var/lib/taikos/recomp/lib/
 /var/lib/taikos/recomp/vfs/
-/var/lib/taikos/recomp/taiko_online.cfg
+/var/lib/taikos/recomp/taiko_config.cfg
 ```
 
 Install `deploy/taikos/taiko-recomp-session` as

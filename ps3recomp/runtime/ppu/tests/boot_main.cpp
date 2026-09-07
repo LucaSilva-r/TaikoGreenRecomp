@@ -145,7 +145,42 @@ static void derive_vfs_root(const char* eboot)
     const char* env = getenv("PS3_VFS_ROOT");
     if (env && *env) { ppu_vfs_root = env; return; }
     strncpy(s_vfs_root, eboot, sizeof s_vfs_root - 1);
+    s_vfs_root[sizeof s_vfs_root - 1] = 0;
     for (char* p = s_vfs_root; *p; p++) if (*p == '\\') *p = '/';
+    char* filename = strrchr(s_vfs_root, '/');
+    if (filename) {
+        *filename = 0;
+        char development_vfs[sizeof s_vfs_root];
+        if (snprintf(development_vfs, sizeof development_vfs, "%s/vfs",
+                     s_vfs_root) < (int)sizeof development_vfs) {
+#ifdef _WIN32
+            const DWORD attributes = GetFileAttributesA(development_vfs);
+            const bool has_development_vfs =
+                attributes != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_DIRECTORY);
+#else
+            const bool has_development_vfs = access(development_vfs, F_OK) == 0;
+#endif
+            if (has_development_vfs) {
+                strncpy(s_vfs_root, development_vfs, sizeof s_vfs_root - 1);
+                ppu_vfs_root = s_vfs_root;
+                return;
+            }
+        }
+        const char* leaf = strrchr(s_vfs_root, '/');
+        leaf = leaf ? leaf + 1 : s_vfs_root;
+        if (!strcmp(leaf, "USRDIR")) {
+#ifdef _WIN32
+            _putenv_s("PS3_VFS_LAYOUT", "usrdir");
+#else
+            setenv("PS3_VFS_LAYOUT", "usrdir", 0);
+#endif
+            ppu_vfs_root = s_vfs_root;
+            return;
+        }
+        /* Restore the filename for the standard PS3_GAME layout below. */
+        *filename = '/';
+    }
     /* strip three trailing components: EBOOT.elf / USRDIR / PS3_GAME */
     for (int i = 0; i < 3; i++) { char* s = strrchr(s_vfs_root, '/'); if (s) *s = 0; }
     if (!s_vfs_root[0]) strcpy(s_vfs_root, ".");
@@ -874,7 +909,8 @@ int main(int argc, char** argv)
     host_sdl_subsystems |= PS3_HOST_SDL_GAMEPAD;
 #endif
 #ifdef PS3RECOMP_AUDIO_BACKEND_SDL3
-    if (!getenv("PS3RECOMP_NULL_AUDIO"))
+    const char* null_audio = getenv("PS3RECOMP_NULL_AUDIO");
+    if (!(null_audio && null_audio[0] != '0'))
         host_sdl_subsystems |= PS3_HOST_SDL_AUDIO;
 #endif
     if (ps3_host_sdl_init(host_sdl_subsystems) != 0) return 1;

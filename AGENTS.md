@@ -94,7 +94,14 @@ fix.
 ./run-taiko.sh               # logs to build/taiko.log (TAIKO_CONSOLE_LOG=1 for stdout)
 ```
 
-The script sets everything needed. Notable pieces:
+Normal runtime settings live in `taiko_config.cfg`, following the sectioned
+style of Zucchini's config. The executable embeds `taiko_config.example.cfg`,
+creates `taiko_config.cfg` when missing, and repairs version mismatches while
+preserving recognized values. The real file is gitignored because it can
+contain a pairing token. The loader checks beside
+the executable, beside an explicit EBOOT, then the working directory.
+`TAIKO_CONFIG` selects another file, and explicit environment values win for
+diagnostics. Notable pieces:
 
 - `TAIKO_GPU_DRIVER=vulkan` makes the Windows SDL_GPU build use Wine's Vulkan
   path directly. Native Windows leaves the variable unset so SDL can select
@@ -115,7 +122,7 @@ The script sets everything needed. Notable pieces:
   render loop keeps animating -- it looks exactly like a hang on the LOADING
   screen. Adding the mounts took one boot from 895 file opens to 1300+.
 - `TAIKO_DNS_LOOPBACK=1` — arcade network services resolve to 127.0.0.1.
-- **Boot fast-forward** (`boot_fast=1` in `taiko_online.cfg`, on by default).
+- **Boot fast-forward** (`[game] boot_fast=1` in `taiko_config.cfg`, on by default).
   The whole boot — arcade system checks, the chassis service sequence and the
   asset load — is paced by the guest's per-frame state machine, not by the
   network or by disk: measured round trips to the server are ~250 ms while the
@@ -751,7 +758,7 @@ a lifter bump as its own project with a full re-lift and revalidation.
 Full details in **`docs/online_base.md`**. Summary: every arcade service is
 sent to one configured host and port over TLS.
 
-- Configure with `taiko_online.cfg` next to the executable, or the
+- Configure the `[network]` section of `taiko_config.cfg` next to the executable, or the
   `TAIKO_ONLINE_HOST` / `_PORT` / `_VERIFY` / `_CACERT` environment overrides.
   **No host configured means offline**, exactly as before, and the cellHttp
   transport hooks are not even installed.
@@ -1034,8 +1041,7 @@ keyboard: F3 decreases it by 5 ms, F4 increases it by 5 ms, holding Shift makes
 either step 1 ms, and F5 displays the current value without changing it. The range is 0--1000 ms and the
 default is zero. A temporary overlay shows
 the saved value. It is stored in
-`$XDG_CONFIG_HOME/taikorecomp/audio_offset_ms` (or
-`$HOME/.config/taikorecomp/audio_offset_ms`) and does not affect catalog
+`[audio] offset_ms` in `taiko_config.cfg` and does not affect catalog
 previews, jingles, voices, or VAG effects.
 
 Positive values advance audible music to compensate for host output latency.
@@ -1047,7 +1053,7 @@ value. Native Linux play testing found 60 ms comfortable on the current
 PipeWire/device setup, but no value is compiled into the executable or launcher
 because it is output-device specific. `TAIKO_AUDIO_OFFSET_MS` remains a startup
 override for scripted tests; if it is set on every launch it takes precedence
-over the saved file. Example:
+over the config value. Example:
 
 ```sh
 TAIKO_AUDIO_OFFSET_MS=60 ./run-taiko-linux.sh

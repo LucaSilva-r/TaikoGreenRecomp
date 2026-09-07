@@ -1334,7 +1334,7 @@ extern "C" void ps3_indirect_call(ppu_context* ctx)
      * the caller's -- and then this store lands on the caller's reserved TOC
      * doubleword, i.e. exactly the "frameless-cascade clobbers a caller frame
      * slot" case that flag was added for. */
-    { static int _ns = -1; if (_ns < 0) _ns = getenv("FLOW_NOSPILL") ? 1 : 0;
+    { static int _ns = -1; if (_ns < 0) { const char* v = getenv("FLOW_NOSPILL"); _ns = v && v[0] != '0'; }
       if (!_ns) vm_write64(ctx->gpr[1] + 40, ctx->gpr[2]); }
     /* PS3_TOC_SET: comma-separated list of every TOC the image declares (read
      * them off .opd -- a statically linked title can carry several; Taiko has

@@ -11,19 +11,6 @@ if [[ ! -f "${repo_dir}/build/dxcompiler.dll" ]]; then
     exit 2
 fi
 
-export PS3_VFS_ROOT="${PS3_VFS_ROOT:-${repo_dir}/game/vfs}"
-export PS3_TOC_SET="${PS3_TOC_SET:-0x1027c58,0x1037a88,0x1047a38}"
-export FLOW_NOSPILL="${FLOW_NOSPILL:-1}"
-export TAIKO_DNS_LOOPBACK="${TAIKO_DNS_LOOPBACK:-1}"
-export TAIKO_OFFLINE_COMPLETE="${TAIKO_OFFLINE_COMPLETE:-1}"
-# Taiko+ owns its browser; the legacy path leaves stock Song Select running.
-# An explicit =0 retains that path for diagnostics.
-export TAIKO_PLUS_STANDALONE="${TAIKO_PLUS_STANDALONE:-1}"
-export TAIKO_FS_YIELD="${TAIKO_FS_YIELD:-0}"
-# The decoded ATRAC path and the real bnusCore SPU mixer are the normal audio
-# configuration. Keep explicit =0 overrides for silent/headless diagnostics.
-export TAIKO_AUDIO_DECODE="${TAIKO_AUDIO_DECODE:-1}"
-export TAIKO_AUDIO_SPU="${TAIKO_AUDIO_SPU:-1}"
 # VP_LEQUAL_LESS (strict depth) traded missing text for missing backdrops --
 # the real issue is elsewhere (UI composited via offscreen RTs). Leave the
 # spec-correct LEQUAL default; export VP_LEQUAL_LESS=1 manually to compare.
@@ -39,7 +26,6 @@ export TAIKO_AUDIO_SPU="${TAIKO_AUDIO_SPU:-1}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 # Native Windows lets SDL_GPU choose between D3D12 and Vulkan. Under Wine,
 # prefer its Vulkan path directly and avoid an unnecessary D3D12 translation.
-export TAIKO_GPU_DRIVER="${TAIKO_GPU_DRIVER:-vulkan}"
 
 command=(wine "${repo_dir}/build/taiko_boot.exe"
     "${repo_dir}/game/EBOOT.elf" "$@")

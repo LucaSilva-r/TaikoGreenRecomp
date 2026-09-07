@@ -466,7 +466,8 @@ int rsx_kms_present_init(unsigned source_width, unsigned source_height)
     if (!s_kms.had_master)
         fprintf(stderr, "[KMS] drmSetMaster failed: %s\n", strerror(errno));
 
-    if (getenv("TAIKO_KMS_ATOMIC")) {
+    const char* atomic = getenv("TAIKO_KMS_ATOMIC");
+    if (atomic && atomic[0] != '0') {
         if (drmSetClientCap(s_kms.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0 &&
             drmSetClientCap(s_kms.fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0) {
             s_kms.atomic = 1;

@@ -31,7 +31,8 @@
  *
  * The arcade endpoints are compiled into the game (naominet.jp, the MUCHA and
  * game-server names ALL.Net hands back), so the redirect has to be host-side.
- * A file next to the executable, overridable per run by the environment:
+ * taiko_config.cfg is loaded before this module and publishes these settings
+ * through the existing environment interface:
  *
  *     host=127.0.0.1     TAIKO_ONLINE_HOST
  *     port=443           TAIKO_ONLINE_PORT
@@ -40,8 +41,6 @@
  *
  * With no host configured the title stays offline exactly as before.
  * -----------------------------------------------------------------------*/
-#define TAIKO_ONLINE_CONFIG_FILE "taiko_online.cfg"
-
 static struct {
     int  loaded;
     char host[256];
@@ -70,32 +69,6 @@ static void cfg_assign(const char* key, const char* value)
                            !strcmp(value, "yes"));
 }
 
-static void cfg_load_file(const char* path)
-{
-    FILE* f = fopen(path, "r");
-    char line[640];
-    if (!f) return;
-    while (fgets(line, sizeof(line), f)) {
-        char* hash = strchr(line, '#');
-        if (hash) *hash = '\0';
-        char* eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        char* key = line;
-        char* value = eq + 1;
-        while (*key == ' ' || *key == '\t') key++;
-        for (char* end = key + strlen(key); end > key && (end[-1] == ' ' || end[-1] == '\t'); )
-            *--end = '\0';
-        while (*value == ' ' || *value == '\t') value++;
-        for (char* end = value + strlen(value);
-             end > value && (end[-1] == '\n' || end[-1] == '\r' ||
-                             end[-1] == ' '  || end[-1] == '\t'); )
-            *--end = '\0';
-        cfg_assign(key, value);
-    }
-    fclose(f);
-}
-
 static void cfg_load(void)
 {
     if (g_cfg.loaded) return;
@@ -103,21 +76,20 @@ static void cfg_load(void)
     g_cfg.port = 443;
     g_cfg.boot_fast = 1;
 
-    const char* path = getenv("TAIKO_ONLINE_CONFIG");
-    cfg_load_file(path && path[0] ? path : TAIKO_ONLINE_CONFIG_FILE);
-
     const char* host = getenv("TAIKO_ONLINE_HOST");
     const char* port = getenv("TAIKO_ONLINE_PORT");
     const char* verify = getenv("TAIKO_ONLINE_VERIFY");
     const char* cacert = getenv("TAIKO_ONLINE_CACERT");
     const char* token = getenv("TAIKO_PAIRING_TOKEN");
     const char* cabinet = getenv("TAIKO_CABINET_ID");
+    const char* boot_fast = getenv("TAIKO_BOOT_FAST");
     if (token && token[0])     cfg_assign("pairing_token", token);
     if (cabinet && cabinet[0]) cfg_assign("cabinet_id", cabinet);
     if (host && host[0])     cfg_assign("host", host);
     if (port && port[0])     cfg_assign("port", port);
     if (verify && verify[0]) cfg_assign("verify", verify);
     if (cacert && cacert[0]) cfg_assign("cacert", cacert);
+    if (boot_fast && boot_fast[0]) cfg_assign("boot_fast", boot_fast);
 
     if (g_cfg.host[0])
         fprintf(stderr, "[taiko_online] every arcade service -> https://%s:%d "

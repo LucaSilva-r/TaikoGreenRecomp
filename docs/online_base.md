@@ -26,20 +26,22 @@ Consequences:
 ## Configuration
 
 Everything the title talks to is sent to **one** host and port over TLS. The
-settings live in `taiko_online.cfg` in the launcher's working directory, which
-is the repository root (override the path with `TAIKO_ONLINE_CONFIG`); every key also has an environment override, which
-wins:
+settings live in the `[network]` section of `taiko_config.cfg` beside the
+executable or EBOOT (override the path with `TAIKO_CONFIG`). Every key also has
+an environment override, which wins:
 
-```
-host=127.0.0.1     # TAIKO_ONLINE_HOST   -- unset means offline, as before
-port=443           # TAIKO_ONLINE_PORT
-verify=0           # TAIKO_ONLINE_VERIFY -- 1 checks the server certificate
-cacert=ca.pem      # TAIKO_ONLINE_CACERT -- required when verify=1
-boot_fast=1        # TAIKO_BOOT_VBLANK_HZ -- boot fast-forward, on by default
+```ini
+[network]
+host = 127.0.0.1   # TAIKO_ONLINE_HOST; blank means offline
+port = 443         # TAIKO_ONLINE_PORT
+verify = 0         # TAIKO_ONLINE_VERIFY; 1 checks the server certificate
+cacert = ca.pem    # TAIKO_ONLINE_CACERT; required when verify=1
+
+[game]
+boot_fast = 1      # TAIKO_BOOT_FAST; on by default
 ```
 
-`boot_fast` is not an online setting as such, but it lives here because the
-arcade system checks are what it shortens. The title's boot -- the chassis
+The title's boot -- the chassis
 service sequence and the asset load alike -- is paced by the guest's per-frame
 tick rather than by the network or the disk, so the frame driver ticks vblank at
 240 Hz until the game starts its attract audio and then returns to 60 Hz.
@@ -219,7 +221,7 @@ that file absent simply falls back to loading one at runtime.
 `tools/tests/test_overlay_font.c` rasterizes all eleven pairing glyphs from the
 embedded copy, which catches a font that loads but draws blank boxes.
 
-`pairing_token` and `cabinet_id` can also live in `taiko_online.cfg`. The
+`pairing_token` and `cabinet_id` also live under `[network]`. The
 cabinet id defaults to eight hex digits derived from the host name, so it is
 stable without a state file.
 
@@ -233,7 +235,7 @@ Anything else, including `shop` in the wrong case, comes back `status=closed`.
 ## Known gaps
 
 - The dongle serial is still a constant in `tools/recomp_hand_edits.json`
-  (`serial=ABDN0000000` in the PowerOn body); it belongs in `taiko_online.cfg`
+  (`serial=ABDN0000000` in the PowerOn body); it belongs in `taiko_config.cfg`
   with the rest.
 - The cab reports `ip=127.1.0.N` in its PowerOn body -- it takes that from the
   address it resolved for `bbrouter.loc`, which is now a redirect placeholder.

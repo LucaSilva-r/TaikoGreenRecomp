@@ -118,7 +118,8 @@ int audio_sink_start_pull(AudioSinkPull pull)
 
 int audio_sink_init(void)
 {
-    if (getenv("PS3RECOMP_NULL_AUDIO")) return AUDIO_SINK_INIT_NULL_CLOCK;
+    { const char* null_audio = getenv("PS3RECOMP_NULL_AUDIO");
+      if (null_audio && null_audio[0] != '0') return AUDIO_SINK_INIT_NULL_CLOCK; }
 #ifdef PS3RECOMP_AUDIO_DIRECT_ALSA
     const char* direct_device = getenv("TAIKO_AUDIO_ALSA_DIRECT_DEVICE");
     if (direct_device && *direct_device) {
@@ -396,7 +397,8 @@ const char* audio_sink_name(void) { return "wasapi"; }
 
 int audio_sink_init(void)
 {
-    if (getenv("PS3RECOMP_NULL_AUDIO")) return AUDIO_SINK_INIT_NULL_CLOCK;
+    { const char* null_audio = getenv("PS3RECOMP_NULL_AUDIO");
+      if (null_audio && null_audio[0] != '0') return AUDIO_SINK_INIT_NULL_CLOCK; }
     HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) return AUDIO_SINK_INIT_FAILED;
 

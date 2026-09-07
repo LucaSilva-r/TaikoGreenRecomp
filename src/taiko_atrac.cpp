@@ -423,7 +423,8 @@ void set_data_and_get_mem_size(ppu_context* ctx)
     const uint32_t handle = static_cast<uint32_t>(ctx->gpr[3]);
     const uint32_t data = static_cast<uint32_t>(ctx->gpr[4]);
     const uint32_t bytes = static_cast<uint32_t>(ctx->gpr[5]);
-    if (std::getenv("TAIKO_AUDIO_DECODE") && handle && data &&
+    const char* audio_decode = std::getenv("TAIKO_AUDIO_DECODE");
+    if (audio_decode && audio_decode[0] != '0' && handle && data &&
         bytes >= 12 && bytes < 64u * 1024u * 1024u &&
         vm_read32(data) == 0x52494646u && vm_read32(data + 8) == 0x57415645u) {
         const uint32_t buffer = static_cast<uint32_t>(ctx->gpr[6]);

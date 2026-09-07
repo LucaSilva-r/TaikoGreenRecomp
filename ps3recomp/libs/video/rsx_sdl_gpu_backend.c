@@ -3657,9 +3657,10 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
      * preserves asynchronous execution while making the transfer-to-graphics
      * dependency explicit. Other drivers retain the single-submit path. */
     const int upload_idle = getenv("TAIKO_GPU_UPLOAD_IDLE") != NULL;
-    const int upload_fence_wait =
-        getenv("TAIKO_GPU_UPLOAD_FENCE_WAIT") != NULL;
-    if ((getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT") || upload_idle ||
+    const char* separate_upload = getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT");
+    const char* upload_fence = getenv("TAIKO_GPU_UPLOAD_FENCE_WAIT");
+    const int upload_fence_wait = upload_fence && upload_fence[0] != '0';
+    if (((separate_upload && separate_upload[0] != '0') || upload_idle ||
          upload_fence_wait) &&
         (vertex_constants || vertices || fps_overlay_uploaded)) {
         if ((upload_fence_wait && !upload_idle
@@ -4897,12 +4898,15 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     /* Driving KMS ourselves means there is no compositor to give us a window,
      * and no swapchain: frames go from the display target to a scanout buffer.
      * See rsx_kms_present.h for why the Pi needs this. */
-    s_sdl.kms_present = getenv("TAIKO_KMS_PRESENT") != NULL;
+    const char* kms_present = getenv("TAIKO_KMS_PRESENT");
+    const char* kms_zero_copy = getenv("TAIKO_KMS_ZERO_COPY");
+    s_sdl.kms_present = kms_present && kms_present[0] != '0';
     s_sdl.kms_zero_copy = s_sdl.kms_present &&
-        getenv("TAIKO_KMS_ZERO_COPY") != NULL;
+        kms_zero_copy && kms_zero_copy[0] != '0';
 #endif
     SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (getenv("TAIKO_FULLSCREEN")) window_flags |= SDL_WINDOW_FULLSCREEN;
+    const char* fullscreen = getenv("TAIKO_FULLSCREEN");
+    if (fullscreen && fullscreen[0] != '0') window_flags |= SDL_WINDOW_FULLSCREEN;
     if (!s_sdl.kms_present) {
         s_sdl.window = SDL_CreateWindow(s_sdl.base_title,
                                         SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
@@ -4910,7 +4914,8 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
         if (!s_sdl.window) goto fail;
         (void)SDL_StartTextInput(s_sdl.window);
     }
-    if (getenv("TAIKO_HIDE_CURSOR")) SDL_HideCursor();
+    const char* hide_cursor = getenv("TAIKO_HIDE_CURSOR");
+    if (hide_cursor && hide_cursor[0] != '0') SDL_HideCursor();
     const char* requested_driver = getenv("TAIKO_GPU_DRIVER");
     if (requested_driver && !requested_driver[0]) requested_driver = NULL;
     const SDL_GPUShaderFormat shader_formats =
