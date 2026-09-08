@@ -199,6 +199,12 @@ void prepare_match(const taiko_plus::MatchConfig& match)
     vm_write32(kScratch, index);
     vm_write32(kScratch + 4, kScratch + 0x10);
     vm_write32(kScratch + 8, kScratch + 0x40);
+    // Each browser launch is a fresh one-song round. Keeping the cabinet's
+    // multi-song limit enables the failed-song revival drum challenge before
+    // Results, where our return-to-browser hook cannot intercept it. Reset the
+    // round counter too: this manager survives every Results/browser cycle.
+    vm_write32(manager + 0x408, 0);
+    vm_write32(manager + 0x40c, 1);
     native(0x007fce6c, kScratch, manager);
     s_launch_generation = match.generation;
     s_preload_frames = 0;

@@ -56,6 +56,8 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code,uint32_t toc,uint64_t a,uint
     case 0x717aec: CHECK(a==manager+0x430 && (b==p1 || b==p2)); return 0;
     case 0x7fce6c:
         CHECK(b==manager && vm_read32(a)==0);
+        CHECK(vm_read32(manager+0x408)==0);
+        CHECK(vm_read32(manager+0x40c)==1);
         for (unsigned slot=0; slot<2; ++slot) {
             const uint32_t course=vm_read32(a+4+slot*4);
             const bool enabled=(expected_mask & (1u << slot))!=0;
@@ -99,6 +101,7 @@ int main() {
 #endif
     vm_write32(owner,0xf9ae70); vm_write32(setup,0xf8bae8);
     vm_write32(setup+4,manager);
+    vm_write32(manager+0x408,0); vm_write32(manager+0x40c,3);
     vm_write32(manager+0x370,0x80000); vm_write32(manager+0x374,1);
     vm_write32(manager+0x434,0x90000); vm_write32(manager+0x438,0x90090);
     vm_write32(0x90014,4); vm_write32(0x90018,15);
@@ -114,6 +117,7 @@ int main() {
     auto bad=match(); bad.content.music_id="missing";
     CHECK(runtime.enqueue_launch(bad)); CHECK(taiko_pc_mode_setup_tick(&ctx));
     CHECK(failures==1 && commits==0 && runtime.state()==taiko_plus::State::Browser);
+    CHECK(vm_read32(manager+0x40c)==3); // Rejected launches leave session rules intact.
     CHECK(runtime.enqueue_launch(match()));
     for (unsigned i=0;i<150;++i) CHECK(taiko_pc_mode_setup_tick(&ctx));
     CHECK(commits==1 && !gameplay); // Cannot launch merely because 120 frames elapsed.
@@ -147,6 +151,7 @@ int main() {
     CHECK(removals==1 && menus==2);
     CHECK(vm_read32(manager+0x438)==0x90090);
     // A second match reuses the same native session beyond the first Results.
+    vm_write32(manager+0x408,1); // Native Results has advanced the round counter.
     CHECK(runtime.enqueue_launch(match()));
     ready=true;
     for (unsigned i=0;i<122;++i) taiko_pc_mode_setup_tick(&ctx);

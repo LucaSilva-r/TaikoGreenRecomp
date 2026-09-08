@@ -4,6 +4,16 @@ This is the implementation record for replacing Green's normal
 `GameSongSelect` scene with a host-owned Taiko+ runtime while retaining stock
 GameEnso gameplay and first-pass Results.
 
+Each standalone browser launch now resets the session's played counter
+(`manager + 0x408`) to zero and song limit (`+0x40c`) to one before native
+selection commit. This treats each match as a one-song round, avoiding the
+multi-song failed-round revival drum challenge before Results. The existing
+Results adapter still returns to the browser for unlimited subsequent matches.
+The override changes only the active host session, not saved cabinet settings.
+Regression coverage checks an initial three-song session, rejected content,
+and a repeated launch after the played counter advances. Native build and
+adapter tests pass; failed-song gameplay still needs live validation.
+
 ## Safety boundary
 
 SDL, input, audio, decoder, and future network threads exchange pointer-free
