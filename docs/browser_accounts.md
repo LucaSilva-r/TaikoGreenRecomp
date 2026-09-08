@@ -1,8 +1,8 @@
 # Browser account integration (in progress)
 
 The browser left column has only a Song Select heading, with P1 and P2 cards
-stacked at the bottom, P1 above P2. Space above is reserved for per-player settings;
-the lower portion of each card is reserved for native costume rendering. Account names are copied from the native session map when PC mode starts;
+stacked directly below it, P1 above P2. Each card reserves space internally for
+per-player settings and native costume rendering. Account names are copied from the native session map when PC mode starts;
 the UI never retains guest pointers. Joining and account identity remain separate.
 The existing difficulty selection stays per player. Browser card scanning,
 logout, and replacement are not connected yet.

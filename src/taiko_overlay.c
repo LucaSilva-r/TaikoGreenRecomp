@@ -702,7 +702,7 @@ static void render_host(void)
         fill_rect(570, y, g_width, y + 1, RGB_COLOUR(0x1D, 0x2A, 0x3A));
 
     draw_text_left_fit("SONG SELECT", 39, 490, 34, 49);
-    /* The space below the heading belongs to per-player settings. */
+    /* Player panels fill the column below the heading. */
 
     fill_rounded_rect(625, 24, 1248, 91, 12,
                       g_song_search_active
@@ -810,15 +810,15 @@ static void render_host(void)
 
     if (g_browser_players_enabled) {
         static const char* courses[] = {"EASY", "NORMAL", "HARD", "ONI", "URA"};
-        /* Settings occupy the space above the stacked player cards.
-         * Each card retains room for its native costume render. */
+        /* Keep avatar and future settings space within each player panel,
+         * rather than reserving an empty area above both players. */
         for (unsigned slot = 0; slot < 2; ++slot) {
             const int left = 28;
-            const int top = 315 + (int)slot * 164;
+            const int top = 100 + (int)slot * 272;
             const int joined = (g_browser_joined & (1u << slot)) != 0;
             const uint32_t colour = slot ? RGB_COLOUR(0x32, 0x80, 0xAC)
                                          : RGB_COLOUR(0xB6, 0x46, 0x55);
-            fill_rounded_rect(left, top, left + 509, top + 148, 12,
+            fill_rounded_rect(left, top, left + 509, top + 256, 12,
                               RGB_COLOUR(0x29, 0x39, 0x49));
             fill_rounded_rect(left + 14, top + 14, left + 63, top + 57, 9, colour);
             char badge[8];
