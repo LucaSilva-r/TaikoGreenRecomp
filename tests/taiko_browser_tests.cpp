@@ -1,4 +1,5 @@
 #include "taiko_frontend.h"
+#include "taiko_browser_accounts.h"
 #include "taiko_catalog.h"
 #include "taiko_host_audio.h"
 #include "taiko_host_input.h"
@@ -55,6 +56,7 @@ extern "C" void taiko_overlay_show_song_browser(const char*, const char*, const 
     assert(count <= TAIKO_OVERLAY_SONG_ROW_COUNT);
 }
 extern "C" void taiko_overlay_set_browser_players(int, uint8_t j, uint8_t r, const uint8_t*) { joined = j; ready = r; }
+extern "C" void taiko_overlay_set_browser_account(unsigned, const char*, int) {}
 extern "C" void taiko_overlay_show_song_select(const char*) {}
 extern "C" void taiko_overlay_hide_host_screen() {}
 extern "C" void taiko_overlay_animate_browser(int) {}
@@ -82,7 +84,37 @@ static void drum(unsigned player, uint32_t action) {
                         ? TaikoPlusSfx::Move : TaikoPlusSfx::Confirm));
 }
 
+static void account_transactions() {
+    using namespace taiko_plus;
+    BrowserAccounts accounts;
+    accounts.players[0] = {"Original", true};
+    const auto cancelled = accounts.begin();
+    assert(accounts.card_ready(cancelled));
+    assert(!accounts.assign(2));
+    assert(accounts.assign(0));
+    accounts.cancel();
+    assert(!accounts.complete(cancelled, {"Late reply", true}));
+    assert(accounts.players[0].name == "Original");
+    const auto failed = accounts.begin();
+    assert(accounts.card_ready(failed));
+    assert(accounts.assign(0));
+    accounts.fail(failed, "Network unavailable");
+    assert(accounts.players[0].name == "Original");
+    assert(!accounts.complete(failed, {"Late reply", true}));
+    const auto success = accounts.begin();
+    assert(!accounts.card_ready(failed));
+    assert(accounts.card_ready(success));
+    assert(accounts.assign(1));
+    assert(!accounts.complete(success, {"Incomplete", false}));
+    assert(accounts.complete(success, {"Second player", true}));
+    accounts.fail(success, "Late error");
+    assert(accounts.phase == AccountPhase::Idle);
+    assert(accounts.players[0].name == "Original");
+    assert(accounts.players[1].name == "Second player");
+}
+
 int main() {
+    account_transactions();
     for (unsigned i = 0; i < 12; ++i) {
         TaikoCatalogSong song;
         song.music_id = "fixture" + std::to_string(i);

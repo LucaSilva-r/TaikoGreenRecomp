@@ -20,6 +20,7 @@
 #include "taiko_overlay.h"
 #include "taiko_plus_runtime.h"
 #include "taiko_browser_players.h"
+#include "taiko_browser_accounts.h"
 
 #include <algorithm>
 #include <array>
@@ -113,6 +114,7 @@ std::atomic<unsigned> g_song_selection{0};
 std::atomic<unsigned> g_song_difficulty{TAIKO_DIFFICULTY_ONI};
 std::recursive_mutex g_browser_action_lock;
 taiko_plus::BrowserPlayers g_browser_players;
+taiko_plus::BrowserAccounts g_browser_accounts;
 unsigned g_player_song_index = ~0u;
 std::atomic<bool> g_song_launch_requested{false};
 std::atomic<bool> g_song_search_active{false};
@@ -1520,5 +1522,16 @@ extern "C" void taiko_frontend_standalone_session_begin(void)
 {
     std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     g_browser_players = {};
+    g_browser_accounts = {};
+    for (unsigned slot = 0; slot < 2; ++slot)
+        taiko_overlay_set_browser_account(slot, "", 0);
     g_player_song_index = ~0u;
+}
+
+extern "C" void taiko_frontend_browser_account(unsigned slot, const char* name, int authenticated)
+{
+    if (slot > 1) return;
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    g_browser_accounts.players[slot] = {name ? name : "", authenticated != 0};
+    taiko_overlay_set_browser_account(slot, name, authenticated);
 }

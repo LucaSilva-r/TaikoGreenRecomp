@@ -428,6 +428,24 @@ void taiko_pc_mode_activate(uint32_t controller)
     s_pc_mode_active.store(true, std::memory_order_release);
     taiko_plus::runtime().activate();
     taiko_frontend_standalone_session_begin();
+    if (s_lifetime_probe_manager) {
+        const uint32_t map = s_lifetime_probe_manager + 0x370;
+        const uint32_t begin = vm_read32(map), count = vm_read32(map + 4);
+        if (begin && count <= 2) for (unsigned i = 0; i < count; ++i) {
+            const uint32_t record = begin + i * 0x7a8;
+            const unsigned slot = vm_read32(record);
+            if (slot > 1) continue;
+            const bool authenticated = vm_read8(record + 0x395) != 0;
+            const uint32_t profile = record + 8;
+            const uint32_t length = vm_read32(profile + 0x14);
+            const uint32_t capacity = vm_read32(profile + 0x18);
+            const uint32_t data = capacity <= 15 ? profile + 4 : vm_read32(profile + 4);
+            char name[128] = {};
+            if (authenticated && data && length < sizeof name && length <= capacity)
+                for (unsigned n = 0; n < length; ++n) name[n] = vm_read8(data + n);
+            taiko_frontend_browser_account(slot, name, authenticated);
+        }
+    }
     if (taiko_pc_mode_is_standalone())
         taiko_host_audio_set_scene_active(true);
     std::fprintf(stderr,

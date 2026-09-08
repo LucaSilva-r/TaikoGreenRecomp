@@ -55,6 +55,8 @@ int taiko_frontend_browser_captures_text(void)
 
 /* Enter and display the host song select browser shell */
 void taiko_frontend_enter_song_select_shell(void);
+/* Value-only account snapshot, published by the PPU thread. */
+void taiko_frontend_browser_account(unsigned slot, const char* name, int authenticated);
 
 /* Called at the verified Player Entry dispatcher boundary on the main PPU
  * thread. Host/UI threads only enqueue intent; all guest calls happen here. */

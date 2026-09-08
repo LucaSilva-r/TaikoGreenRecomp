@@ -45,6 +45,7 @@ extern "C" void taiko_overlay_clear() {}
 extern "C" void taiko_frontend_enter_song_select_shell() { ++menus; }
 extern "C" void taiko_frontend_standalone_failure(const char*) { ++failures; }
 extern "C" void taiko_frontend_standalone_session_begin() {}
+extern "C" void taiko_frontend_browser_account(unsigned, const char*, int) {}
 extern "C" void taiko_frontend_standalone_gameplay() { gameplay=true; }
 void taiko_host_audio_set_scene_active(bool) {}
 static float group_gains[68]{};

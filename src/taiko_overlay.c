@@ -81,6 +81,8 @@ static uint8_t  g_song_difficulty_mask;
 static int g_browser_players_enabled;
 static uint8_t g_browser_joined, g_browser_ready;
 static uint8_t g_browser_difficulties[2];
+static char g_browser_account_names[2][128];
+static uint8_t g_browser_authenticated;
 static int      g_song_search_active;
 static int      g_song_browser_level;
 static int      g_song_selection_is_exit;
@@ -699,21 +701,8 @@ static void render_host(void)
     for (int y = 0; y < 660; y += 80)
         fill_rect(570, y, g_width, y + 1, RGB_COLOUR(0x1D, 0x2A, 0x3A));
 
-    draw_text_left_fit(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
-                           ? "CATEGORY SELECT" : "SONG SELECT",
-                       39, 440, 34, 49);
-    draw_text_left_fit("TAIKO GREEN / HOST LIBRARY", 17, 480, 35, 82);
-    char category[112];
-    if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES)
-        snprintf(category, sizeof(category), "CHOOSE A GENRE FOLDER");
-    else if (!g_song_category_total)
-        snprintf(category, sizeof(category), "[ SEARCH RESULTS ]");
-    else
-        snprintf(category, sizeof(category), "[ %s ]  FOLDER %u/%u",
-                 g_song_category[0] ? g_song_category : "SONGS",
-                 g_song_category_index + 1, g_song_category_total);
-    draw_text_left_fit(category, 17, 370, 35, 108);
-    draw_text_right(g_player_name, 13, 535, 108);
+    draw_text_left_fit("SONG SELECT", 39, 490, 34, 49);
+    /* The space below the heading belongs to per-player settings. */
 
     fill_rounded_rect(625, 24, 1248, 91, 12,
                       g_song_search_active
@@ -755,71 +744,6 @@ static void render_host(void)
         draw_text_at("NO MATCHES", 43, 910, 313);
         draw_text_at("BACKSPACE TO EDIT OR ESC TO CLEAR", 22, 910, 369);
     } else {
-        fill_rounded_rect(28, 125, 537, 379, 14,
-                          RGB_COLOUR(0x23, 0x37, 0x4B));
-        fill_rect(28, 125, 36, 379,
-                  genre_colour(g_song_browser_level ==
-                                       TAIKO_OVERLAY_BROWSER_CATEGORIES
-                                   ? g_song_title : g_song_genre));
-        if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES) {
-            draw_text_left_fit(g_song_title, 47, 445, 57, 205);
-            char folder_count[80];
-            snprintf(folder_count, sizeof(folder_count), "%u SONGS",
-                     g_song_unique_id);
-            draw_text_left_fit(folder_count, 26, 450, 57, 292);
-            draw_text_left_fit("ENTER OR RIGHT CENTRE  OPEN", 19, 490,
-                               34, 455);
-            draw_text_left_fit("RIM / WHEEL  CHOOSE CATEGORY", 17, 490,
-                               34, 495);
-        } else if (g_song_selection_is_exit) {
-            draw_text_left_fit(g_song_genre, 21, 450, 57, 160);
-            draw_text_left_fit("BACK TO CATEGORIES", 39, 445, 57, 225);
-            draw_text_left_fit("RETURN TO THE FOLDER LIST", 21, 450,
-                               57, 303);
-            draw_text_left_fit("ENTER OR RIGHT CENTRE  EXIT", 19, 490,
-                               34, 455);
-        } else {
-            draw_text_left_fit(g_song_genre[0] ? g_song_genre : "OTHER", 21,
-                               450, 57, 160);
-            draw_text_left_fit(g_song_title, 41, 445, 57, 225);
-
-            char identity[160];
-            snprintf(identity, sizeof(identity), "ID  %s     UNIQUE  %u",
-                     g_song_id, g_song_unique_id);
-            draw_text_left_fit(identity, 19, 450, 57, 303);
-            char position[80];
-            snprintf(position, sizeof(position), "SONG %u OF %u",
-                     g_song_index + 1, g_song_match_total);
-            draw_text_left_fit(position, 19, 450, 57, 345);
-
-            draw_text_left_fit(expanded ? "RIMS / UP / DOWN  CHOOSE CHART"
-                                        : "RIMS / UP / DOWN  CHOOSE SONG", 18, 500, 34, 415);
-            draw_text_left_fit(expanded ? "RIGHT CENTRE / ENTER  READY"
-                                        : "RIGHT CENTRE / ENTER  OPEN SONG", 18, 500, 34, 451);
-            draw_text_left_fit(expanded ? "LEFT CENTRE / ESC  CLOSE SONG"
-                                        : "LEFT CENTRE / ESC  CATEGORIES", 17, 500, 34, 487);
-
-        }
-
-        if (g_browser_players_enabled) {
-            const int songs = g_song_browser_level == TAIKO_OVERLAY_BROWSER_SONGS &&
-                              !g_song_selection_is_exit;
-            for (unsigned slot = 0; slot < 2; ++slot) {
-                const int top = 520 + (int)slot * 64;
-                const int joined = (g_browser_joined & (1u << slot)) != 0;
-                const uint32_t colour = slot ? RGB_COLOUR(0x32, 0x80, 0xAC)
-                                             : RGB_COLOUR(0xB6, 0x46, 0x55);
-                fill_rounded_rect(28, top, 537, top + 57, 9,
-                    joined ? colour : RGB_COLOUR(0x29, 0x39, 0x49));
-                char line[112];
-                snprintf(line, sizeof line, "P%u  %s", slot + 1,
-                    !joined ? "HIT DRUM TO JOIN" : "JOINED");
-                draw_text_left_fit(line, 22, 345, 43, top + 27);
-                if (joined && songs && expanded)
-                    draw_text_right((g_browser_ready & (1u << slot)) ? "READY" : "CHOOSE", 17, 523, top + 28);
-            }
-        }
-
         const int first_y = 111;
         const int row_step = 59;
         for (unsigned row = 0; row < g_song_row_count; ++row) {
@@ -881,6 +805,38 @@ static void render_host(void)
                 snprintf(number, sizeof(number), "%03u",
                          item->catalog_index + 1);
             draw_text_right(number, 17, 1231, top + 27);
+        }
+    }
+
+    if (g_browser_players_enabled) {
+        static const char* courses[] = {"EASY", "NORMAL", "HARD", "ONI", "URA"};
+        /* Settings occupy the space above the stacked player cards.
+         * Each card retains room for its native costume render. */
+        for (unsigned slot = 0; slot < 2; ++slot) {
+            const int left = 28;
+            const int top = 315 + (int)slot * 164;
+            const int joined = (g_browser_joined & (1u << slot)) != 0;
+            const uint32_t colour = slot ? RGB_COLOUR(0x32, 0x80, 0xAC)
+                                         : RGB_COLOUR(0xB6, 0x46, 0x55);
+            fill_rounded_rect(left, top, left + 509, top + 148, 12,
+                              RGB_COLOUR(0x29, 0x39, 0x49));
+            fill_rounded_rect(left + 14, top + 14, left + 63, top + 57, 9, colour);
+            char badge[8];
+            snprintf(badge, sizeof badge, "P%u", slot + 1);
+            draw_text_at(badge, 22, left + 38, top + 36);
+            draw_text_left_fit((g_browser_authenticated & (1u << slot))
+                                   ? g_browser_account_names[slot]
+                                   : joined ? "GUEST" : "NOT JOINED",
+                               21, 414, left + 77, top + 36);
+            if (joined) {
+                const unsigned course = g_browser_difficulties[slot];
+                draw_text_left_fit(course < 5 ? courses[course] : "CHOOSE CHART",
+                                   17, 130, left + 16, top + 82);
+                if (g_browser_ready & (1u << slot))
+                    draw_text_right("READY", 15, left + 493, top + 82);
+            } else {
+                draw_text_left_fit("HIT DRUM TO JOIN", 16, 216, left + 15, top + 82);
+            }
         }
     }
 
@@ -1121,6 +1077,19 @@ void taiko_overlay_show_song_select(const char* player_name)
     g_visible = 1;
     g_deadline = 0;
     g_drawn_remaining = -1;
+    ++g_version;
+    pthread_mutex_unlock(&g_lock);
+    wake_renderer();
+}
+
+void taiko_overlay_set_browser_account(unsigned slot, const char* name, int authenticated)
+{
+    if (slot > 1) return;
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_browser_account_names[slot], sizeof g_browser_account_names[slot],
+             "%s", name && name[0] ? name : "BanaPassport player");
+    if (authenticated) g_browser_authenticated |= 1u << slot;
+    else g_browser_authenticated &= ~(1u << slot);
     ++g_version;
     pthread_mutex_unlock(&g_lock);
     wake_renderer();

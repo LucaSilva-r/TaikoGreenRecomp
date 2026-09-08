@@ -63,6 +63,9 @@ int main(int argc, char** argv)
          TAIKO_OVERLAY_ROW_EXIT},
     };
 
+    const uint8_t difficulties[2] = {3, 2};
+    taiko_overlay_set_browser_players(1, 3, 1, difficulties);
+    taiko_overlay_set_browser_account(0, "Player One", 1);
     taiko_overlay_show_song_browser(
         "ANONYMOUS - OFFLINE", "mikugv", "World is Mine", "VOCALOID",
         875, 14, 37, 853, "VOCALOID", 2, 9, "ONI", 0x1f, "miku", 1,
