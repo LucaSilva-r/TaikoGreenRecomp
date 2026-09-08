@@ -8,6 +8,7 @@
  */
 
 #include "ppu_recomp.h"
+#include "taiko_animation_scale.h"
 
 #include <ps3emu/host_platform.h>
 
@@ -62,6 +63,16 @@ constexpr uint64_t kFaceSyncMinimumNs[5] = {
 constexpr float kAnimationScaleMax = 4.0f;
 
 extern "C" int ps3_frame_boot_fast_is_done(void);
+
+unsigned animation_vblank_hz()
+{
+    static const unsigned hz = [] {
+        const char* value = std::getenv("TAIKO_VBLANK_HZ");
+        const unsigned parsed = value ? (unsigned)std::strtoul(value, nullptr, 10) : 0u;
+        return parsed ? parsed : 60u;
+    }();
+    return hz;
+}
 
 bool animation_timing_enabled()
 {
@@ -292,7 +303,12 @@ extern "C" void taiko_project_flip_command()
     if (previous && now > previous) {
         const uint64_t delta = now - previous;
         if (delta < kAnimationTimingGapNs) {
-            scale = static_cast<float>(delta) * 0.00000006f;
+            /* Snap to whole vblank periods first: the flip command's own
+             * scheduling jitter is a quarter of a frame at 240 Hz and made
+             * scrolling notes shimmer even with presentation vsync locked. */
+            scale = taiko_animation_snap_scale(delta, animation_vblank_hz());
+            if (scale <= 0.0f)
+                scale = static_cast<float>(delta) * 0.00000006f;
             if (scale > kAnimationScaleMax)
                 scale = kAnimationScaleMax;
         }

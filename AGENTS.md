@@ -578,6 +578,28 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   short window: bnusCore buffers ahead, so the first checkpoint always shows a
   slow apparent rate that is really the constant prefill lead. Take
   segment-to-segment rates.
+- **High play-rate stutter is repaired** (2026-09-08; live validated at
+  `vblank_hz = 240` on a 240 Hz display). Gameplay dropped to 210-230 FPS and
+  notes visibly jumped while presentation itself was perfect: submit p50 4.17
+  ms, queue 0.08 ms, no `[SDL_GPU-STALL]`. Two independent causes, both of them
+  invisible at 60 Hz because they scale with the frame period:
+  - The recorder fingerprints each guest texture's source bytes once per batch.
+    That cost is per frame, not per second: gameplay hashed 14.2 MiB/frame and
+    spent 2.22 ms of the 4.17 ms budget on it, leaving the producer thread at
+    79% duty so any spike missed a vblank. Revalidation is now rate limited to
+    one check per texture per 16 ms -- the cadence the title actually authors
+    content at -- which cut hashing to 3.8 MiB and 0.65 ms/frame.
+    `TAIKO_RSX_TEXTURE_REVALIDATE_MS=0` restores per-batch fingerprinting; the
+    ceiling is one authored 60 Hz tick of staleness for a CPU-written texture.
+  - `taiko_project_flip_command` derived the animation scale from the raw
+    interval between guest flip commands. That carries about a millisecond of
+    thread scheduling jitter, which is a few percent of a 60 Hz frame but a
+    quarter of a 240 Hz one (measured `scale=0.202..0.298` against a nominal
+    0.250). The interval is now snapped to whole vblank periods --
+    `taiko_animation_snap_scale` in `src/taiko_animation_scale.h`, one period
+    normally and two for a genuinely dropped frame, raw ratio as the fallback
+    -- and the trace reads exactly 0.250/0.500.
+
 - **Don3D and Lumen animation timing is frame-rate independent**
   (2026-08-27; Pi live validated for Don3D/ordinary Lumen, desktop live
   validated for note faces). `TAIKO_ANIMATION_TIMING=1` measures elapsed guest

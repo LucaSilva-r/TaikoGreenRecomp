@@ -25,6 +25,7 @@ typedef struct recorder_texture_cache_entry {
     rsx_texture_source source;
     u64 source_hash;
     u64 validated_serial;
+    u64 validated_ns;
     u64 last_used_serial;
 } recorder_texture_cache_entry;
 
@@ -587,7 +588,34 @@ static int snapshot_texture_cached(rsx_texture_source* out,
         break;
     }
 
+    /* Guest textures are revalidated by fingerprinting their source bytes,
+     * which costs the same per frame however fast frames are produced: a
+     * 240 Hz play rate hashed 14 MiB per frame and spent 2.2 ms of a 4.2 ms
+     * budget on it, which is what dropped frames during gameplay.  The title
+     * authors its content at 60 Hz, so revalidating at that cadence is enough
+     * to see every change it makes.
+     * ponytail: ceiling is one authored 60 Hz tick of staleness for a
+     * CPU-written texture; set TAIKO_RSX_TEXTURE_REVALIDATE_MS=0 to
+     * fingerprint every batch again. */
+    static u64 revalidate_ns = UINT64_MAX;
+    if (revalidate_ns == UINT64_MAX) {
+        const char* text = getenv("TAIKO_RSX_TEXTURE_REVALIDATE_MS");
+        revalidate_ns = text ? (u64)strtoull(text, NULL, 10) * 1000000ull
+                             : 16000000ull;
+    }
+    const u64 now_ns = revalidate_ns ? ps3_host_monotonic_ns() : 0;
+
     u64 source_hash = 0, hash_bytes = 0;
+    if (match && revalidate_ns && match->validated_ns &&
+        now_ns - match->validated_ns < revalidate_ns) {
+        ++s_recorder.prof_texture_hits;
+        match->last_used_serial = s_recorder.batch.serial;
+        match->validated_serial = s_recorder.batch.serial;
+        *out = match->source;
+        memset(&out->payload, 0, sizeof(out->payload));
+        return rsx_owned_blob_share(&out->payload, &match->source.payload) == 0
+            ? 1 : -1;
+    }
     if (match && match->validated_serial == s_recorder.batch.serial) {
         ++s_recorder.prof_texture_hits;
         match->last_used_serial = s_recorder.batch.serial;
@@ -604,6 +632,7 @@ static int snapshot_texture_cached(rsx_texture_source* out,
     if (match && cacheable && match->source_hash == source_hash) {
         ++s_recorder.prof_texture_hits;
         match->validated_serial = s_recorder.batch.serial;
+        match->validated_ns = now_ns;
         match->last_used_serial = s_recorder.batch.serial;
         *out = match->source;
         memset(&out->payload, 0, sizeof(out->payload));
@@ -638,6 +667,7 @@ static int snapshot_texture_cached(rsx_texture_source* out,
         entry->source = *out;
         entry->source_hash = source_hash;
         entry->validated_serial = s_recorder.batch.serial;
+        entry->validated_ns = now_ns;
         entry->last_used_serial = s_recorder.batch.serial;
         memset(&entry->source.payload, 0, sizeof(entry->source.payload));
         if (rsx_owned_blob_share(&entry->source.payload, &out->payload) != 0) {

@@ -951,6 +951,11 @@ if(BUILD_TESTING AND NOT WIN32)
     endif()
     add_test(NAME taiko_audio_decoder_tests COMMAND taiko_audio_decoder_tests)
 
+    add_executable(taiko_animation_scale_tests "tests/taiko_animation_scale_tests.c")
+    target_include_directories(taiko_animation_scale_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_animation_scale_tests COMMAND taiko_animation_scale_tests)
+
     add_executable(taiko_overlay_cache_tests "tests/taiko_overlay_cache_tests.c")
     target_include_directories(taiko_overlay_cache_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
