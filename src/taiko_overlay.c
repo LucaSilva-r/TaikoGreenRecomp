@@ -69,6 +69,7 @@ static char     g_song_title[256];
 static char     g_song_genre[128];
 static char     g_song_difficulty[32];
 static char     g_song_query[128];
+static char     g_browser_save_status[96];
 static uint32_t g_song_unique_id;
 static unsigned g_song_index;
 static unsigned g_song_match_total;
@@ -886,7 +887,8 @@ static void render_host(void)
     fill_rect(0, 660, g_width, g_height, RGB_COLOUR(0x0B, 0x11, 0x1B));
     draw_text_left_fit(expanded ? "RIM / WHEEL  CHOOSE CHART" : "RIM / WHEEL  BROWSE",
                        18, 290, 30, 690);
-    draw_text_at(g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
+    draw_text_at(g_browser_save_status[0] ? g_browser_save_status :
+                 g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES
                      ? "ENTER  OPEN FOLDER"
                      : expanded ? "P1 RED / P2 BLUE   CHOOSE YOUR CHART"
                                 : "UP/DOWN  BROWSE     PAGEUP/DOWN  SKIP",
@@ -1045,6 +1047,18 @@ void taiko_overlay_set_status(const char* text, int expires_in)
     g_visible = g_status[0] != '\0';
     g_mode = 2;
     g_drawn_remaining = -1;
+    pthread_mutex_unlock(&g_lock);
+    wake_renderer();
+}
+
+void taiko_overlay_set_browser_save_status(const char* text)
+{
+    pthread_mutex_lock(&g_lock);
+    if (strcmp(g_browser_save_status, text ? text : "") != 0) {
+        snprintf(g_browser_save_status, sizeof(g_browser_save_status), "%s",
+                 text ? text : "");
+        g_drawn_remaining = -1;
+    }
     pthread_mutex_unlock(&g_lock);
     wake_renderer();
 }

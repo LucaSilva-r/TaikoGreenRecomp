@@ -177,9 +177,33 @@
    "symbol": "taiko_pc_mode_setup_tick",
    "text": "extern \"C\" int taiko_pc_mode_setup_tick(ppu_context* ctx);",
    "function": "func_000E4608"
+  },
+  {
+   "symbol": "taiko_pc_mode_score_player",
+   "text": "extern \"C\" int taiko_pc_mode_score_player(uint32_t player);",
+   "function": "func_0012EE34"
+  },
+  {
+   "symbol": "taiko_pc_mode_score_enqueued",
+   "text": "extern \"C\" void taiko_pc_mode_score_enqueued(uint32_t success);",
+   "function": "func_0012EE34"
   }
  ],
  "functions": {
+  "func_0012EE34": [
+   {
+    "anchor": "loc_0012F1E8:",
+    "lines": [
+     "        if (!taiko_pc_mode_score_player((uint32_t)vm_read64((uint32_t)ctx->gpr[1] + 0x620))) goto loc_001313E4;"
+    ]
+   },
+   {
+    "anchor": "        ctx->lr = 0x0013139C; func_005C43FC(ctx); DRAIN_TRAMPOLINE(ctx);",
+    "lines": [
+     "        taiko_pc_mode_score_enqueued((uint32_t)ctx->gpr[3]);"
+    ]
+   }
+  ],
   "func_00238AF0": [
    {
     "anchor": "        ctx->gpr[9] = vm_read32(((11) ? ctx->gpr[11] : 0) + 0x38);",

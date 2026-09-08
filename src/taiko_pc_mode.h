@@ -48,6 +48,10 @@ int taiko_pc_mode_results_return(uint32_t results, uint32_t owner);
 int taiko_pc_mode_setup_tick(struct ppu_context* ctx);
 int taiko_pc_mode_setup_complete(uint32_t setup, uint32_t owner);
 
+/* Narrow native result-builder hooks; inactive for normal arcade saving. */
+int taiko_pc_mode_score_player(uint32_t player);
+void taiko_pc_mode_score_enqueued(uint32_t success);
+
 /* Main PPU tick hook to handle song launch while PC mode is active. */
 void taiko_pc_mode_tick(struct ppu_context* ctx);
 

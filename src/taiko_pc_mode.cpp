@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 
 extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
                                         uint64_t a0, uint64_t a1,
@@ -66,11 +67,89 @@ unsigned s_preload_frames = 0;
 unsigned s_ready_frames = 0;
 bool s_transition_started = false;
 bool s_preloading = false;
+thread_local bool s_score_building = false;
+bool s_score_pending = false;
+bool s_score_delivery = false;
+uint8_t s_round_mask = 0, s_score_wanted = 0, s_score_queued = 0;
+thread_local uint8_t s_score_current = 0;
+uint64_t s_score_generation = 0;
+std::chrono::steady_clock::time_point s_score_retry{};
 
 uint32_t native(uint32_t code, uint32_t a = 0, uint32_t b = 0,
                 uint32_t c = 0)
 {
     return static_cast<uint32_t>(ppu_guest_call_ct(code, kToc, a, b, c, 0));
+}
+
+// This singleton owns serialized copies and persists them to playresultinfo.
+uint32_t score_queue()
+{
+    return vm_read32(0x010399d0u);
+}
+
+void service_score_save()
+{
+    const uint32_t queue = score_queue();
+    if (s_score_delivery && queue && vm_read32(queue + 0x18) == 0) {
+        s_score_delivery = false;
+        if (!s_score_pending)
+            taiko_overlay_set_browser_save_status("Scores saved");
+        std::fprintf(stderr, "[taiko_plus_save] native delivery queue drained\n");
+    }
+    if (!s_score_pending || s_score_building || !queue) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < s_score_retry) return;
+    s_score_retry = now + std::chrono::seconds(1);
+    const uint32_t begin = vm_read32(queue + 8), end = vm_read32(queue + 12);
+    const uint32_t count = vm_read32(queue + 0x18);
+    const unsigned missing = ((s_score_wanted & ~s_score_queued) & 1u) +
+                             (((s_score_wanted & ~s_score_queued) >> 1) & 1u);
+    if (!begin || end < begin || (end - begin) % 0x7fc ||
+        count > (end - begin) / 0x7fc ||
+        missing > (end - begin) / 0x7fc - count) {
+        taiko_overlay_set_browser_save_status("Save queue full - waiting to send");
+        return;
+    }
+    s_score_building = true;
+    // Owns its stack objects, formats the current timestamp, serializes and
+    // queues each player. No reward/shop/GameOver scene is constructed.
+    ppu_guest_call_ct(0x0012ee34, 0x01027c58,
+                      s_lifetime_probe_manager, 0, 0, 0);
+    s_score_building = false;
+    if (s_score_queued == s_score_wanted) {
+        s_score_pending = false;
+        s_score_delivery = true;
+        taiko_overlay_set_browser_save_status("Saving scores...");
+        std::fprintf(stderr, "[taiko_plus_save] round=%llu queued mask=%u\n",
+            static_cast<unsigned long long>(s_score_generation), s_score_queued);
+    } else {
+        taiko_overlay_set_browser_save_status("Could not queue score - retrying");
+    }
+}
+
+void finish_score_round()
+{
+    if (s_score_generation == s_launch_generation) return;
+    s_score_generation = s_launch_generation;
+    s_score_wanted = s_score_queued = 0;
+    const uint32_t map = s_lifetime_probe_manager + 0x370;
+    const uint32_t entries = vm_read32(map), count = vm_read32(map + 4);
+    if (!entries || count > 2) return;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t entry = entries + i * 0x7a8;
+        const uint32_t slot = vm_read32(entry);
+        if (slot < 2 && (s_round_mask & (1u << slot)) &&
+            vm_read8(entry + 0x395) && vm_read32(entry + 0x40) &&
+            vm_read32(entry + 0x668) == 1)
+            s_score_wanted |= 1u << slot;
+    }
+    s_score_pending = s_score_wanted != 0;
+    s_score_retry = {};
+    if (s_score_pending) {
+        taiko_overlay_set_browser_save_status("Preparing score upload...");
+        service_score_save();
+    }
+    else taiko_overlay_set_browser_save_status("No online score for this round");
 }
 
 // Mirror NuSound's group ancestry (003EEF00/003EFA0C) and gain reference
@@ -145,6 +224,11 @@ bool live_song(uint32_t manager, const std::string& id, uint32_t& index)
 void prepare_match(const taiko_plus::MatchConfig& match)
 {
     auto& runtime = taiko_plus::runtime();
+    if (s_score_pending) {
+        runtime.fail(match.generation, taiko_plus::GuestErrorCode::PlayerUnavailable,
+                     "previous score is waiting for space in the save queue");
+        return;
+    }
     const uint32_t manager = s_lifetime_probe_manager;
     uint32_t index = 0;
     if (!manager || manager != s_sequence_runtime + 0xd8 ||
@@ -187,6 +271,16 @@ void prepare_match(const taiko_plus::MatchConfig& match)
                               players[slot], 0, 0);
     }
     vm_write32(manager + 0x400, mask); // 1=P1, 2=P2-only, 3=both.
+    // The map entry contains two separately constructed objects: persistent
+    // profile at +8 and round data at +0x4d8. Reconstruct only the latter,
+    // including for unjoined slots, before gameplay obtains any stage pointers.
+    const uint32_t entries = vm_read32(map), count = vm_read32(map + 4);
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t round = entries + i * 0x7a8 + 0x4d8;
+        ppu_guest_call_ct(0x00621784, 0x01027c58, round, 0, 0, 0);
+        ppu_guest_call_ct(0x0062a318, 0x01027c58, round, 0, 0, 0);
+    }
+    s_round_mask = mask;
     for (uint32_t offset = 0; offset < 0x90; offset += 4)
         vm_write32(kScratch + offset, 0);
     for (unsigned slot = 0; slot < 2; ++slot) {
@@ -328,6 +422,9 @@ void taiko_pc_mode_entry_tick(ppu_context* ctx)
 
 void taiko_pc_mode_activate(uint32_t controller)
 {
+    s_score_pending = s_score_building = false;
+    s_score_generation = 0;
+    taiko_overlay_set_browser_save_status("");
     s_pc_mode_active.store(true, std::memory_order_release);
     taiko_plus::runtime().activate();
     taiko_frontend_standalone_session_begin();
@@ -521,6 +618,7 @@ void taiko_pc_mode_frame_dispatch(ppu_context* ctx)
 void taiko_pc_mode_tick(ppu_context* ctx)
 {
     if (!ctx || !taiko_pc_mode_is_active()) return;
+    service_score_save();
     publish_audio_volume();
     ++s_lifetime_probe_ticks;
     if (s_lifetime_probe_manager &&
@@ -569,6 +667,7 @@ int taiko_pc_mode_results_return(uint32_t results, uint32_t owner)
     const auto state = taiko_plus::runtime().state();
     if (state != taiko_plus::State::Gameplay && state != taiko_plus::State::Results)
         return 1; // A duplicate destination callback must not retire twice.
+    finish_score_round();
     if (static_cast<uint8_t>(native(0x008d427c, owner, results)))
         native(0x008ddd30, owner, results);
     taiko_plus::runtime().return_to_browser(taiko_plus::runtime().generation());
@@ -577,6 +676,26 @@ int taiko_pc_mode_results_return(uint32_t results, uint32_t owner)
     std::fprintf(stderr, "[taiko_plus] Results retired without Song Select allocation "
                  "results=%08X owner=%08X\n", results, owner);
     return 1;
+}
+
+int taiko_pc_mode_score_player(uint32_t player)
+{
+    if (!s_score_building) return 1;
+    s_score_current = 0;
+    if (player < 8) return 0;
+    const uint32_t entry = player - 8;
+    const uint32_t slot = vm_read32(entry);
+    if (slot >= 2 || !(s_score_wanted & (1u << slot)) ||
+        (s_score_queued & (1u << slot))) return 0;
+    s_score_current = 1u << slot;
+    return 1;
+}
+
+void taiko_pc_mode_score_enqueued(uint32_t success)
+{
+    if (!s_score_building) return;
+    if (success & 0xff) s_score_queued |= s_score_current;
+    s_score_current = 0;
 }
 
 int taiko_pc_mode_setup_tick(ppu_context* ctx)

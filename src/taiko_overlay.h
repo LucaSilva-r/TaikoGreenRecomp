@@ -21,6 +21,7 @@ extern "C" {
 void taiko_overlay_set_pairing(const char* code, int expires_in);
 /* Show a short appliance-status message using the same composited surface. */
 void taiko_overlay_set_status(const char* text, int expires_in);
+void taiko_overlay_set_browser_save_status(const char* text);
 /* Opaque host-owned screens. These cover the guest frame completely so the
  * corresponding Lumen menu is neither visible nor used for interaction. */
 void taiko_overlay_show_entry_menu(int selection);

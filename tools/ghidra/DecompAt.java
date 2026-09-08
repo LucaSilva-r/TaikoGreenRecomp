@@ -23,13 +23,27 @@ public class DecompAt extends GhidraScript {
         DecompInterface decomp = new DecompInterface();
         decomp.openProgram(currentProgram);
         try {
-            for (String arg : args) {
+            for (String spec : args) {
+                // Optional ADDRESS:TOC for this multi-TOC PS3 image. A stale
+                // default r2 can resolve unrelated strings and jump tables.
+                String[] parts = spec.split(":", -1);
+                if (parts.length > 2) {
+                    throw new IllegalArgumentException("Expected ADDRESS[:TOC]: " + spec);
+                }
+                String arg = parts[0];
                 Address addr = currentProgram.getAddressFactory()
                         .getDefaultAddressSpace().getAddress(arg);
                 Function fn = getFunctionContaining(addr);
                 if (fn == null) {
                     println("=== " + arg + ": no function");
                     continue;
+                }
+                if (parts.length == 2) {
+                    currentProgram.getProgramContext().setValue(
+                            currentProgram.getRegister("r2"), fn.getEntryPoint(),
+                            fn.getBody().getMaxAddress(),
+                            new java.math.BigInteger(parts[1].replaceFirst("^0[xX]", ""), 16));
+                    decomp.flushCache();
                 }
                 println("=== " + arg + " -> " + fn.getName() + " @ " + fn.getEntryPoint());
                 DecompileResults res = decomp.decompileFunction(fn, 120, monitor);

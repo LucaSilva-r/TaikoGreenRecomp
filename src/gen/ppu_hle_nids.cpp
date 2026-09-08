@@ -521,6 +521,7 @@ extern "C" {
     void cellRtcTickAddHours(void);
     void cellRtcTickAddMinutes(void);
     void cellRtcTickAddSeconds(void);
+    void cellRtcTickAddTicks(void);
     void cellRtcTickAddMicroseconds(void);
     void cellRtcConvertLocalTimeToUtc(void);
     void cellRtcConvertUtcToLocalTime(void);
@@ -1533,6 +1534,7 @@ extern "C" void ppu_hle_register_all(void) {
     ps3_hle_register(0xD41D3BD2u, "cellRtcTickAddHours", (void*)cellRtcTickAddHours);
     ps3_hle_register(0x2F010BFAu, "cellRtcTickAddMinutes", (void*)cellRtcTickAddMinutes);
     ps3_hle_register(0xCCCE71BDu, "cellRtcTickAddSeconds", (void*)cellRtcTickAddSeconds);
+    ps3_hle_register(0x269A1882u, "cellRtcTickAddTicks", (void*)cellRtcTickAddTicks);
     ps3_hle_register(0xF8509925u, "cellRtcTickAddMicroseconds", (void*)cellRtcTickAddMicroseconds);
     ps3_hle_register(0x46CA7FE0u, "cellRtcConvertLocalTimeToUtc", (void*)cellRtcConvertLocalTimeToUtc);
     ps3_hle_register(0xC48D5002u, "cellRtcConvertUtcToLocalTime", (void*)cellRtcConvertUtcToLocalTime);

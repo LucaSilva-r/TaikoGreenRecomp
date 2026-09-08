@@ -19,6 +19,7 @@
  */
 
 #include "ppu_recomp.h"     /* ppu_context, func decls, ppu_recomp_register */
+#include "ppu_callback_stack.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2245,10 +2246,8 @@ extern "C" void ppu_register_opd_fixup(uint32_t opd, uint32_t code, uint32_t toc
         s_opd_fixups[s_opd_fixup_n].code = code; s_opd_fixups[s_opd_fixup_n].toc = toc; s_opd_fixup_n++; }
 }
 
-/* Depth of nested guest-callback execution on this thread.  ppu_guest_call
- * and ppu_guest_call_ct share one per-thread scratch context, so a caller that
- * runs guest code from inside a callback would reuse it and corrupt the outer
- * frame.  ppu_gcm_pump() consults this to skip while nested.
+/* Depth of nested guest-callback execution on this thread.
+ * ppu_gcm_pump() consults this to avoid recursive frame delivery.
  *
  * Deliberately C++ thread_local, NOT __declspec(thread): MinGW silently
  * ignores the latter, which would make every guest thread share one counter. */
@@ -2273,14 +2272,12 @@ extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
     if (!fn) { fprintf(stderr, "[ppu] guest_call: OPD 0x%08X -> code 0x%08X not registered\n",
                        opd_addr, code); return 0; }
 
-    /* Private scratch stack high in the guest stack region, distinct from the
-     * main + ppu_thread stacks. One callback at a time per caller thread. */
-    static thread_local uint32_t s_cb_sp = 0;
-    if (!s_cb_sp) s_cb_sp = 0xCFFE0000u;
+    ppu_context* saved_active = g_active_ctx;
+    PpuCallbackStack stack(saved_active ? saved_active->gpr[1] : 0);
 
     ppu_context ctx;
     memset(&ctx, 0, sizeof(ctx));
-    ctx.gpr[1]  = s_cb_sp;
+    ctx.gpr[1]  = stack.top();
     ctx.gpr[2]  = toc;
     ctx.gpr[3]  = a0; ctx.gpr[4] = a1; ctx.gpr[5] = a2; ctx.gpr[6] = a3;
     ctx.gpr[13] = PPU_TLS_TP;
@@ -2289,7 +2286,6 @@ extern "C" uint64_t ppu_guest_call(uint32_t opd_addr,
      * g_active_ctx pointing at it after we return leaves a DANGLING pointer once the
      * frame is reused -- corrupting the crash handler / any diagnostic that reads the
      * current-thread ctx. Restore the caller's. */
-    ppu_context* saved_active = g_active_ctx;
     ctx.thread_id = saved_active && saved_active->thread_id
         ? saved_active->thread_id
         : 128u + (ps3_host_thread_id() & 127u);
@@ -2313,19 +2309,18 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
     ppu_fn fn = ppu_lookup(code);
     if (!fn) { fprintf(stderr, "[ppu] guest_call_ct: code 0x%08X not registered\n", code); return 0; }
 
-    static thread_local uint32_t s_cb_sp = 0;
-    if (!s_cb_sp) s_cb_sp = 0xCFFE0000u;
+    ppu_context* saved_active = g_active_ctx;
+    PpuCallbackStack stack(saved_active ? saved_active->gpr[1] : 0);
 
     ppu_context ctx;
     memset(&ctx, 0, sizeof(ctx));
-    ctx.gpr[1]  = s_cb_sp;
+    ctx.gpr[1]  = stack.top();
     ctx.gpr[2]  = toc;
     ctx.gpr[3]  = a0; ctx.gpr[4] = a1; ctx.gpr[5] = a2; ctx.gpr[6] = a3;
     ctx.gpr[13] = PPU_TLS_TP;
     ctx.cia     = code;
     /* Save/restore g_active_ctx (see ppu_guest_call): the scratch ctx is stack-local,
      * so a dangling g_active_ctx after return corrupts the crash handler / diagnostics. */
-    ppu_context* saved_active = g_active_ctx;
     ctx.thread_id = saved_active && saved_active->thread_id
         ? saved_active->thread_id
         : 128u + (ps3_host_thread_id() & 127u);

@@ -9,6 +9,9 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
+#include <string>
+#include <thread>
+#include <chrono>
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "check failed at %d: %s\n", __LINE__, #x); std::abort(); } } while (0)
 static std::map<uint32_t, uint8_t> memory;
 uint8_t vm_read8(uint32_t a) { return memory[a]; }
@@ -28,6 +31,11 @@ static uint8_t expected_difficulties[2]={1,3};
 static uint8_t present_players=1;
 static unsigned failures=0, menus=0, commits=0, removals=0;
 static std::vector<uint32_t> calls;
+static std::string save_status;
+static unsigned save_builds=0, queued_scores=0;
+static bool reject_enqueue=false;
+static int reject_slot=-1;
+extern "C" void taiko_overlay_set_browser_save_status(const char* text) { save_status=text; }
 extern "C" void ppu_register_function(uint64_t, void (*)(ppu_context*)) {}
 extern "C" void ppu_set_project_register_hooks(void (*)(void)) {}
 static uint32_t animation_ticks = 1;
@@ -44,8 +52,28 @@ void taiko_host_audio_set_group_gain(uint32_t g, float v) { group_gains[g]=v; }
 void taiko_host_audio_reacquire_menu() {}
 extern "C" uint64_t ppu_guest_call_ct(uint32_t code,uint32_t toc,uint64_t a,uint64_t b,uint64_t c,uint64_t) {
     calls.push_back(code);
-    CHECK(toc == (code==0x717aec ? 0x1027c58u : 0x1037a88u));
+    CHECK(toc == ((code==0x717aec || code==0x621784 || code==0x62a318 ||
+                   code==0x12ee34) ? 0x1027c58u : 0x1037a88u));
     switch(code) {
+    case 0x621784: return 0;
+    case 0x62a318:
+        for (unsigned i=0;i<0x2d0;++i) vm_write8(a+i,0);
+        return 0;
+    case 0x12ee34: {
+        CHECK(a==manager); ++save_builds;
+        const uint32_t entries=vm_read32(manager+0x370);
+        for (uint32_t i=0;i<vm_read32(manager+0x374);++i) {
+            const uint32_t entry=entries+i*0x7a8;
+            if (!taiko_pc_mode_score_player(entry+8)) continue;
+            CHECK(vm_read32(entry+0x668)==1);
+            const bool rejected=reject_enqueue || int(vm_read32(entry))==reject_slot;
+            taiko_pc_mode_score_enqueued(rejected ? 0 : 1);
+            if (rejected) return 0;
+            ++queued_scores;
+            vm_write32(0x120018,vm_read32(0x120018)+1);
+        }
+        return 1;
+    }
     case 0x5c59bc: {
         CHECK(a==manager+0x370); const unsigned slot=vm_read32(b);
         CHECK(slot<2 && (expected_mask & (1u << slot)));
@@ -143,12 +171,23 @@ int main() {
     vm_write32(0xc0000,0xb0000);
     ctx.gpr[3]=root; taiko_pc_mode_frame_begin(&ctx);
     CHECK(runtime.state()==taiko_plus::State::Results);
+    // Two authenticated profiles, one completed stage each. Native enqueue
+    // takes owning copies; duplicate Results destinations must not resend.
+    vm_write32(0x10399d0,0x120000);
+    vm_write32(0x120008,0x130000);
+    vm_write32(0x12000c,0x130000+32*0x7fc);
+    for (unsigned slot=0;slot<2;++slot) {
+        const uint32_t entry=0x80000+slot*0x7a8;
+        vm_write32(entry,slot); vm_write32(entry+0x40,100+slot);
+        vm_write8(entry+0x395,1); vm_write32(entry+0x668,1);
+    }
     ctx.gpr[3]=setup;
     CHECK(taiko_pc_mode_results_return(0xb0000,0)==0);
     CHECK(taiko_pc_mode_results_return(0xb0000,owner)==1);
     CHECK(removals==1 && menus==2 && runtime.state()==taiko_plus::State::Browser);
     CHECK(taiko_pc_mode_results_return(0xb0000,owner)==1);
     CHECK(removals==1 && menus==2);
+    CHECK(save_builds==1 && queued_scores==2 && save_status=="Saving scores...");
     CHECK(vm_read32(manager+0x438)==0x90090);
     // A second match reuses the same native session beyond the first Results.
     vm_write32(manager+0x408,1); // Native Results has advanced the round counter.
@@ -156,6 +195,8 @@ int main() {
     ready=true;
     for (unsigned i=0;i<122;++i) taiko_pc_mode_setup_tick(&ctx);
     CHECK(commits==2 && runtime.state()==taiko_plus::State::Gameplay);
+    CHECK(vm_read32(0x80668)==0 && vm_read32(0x80040)==100);
+    CHECK(vm_read32(0x80000+0x7a8+0x668)==0);
     for (uint8_t mask : {uint8_t(1), uint8_t(2)}) {
         CHECK(taiko_pc_mode_results_return(0xb0000,owner)==1);
         expected_mask=mask;
@@ -166,6 +207,53 @@ int main() {
         for (unsigned i=0;i<122;++i) taiko_pc_mode_setup_tick(&ctx);
         CHECK(runtime.state()==taiko_plus::State::Gameplay);
     }
+    // P2-only: a retained logged-in P1 with no participation must not submit.
+    vm_write32(manager+0x374,2);
+    for (unsigned slot=0;slot<2;++slot) {
+        const uint32_t entry=0x80000+slot*0x7a8;
+        vm_write32(entry,slot); vm_write32(entry+0x40,100+slot);
+        vm_write8(entry+0x395,1); vm_write32(entry+0x668,1);
+    }
+    vm_write32(0x120018,32); // Full queue: preserve the result and block overwrite.
+    CHECK(taiko_pc_mode_results_return(0xb0000,owner)==1);
+    CHECK(queued_scores==2 && save_status.find("queue full")!=std::string::npos);
+    const unsigned previous_commits=commits;
+    CHECK(runtime.enqueue_launch(match()));
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(commits==previous_commits && runtime.state()==taiko_plus::State::Browser);
+    CHECK(vm_read32(0x80000+0x7a8+0x668)==1);
+    vm_write32(0x120018,0);
+    reject_enqueue=true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1050));
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(queued_scores==2 && save_status=="Could not queue score - retrying");
+    CHECK(vm_read32(0x80000+0x7a8+0x668)==1);
+    reject_enqueue=false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1050));
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(queued_scores==3); // P2 only, despite both profiles being authenticated.
+    CHECK(vm_read32(0x120018)==1 && save_status=="Saving scores...");
+    vm_write32(0x120018,0); // Native acknowledgement removes the queued record.
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(save_status=="Scores saved");
+    CHECK(taiko_pc_mode_score_player(0)==1); // Arcade builder is untouched.
+    // A partial two-player enqueue must retry only the unaccepted player.
+    expected_mask=3;
+    CHECK(runtime.enqueue_launch(match()));
+    taiko_pc_mode_setup_tick(&ctx);
+    ready=true;
+    for (unsigned i=0;i<122;++i) taiko_pc_mode_setup_tick(&ctx);
+    CHECK(runtime.state()==taiko_plus::State::Gameplay);
+    vm_write32(0x80668,1);
+    vm_write32(0x80000+0x7a8+0x668,1);
+    reject_slot=1;
+    CHECK(taiko_pc_mode_results_return(0xb0000,owner)==1);
+    CHECK(queued_scores==4 && save_status=="Could not queue score - retrying");
+    reject_slot=-1;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1050));
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(queued_scores==5 && vm_read32(0x120018)==2);
+    CHECK(save_status=="Saving scores...");
     // Native music group inherits service volume and mute from its parent.
     const auto write_float = [](uint32_t at, float value) {
         uint32_t bits; std::memcpy(&bits, &value, sizeof bits); vm_write32(at,bits);

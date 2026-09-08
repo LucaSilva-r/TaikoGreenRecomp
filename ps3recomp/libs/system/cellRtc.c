@@ -321,6 +321,14 @@ s32 cellRtcTickAddSeconds(CellRtcTick* pTick0, const CellRtcTick* pTick1, s64 iA
     return CELL_OK;
 }
 
+s32 cellRtcTickAddTicks(CellRtcTick* pTick0, const CellRtcTick* pTick1, s64 iAdd)
+{
+    if (!pTick0 || !pTick1)
+        return CELL_EINVAL;
+    rtc_write_tick(pTick0, rtc_read_tick(pTick1) + (u64)iAdd);
+    return CELL_OK;
+}
+
 s32 cellRtcTickAddMicroseconds(CellRtcTick* pTick0, const CellRtcTick* pTick1, s64 iAdd)
 {
     if (!pTick0 || !pTick1)

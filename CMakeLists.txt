@@ -770,6 +770,16 @@ if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     target_link_libraries(fair_mutex_tests PRIVATE Threads::Threads)
     add_test(NAME fair_mutex_tests COMMAND fair_mutex_tests)
+    add_executable(ppu_callback_stack_tests "tests/ppu_callback_stack_tests.cpp")
+    target_include_directories(ppu_callback_stack_tests PRIVATE
+        "${PS3RECOMP_DIR}/runtime/ppu")
+    target_link_libraries(ppu_callback_stack_tests PRIVATE Threads::Threads)
+    add_test(NAME ppu_callback_stack_tests COMMAND ppu_callback_stack_tests)
+    add_executable(cell_rtc_tests "tests/cell_rtc_tests.c"
+        "${PS3RECOMP_DIR}/libs/system/cellRtc.c")
+    target_include_directories(cell_rtc_tests PRIVATE "${PS3RECOMP_DIR}/include"
+        "${PS3RECOMP_DIR}/libs/system" "${PS3RECOMP_DIR}/runtime/ppu")
+    add_test(NAME cell_rtc_tests COMMAND cell_rtc_tests)
 endif()
 
 if(BUILD_TESTING AND NOT WIN32)
