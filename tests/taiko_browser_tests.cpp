@@ -9,6 +9,8 @@
 #undef NDEBUG
 #include <cassert>
 #include <vector>
+#include <unordered_map>
+#include <cstring>
 
 // Exercise the production frontend through its public keyboard/drum inputs.
 // Only the guest, catalog I/O and drawing boundary are substituted.
@@ -19,10 +21,55 @@ static int browser_level;
 static uint8_t joined, ready;
 static bool standalone = true;
 static unsigned identity_requests;
-uint32_t vm_read32(uint32_t) { return 0; }
-uint8_t vm_read8(uint32_t) { return 0; }
-void vm_write32(uint32_t, uint32_t) {}
-extern "C" uint64_t ppu_guest_call_ct(uint32_t, uint32_t, uint64_t, uint64_t, uint64_t, uint64_t) { return 0; }
+static std::unordered_map<uint32_t, uint8_t> memory;
+uint8_t vm_read8(uint32_t a) { return memory[a]; }
+uint32_t vm_read32(uint32_t a) {
+    return uint32_t(vm_read8(a)) << 24 | uint32_t(vm_read8(a+1)) << 16 |
+           uint32_t(vm_read8(a+2)) << 8 | vm_read8(a+3);
+}
+void vm_write8(uint32_t a, uint8_t v) { memory[a] = v; }
+void vm_write32(uint32_t a, uint32_t v) {
+    for (unsigned i=0; i<4; ++i) vm_write8(a+i, v >> (24-i*8));
+}
+static bool card_available, login_fixture;
+static unsigned profile_commits;
+static int login_phase;
+extern "C" uint64_t taiko_card_browser_begin() { return 1; }
+extern "C" void taiko_card_browser_end(uint64_t) {}
+extern "C" int taiko_card_browser_take(uint64_t, char* code, uint8_t* uid) {
+    if (!card_available) return 0;
+    card_available = false;
+    std::memcpy(code, "12345678901234567890", 21);
+    std::memset(uid, 0, 4);
+    return 1;
+}
+extern "C" void taiko_overlay_set_browser_login(int phase, const char*) { login_phase = phase; }
+extern "C" uint64_t ppu_guest_call_ct(uint32_t fn, uint32_t toc, uint64_t a, uint64_t b, uint64_t, uint64_t) {
+    if (!login_fixture) return 0;
+    constexpr uint32_t receiver = 0xcffb1000, profile = 0x200008;
+    if (fn == 0x00626e30 || fn == 0x006285b8) assert(toc == 0x01027c58);
+    if (fn == 0x00233820) vm_write32(0x300008, a);
+    if (fn == 0x00233804) vm_write32(0x300008, 0);
+    if (fn == 0x00233254) {
+        vm_write32(receiver+8, b); vm_write32(receiver+0xc, 0);
+        vm_write32(receiver+0x1c, 0); vm_write8(receiver+1, 0);
+    }
+    if (fn == 0x000a1138 || fn == 0x000a0ca4 || fn == 0x000a0998) {
+        const auto record = vm_read32(a);
+        vm_write32(receiver+0xc, fn == 0x000a0998 ? 8 : fn == 0x000a0ca4 ? 7 : 3);
+        vm_write32(receiver+0x1c, 1); vm_write8(receiver+1, 1);
+        vm_write8(record+0x3ad, 1);
+        return record;
+    }
+    if (fn == 0x005c59bc) return profile;
+    if (fn == 0x006285b8 && a < 0xcffb0000) {
+        assert(a == profile); // Accessor already skipped the key; no extra +8.
+        ++profile_commits;
+        vm_write32(profile+0x14, 4); vm_write32(profile+0x18, 15);
+        for (unsigned i=0; i<4; ++i) vm_write8(profile+4+i, "Test"[i]);
+    }
+    return 0;
+}
 extern "C" int taiko_pc_mode_is_active() { return 1; }
 extern "C" int taiko_pc_mode_is_standalone() { return standalone; }
 extern "C" void taiko_pc_mode_entry_tick(ppu_context*) {}
@@ -92,7 +139,13 @@ static void account_transactions() {
     assert(accounts.card_ready(cancelled));
     assert(!accounts.assign(2));
     assert(accounts.assign(0));
+    assert(accounts.native_started(cancelled));
     accounts.cancel();
+    assert(accounts.busy());
+    assert(accounts.begin() == 0); // No receiver reuse while a callback can still arrive.
+    assert(!accounts.native_finished(cancelled + 1));
+    assert(accounts.native_finished(cancelled));
+    assert(!accounts.busy());
     assert(!accounts.complete(cancelled, {"Late reply", true}));
     assert(accounts.players[0].name == "Original");
     const auto failed = accounts.begin();
@@ -182,6 +235,38 @@ int main() {
     assert(courses() == 5 && joined == 2 && cursor(0) == 99 && cursor(1) < 5);
     drum(1, TAIKO_ACTION_HIT_CR);
     assert(identity_requests == 2); // P2-only session does not wait for P1.
+
+    // Lineup changes are possible without navigating away from the browser.
+    taiko_frontend_standalone_session_begin();
+    taiko_frontend_enter_song_select_shell();
+    key(TAIKO_BROWSER_PLAYER1_TOGGLE);
+    key(TAIKO_BROWSER_PLAYER2_TOGGLE);
+    assert(joined == 3);
+    key(TAIKO_BROWSER_PLAY);
+    key(TAIKO_BROWSER_PLAY);
+    drum(0, TAIKO_ACTION_HIT_CR);
+    assert(ready == 1);
+    const unsigned launches_before_leave = identity_requests;
+    key(TAIKO_BROWSER_PLAYER2_TOGGLE);
+    assert(joined == 1 && ready == 0 && identity_requests == launches_before_leave);
+    key(TAIKO_BROWSER_PLAYER1_TOGGLE);
+    assert(joined == 0 && !courses());
+    key(TAIKO_BROWSER_PLAYER2_TOGGLE);
+    assert(joined == 2 && ready == 0);
+
+    taiko_frontend_standalone_session_begin();
+    taiko_frontend_enter_song_select_shell();
+    login_fixture = card_available = true;
+    vm_write32(0x01033f08, 0x300000);
+    vm_write32(0x100374, 1); vm_write32(0x100370, 0x200000);
+    key(TAIKO_BROWSER_ACCOUNT_LOGIN);
+    taiko_frontend_browser_login_tick(0x100000, 0);
+    key(TAIKO_BROWSER_PLAYER1_TOGGLE); // Assign the card to P1.
+    for (unsigned i=0; i<4; ++i) taiko_frontend_browser_login_tick(0x100000, 0);
+    assert(profile_commits == 1 && joined == 1);
+    assert(login_phase == int(taiko_plus::AccountPhase::Idle));
+    assert(vm_read32(0x300008) == 0); // Release the native response receiver.
+    login_fixture = false;
 
     standalone = false;
     taiko_frontend_standalone_session_begin();

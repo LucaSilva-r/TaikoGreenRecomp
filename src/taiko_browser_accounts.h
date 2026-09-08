@@ -26,8 +26,24 @@ struct BrowserAccounts {
     int destination = -1;
     std::string status;
     uint64_t generation = 0;
+    // Native callbacks have no host generation field. A cancelled load must
+    // retain exclusive ownership of its receiving storage until it drains.
+    uint64_t native_generation = 0;
+    bool native_pending = false;
 
-    bool busy() const { return phase != AccountPhase::Idle && phase != AccountPhase::Failed; }
+    bool native_started(uint64_t token) {
+        if (native_pending || token != generation || phase != AccountPhase::Loading) return false;
+        native_pending = true;
+        native_generation = token;
+        return true;
+    }
+    bool native_finished(uint64_t token) {
+        if (!native_pending || token != native_generation) return false;
+        native_pending = false;
+        return true;
+    }
+
+    bool busy() const { return native_pending || (phase != AccountPhase::Idle && phase != AccountPhase::Failed); }
     void open(unsigned slot) {
         if (slot > 1 || busy()) return;
         panel = static_cast<int>(slot);
@@ -35,6 +51,7 @@ struct BrowserAccounts {
         status.clear();
     }
     uint64_t begin() {
+        if (busy()) return 0;
         phase = AccountPhase::WaitingForCard;
         destination = -1;
         status = "Present BanaPassport";

@@ -30,6 +30,13 @@ struct BrowserPlayers {
         joined |= bit;
         focus = player;
     }
+    void leave(unsigned player) {
+        if (player > 1) return;
+        joined &= ~(1u << player);
+        ready = 0; // A changed lineup must confirm again; never auto-launch.
+        if (focus == player) focus = joined & 1 ? 0 : joined & 2 ? 1 : 0;
+        if (!joined) expanded = false;
+    }
     void song_changed(uint8_t available) {
         collapse();
         normalize(available);

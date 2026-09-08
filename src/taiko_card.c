@@ -38,6 +38,8 @@ static struct {
     int     card_present;
     long    presented_seconds;
     long    last_poll_seconds;
+    uint64_t browser_lease;
+    uint64_t next_lease;
 } g_card;
 
 static long monotonic_seconds(void)
@@ -454,8 +456,56 @@ int taiko_card_reader_active(void)
 {
     pthread_mutex_lock(&g_card_lock);
     const long last = g_card.last_poll_seconds;
+    const int browser = g_card.browser_lease != 0;
     pthread_mutex_unlock(&g_card_lock);
-    return last != 0 && monotonic_seconds() - last <= 2;
+    return browser || (last != 0 && monotonic_seconds() - last <= 2);
+}
+
+uint64_t taiko_card_browser_begin(void)
+{
+    pthread_mutex_lock(&g_card_lock);
+    uint64_t lease = 0;
+    if (!g_card.browser_lease && !g_card.card_present) {
+        lease = ++g_card.next_lease;
+        if (!lease) lease = ++g_card.next_lease;
+        g_card.browser_lease = lease;
+    }
+    pthread_mutex_unlock(&g_card_lock);
+    return lease;
+}
+
+void taiko_card_browser_end(uint64_t lease)
+{
+    pthread_mutex_lock(&g_card_lock);
+    if (lease && lease == g_card.browser_lease) {
+        g_card.browser_lease = 0;
+        g_card.card_present = 0;
+        memset(g_card.access_code, 0, sizeof g_card.access_code);
+        g_card.last_poll_seconds = 0;
+    }
+    pthread_mutex_unlock(&g_card_lock);
+}
+
+int taiko_card_browser_take(uint64_t lease, char access_code[21], uint8_t uid[4])
+{
+    if (!access_code || !uid) return 0;
+    pthread_mutex_lock(&g_card_lock);
+    const int ready = lease && lease == g_card.browser_lease && g_card.card_present;
+    if (ready) {
+        for (unsigned i = 0; i < CARD_BYTES; ++i) {
+            access_code[i * 2] = '0' + (g_card.access_code[i] >> 4);
+            access_code[i * 2 + 1] = '0' + (g_card.access_code[i] & 15);
+        }
+        access_code[20] = 0;
+        memcpy(uid, g_card.mifare_uid, 4);
+        g_card.card_present = 0;
+        memset(g_card.access_code, 0, sizeof g_card.access_code);
+        /* Stop accepting additional cards while this one is being assigned. */
+        g_card.browser_lease = 0;
+        g_card.last_poll_seconds = 0;
+    }
+    pthread_mutex_unlock(&g_card_lock);
+    return ready;
 }
 
 /* ---------------------------------------------------------------------------
@@ -552,6 +602,10 @@ size_t taiko_card_process(const uint8_t* rx, size_t rx_length,
 
     pthread_mutex_lock(&g_card_lock);
     size_t length = 0;
+    if (g_card.browser_lease) {
+        pthread_mutex_unlock(&g_card_lock);
+        return 0;
+    }
     if (command == 0x4A) {
         /* A tap is short: the card leaves the field once the game has had its
          * look, and a gap in the polling means the scene moved on without

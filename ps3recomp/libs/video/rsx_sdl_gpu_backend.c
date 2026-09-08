@@ -163,6 +163,9 @@ enum {
     TAIKO_BROWSER_DIFFICULTY_PREVIOUS,
     TAIKO_BROWSER_DIFFICULTY_NEXT,
     TAIKO_BROWSER_PLAY,
+    TAIKO_BROWSER_PLAYER1_TOGGLE,
+    TAIKO_BROWSER_PLAYER2_TOGGLE,
+    TAIKO_BROWSER_ACCOUNT_LOGIN,
 };
 #endif
 
@@ -4539,6 +4542,16 @@ static void handle_event(const SDL_Event* event)
                 taiko_frontend_browser_captures_text();
             unsigned browser_command = 0;
             switch (event->key.scancode) {
+            case SDL_SCANCODE_1:
+            case SDL_SCANCODE_2:
+                if (!captures_text && !event->key.repeat)
+                    browser_command = event->key.scancode == SDL_SCANCODE_1
+                        ? TAIKO_BROWSER_PLAYER1_TOGGLE : TAIKO_BROWSER_PLAYER2_TOGGLE;
+                break;
+            case SDL_SCANCODE_B:
+                if (!captures_text && !event->key.repeat)
+                    browser_command = TAIKO_BROWSER_ACCOUNT_LOGIN;
+                break;
             case SDL_SCANCODE_TAB:
                 browser_command = TAIKO_BROWSER_SEARCH_TOGGLE;
                 break;

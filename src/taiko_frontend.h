@@ -44,6 +44,9 @@ enum taiko_frontend_browser_command {
     TAIKO_BROWSER_DIFFICULTY_PREVIOUS,
     TAIKO_BROWSER_DIFFICULTY_NEXT,
     TAIKO_BROWSER_PLAY,
+    TAIKO_BROWSER_PLAYER1_TOGGLE,
+    TAIKO_BROWSER_PLAYER2_TOGGLE,
+    TAIKO_BROWSER_ACCOUNT_LOGIN,
 };
 
 int taiko_frontend_browser_command(unsigned command)
@@ -57,6 +60,9 @@ int taiko_frontend_browser_captures_text(void)
 void taiko_frontend_enter_song_select_shell(void);
 /* Value-only account snapshot, published by the PPU thread. */
 void taiko_frontend_browser_account(unsigned slot, const char* name, int authenticated);
+
+/* PPU-thread browser account service; score_pending protects outgoing identity. */
+void taiko_frontend_browser_login_tick(uint32_t manager, int score_pending);
 
 /* Called at the verified Player Entry dispatcher boundary on the main PPU
  * thread. Host/UI threads only enqueue intent; all guest calls happen here. */

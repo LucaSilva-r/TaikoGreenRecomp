@@ -67,6 +67,7 @@ unsigned s_preload_frames = 0;
 unsigned s_ready_frames = 0;
 bool s_transition_started = false;
 bool s_preloading = false;
+uint8_t s_costume_pending = 0;
 thread_local bool s_score_building = false;
 bool s_score_pending = false;
 bool s_score_delivery = false;
@@ -300,6 +301,7 @@ void prepare_match(const taiko_plus::MatchConfig& match)
     vm_write32(manager + 0x408, 0);
     vm_write32(manager + 0x40c, 1);
     native(0x007fce6c, kScratch, manager);
+    s_costume_pending = mask;
     s_launch_generation = match.generation;
     s_preload_frames = 0;
     s_ready_frames = 0;
@@ -325,6 +327,36 @@ void advance_launch(uint32_t owner)
     }
     const uint32_t manager = s_lifetime_probe_manager;
     ++s_preload_frames;
+    if (s_costume_pending) {
+        // Stock Song Select (001f76ec) passes a pointer to the shared
+        // character service and a course record to apply profile colors and
+        // costume parts. Copying the profile alone leaves the previous model.
+        const uint32_t characters = native(0x005c573c, manager);
+        if (!characters) return;
+        vm_write32(kScratch + 0x80, characters);
+        for (unsigned slot = 0; slot < 2; ++slot) {
+            if (!(s_costume_pending & (1u << slot))) continue;
+            // Stock 001f5f6c -> 001f7538 maps P2-only play to the first
+            // displayed character, while retaining P2's course/profile.
+            const unsigned character_slot = s_round_mask == 2 ? 0 : slot;
+            // 0029d474's availability gates distinguish busy from unchanged:
+            // once available, 0029cc34 returns zero only for a model that is
+            // already loaded with the requested parts. That is also success.
+            const uint32_t character_owner = vm_read32(characters);
+            const uint32_t loader_flags = vm_read32(0x01038e40u);
+            if (!character_owner || !loader_flags ||
+                !vm_read8(loader_flags + 8) || vm_read8(loader_flags + 9) ||
+                static_cast<int32_t>(vm_read32(character_owner + 0x25c +
+                                               character_slot * 4)) > 0)
+                continue;
+            native(0x007f9a9c, kScratch + 0x80, character_slot,
+                   kScratch + 0x10 + slot * 0x30);
+            s_costume_pending &= ~(1u << slot);
+        }
+        if (s_costume_pending) return;
+        // GameEnso's native state 1 waits for asset loading to complete.
+        std::fprintf(stderr, "[taiko_plus] native player costumes accepted\n");
+    }
     if (!s_transition_started) {
         const uint32_t service = native(0x005c5c1c, manager);
         vm_write32(kScratch, 0);
@@ -637,6 +669,7 @@ void taiko_pc_mode_tick(ppu_context* ctx)
 {
     if (!ctx || !taiko_pc_mode_is_active()) return;
     service_score_save();
+    taiko_frontend_browser_login_tick(s_lifetime_probe_manager, s_score_pending);
     publish_audio_volume();
     ++s_lifetime_probe_ticks;
     if (s_lifetime_probe_manager &&

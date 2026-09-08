@@ -82,6 +82,8 @@ static int g_browser_players_enabled;
 static uint8_t g_browser_joined, g_browser_ready;
 static uint8_t g_browser_difficulties[2];
 static char g_browser_account_names[2][128];
+static int g_browser_login_phase;
+static char g_browser_login_status[128];
 static uint8_t g_browser_authenticated;
 static int      g_song_search_active;
 static int      g_song_browser_level;
@@ -828,6 +830,12 @@ static void render_host(void)
                                    ? g_browser_account_names[slot]
                                    : joined ? "GUEST" : "NOT JOINED",
                                21, 414, left + 77, top + 36);
+            char participation[48];
+            snprintf(participation, sizeof participation, "%u  %s", slot + 1,
+                     joined ? "LEAVE PLAYER" : "JOIN PLAYER");
+            draw_text_left_fit(participation, 16, 460, left + 16, top + 230);
+            if (!joined && (g_browser_authenticated & (1u << slot)))
+                draw_text_right("NOT JOINED", 15, left + 493, top + 82);
             if (joined) {
                 const unsigned course = g_browser_difficulties[slot];
                 draw_text_left_fit(course < 5 ? courses[course] : "CHOOSE CHART",
@@ -840,6 +848,18 @@ static void render_host(void)
         }
     }
 
+    if (g_browser_login_phase) {
+        fill_rect(540, 230, 1260, 490, RGB_COLOUR(0x13, 0x22, 0x34));
+        draw_text_at("BANAPASSPORT", 28, 900, 265);
+        draw_text_at(g_browser_login_status, 21, 900, 310);
+        if (g_browser_login_phase == 1) {
+            draw_text_at(g_code[0] ? g_code : "------", 56, 900, 375);
+            draw_text_at("Enter this PIN on the pairing website", 19, 900, 428);
+        }
+        draw_text_at("ESC  CANCEL", 16, 900, 467);
+    } else {
+        draw_text_left_fit("B  BANAPASSPORT LOGIN", 16, 470, 40, 641);
+    }
     fill_rect(0, 660, g_width, g_height, RGB_COLOUR(0x0B, 0x11, 0x1B));
     draw_text_left_fit(expanded ? "RIM / WHEEL  CHOOSE CHART" : "RIM / WHEEL  BROWSE",
                        18, 290, 30, 690);
@@ -978,14 +998,14 @@ void taiko_overlay_set_pairing(const char* code, int expires_in)
     /* The reader polls before the user chooses BAID. Its legacy pairing pill
      * must not replace an opaque host-owned screen. Mode 4 is the exception:
      * it is the host BAID screen and consumes the refreshed code itself. */
-    if (g_mode >= 3 && g_mode != 4) {
+    if (g_mode >= 3 && g_mode != 4 && !(g_mode == 5 && g_browser_login_phase == 1)) {
         pthread_mutex_unlock(&g_lock);
         return;
     }
     snprintf(g_code, sizeof(g_code), "%s", code ? code : "");
     g_deadline = monotonic_seconds() + (expires_in > 0 ? expires_in : 0);
     g_visible = g_code[0] != '\0';
-    if (g_mode != 4) g_mode = 1;
+    if (g_mode < 3) g_mode = 1;
     g_drawn_remaining = -1;
     pthread_mutex_unlock(&g_lock);
     wake_renderer();
@@ -1078,6 +1098,20 @@ void taiko_overlay_show_song_select(const char* player_name)
     g_deadline = 0;
     g_drawn_remaining = -1;
     ++g_version;
+    pthread_mutex_unlock(&g_lock);
+    wake_renderer();
+}
+
+void taiko_overlay_set_browser_login(int phase, const char* status)
+{
+    pthread_mutex_lock(&g_lock);
+    if (g_browser_login_phase != phase || strcmp(g_browser_login_status, status ? status : "")) {
+        if (g_browser_login_phase != phase) g_code[0] = 0;
+        g_browser_login_phase = phase;
+        snprintf(g_browser_login_status, sizeof g_browser_login_status, "%s", status ? status : "");
+        g_drawn_remaining = -1;
+        ++g_version;
+    }
     pthread_mutex_unlock(&g_lock);
     wake_renderer();
 }
@@ -1268,7 +1302,7 @@ int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
 
     int remaining = (int)(g_deadline - monotonic_seconds());
     if (remaining < 0) remaining = 0;
-    if (g_mode == 4 && g_code[0] && remaining == 0) {
+    if ((g_mode == 4 || (g_mode == 5 && g_browser_login_phase == 1)) && g_code[0] && remaining == 0) {
         g_code[0] = '\0';
         g_drawn_remaining = -1;
         ++g_version;
@@ -1319,13 +1353,13 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (g_mode == 4 && g_code[0] && monotonic_seconds() >= g_deadline) {
+    if ((g_mode == 4 || (g_mode == 5 && g_browser_login_phase == 1)) && g_code[0] && monotonic_seconds() >= g_deadline) {
         g_code[0] = '\0'; ++g_version; g_drawn_remaining = -1;
     }
     info->version = g_version;
     info->animated = g_mode == 5 && (g_gpu_animation_pending || g_handoff);
     info->overlay = g_handoff < 0;
-    if (g_mode == 4 && g_code[0]) info->animated = 1;
+    if ((g_mode == 4 || (g_mode == 5 && g_browser_login_phase == 1)) && g_code[0]) info->animated = 1;
     if (emit) {
         g_ui_scale = isfinite(scale) && scale > 0 ? scale : 1.0f;
         g_ui_emit = emit; g_ui_user = user;

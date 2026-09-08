@@ -871,6 +871,10 @@ if(BUILD_TESTING AND NOT WIN32)
     target_link_libraries(taiko_plus_runtime_tests PRIVATE Threads::Threads)
     add_test(NAME taiko_plus_runtime_tests COMMAND taiko_plus_runtime_tests)
 
+    add_executable(taiko_card_lease_tests "tests/taiko_card_lease_tests.c")
+    target_link_libraries(taiko_card_lease_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_card_lease_tests COMMAND taiko_card_lease_tests)
+
     add_executable(taiko_browser_tests
         "tests/taiko_browser_tests.cpp"
         "src/taiko_frontend.cpp"

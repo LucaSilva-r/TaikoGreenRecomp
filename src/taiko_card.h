@@ -38,6 +38,12 @@ int  taiko_card_is_present(void);
  * the server for a card while nothing is looking for one. */
 int  taiko_card_reader_active(void);
 
+/* Browser lease. Only arm while the browser owns input. A lease isolates a
+ * pending card from arcade polls; release discards any unconsumed tap. */
+uint64_t taiko_card_browser_begin(void);
+void taiko_card_browser_end(uint64_t lease);
+int taiko_card_browser_take(uint64_t lease, char access_code[21], uint8_t uid[4]);
+
 /* PN53x commands that depend on card state (0x4A poll, 0x40 MIFARE). Returns
  * the response length, or 0 when the command is not one of those. */
 size_t taiko_card_process(const uint8_t* rx, size_t rx_length,

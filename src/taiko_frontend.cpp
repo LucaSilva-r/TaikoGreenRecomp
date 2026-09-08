@@ -21,6 +21,7 @@
 #include "taiko_plus_runtime.h"
 #include "taiko_browser_players.h"
 #include "taiko_browser_accounts.h"
+#include "taiko_card.h"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -115,6 +117,21 @@ std::atomic<unsigned> g_song_difficulty{TAIKO_DIFFICULTY_ONI};
 std::recursive_mutex g_browser_action_lock;
 taiko_plus::BrowserPlayers g_browser_players;
 taiko_plus::BrowserAccounts g_browser_accounts;
+uint64_t g_browser_card_lease = 0;
+char g_browser_card_code[21] = {};
+uint8_t g_browser_card_uid[4] = {};
+void show_browser_login() {
+    taiko_overlay_set_browser_login(static_cast<int>(g_browser_accounts.phase),
+                                     g_browser_accounts.status.c_str());
+}
+void cancel_browser_login() {
+    taiko_card_browser_end(g_browser_card_lease);
+    g_browser_card_lease = 0;
+    std::memset(g_browser_card_code, 0, sizeof g_browser_card_code);
+    g_browser_accounts.cancel();
+    show_browser_login();
+}
+
 unsigned g_player_song_index = ~0u;
 std::atomic<bool> g_song_launch_requested{false};
 std::atomic<bool> g_song_search_active{false};
@@ -804,6 +821,14 @@ void handle_rising(unsigned player, uint32_t rising)
     const Phase phase = g_phase.load(std::memory_order_acquire);
     if (phase == Phase::SongSelect) {
         if (g_song_launch_requested.load(std::memory_order_acquire)) return;
+        if (g_browser_accounts.busy()) {
+            if (g_browser_accounts.phase == taiko_plus::AccountPhase::ChoosePlayer &&
+                (rising & (TAIKO_ACTION_HIT_CL | TAIKO_ACTION_HIT_CR | TAIKO_ACTION_ENTER))) {
+                g_browser_accounts.assign(player);
+                show_browser_login();
+            }
+            return;
+        }
         if (taiko_pc_mode_is_active() && taiko_pc_mode_is_standalone())
             g_browser_players.join(player);
         else if (player != 0) return;
@@ -1093,7 +1118,41 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
         g_song_launch_requested.load(std::memory_order_acquire))
         return 0;
 
+    if (g_browser_accounts.busy() || g_browser_accounts.phase == taiko_plus::AccountPhase::Failed) {
+        if (command == TAIKO_BROWSER_SEARCH_CLEAR) cancel_browser_login();
+        else if (g_browser_accounts.phase == taiko_plus::AccountPhase::ChoosePlayer &&
+                 (command == TAIKO_BROWSER_PLAYER1_TOGGLE || command == TAIKO_BROWSER_PLAYER2_TOGGLE)) {
+            g_browser_accounts.assign(command == TAIKO_BROWSER_PLAYER1_TOGGLE ? 0 : 1);
+            show_browser_login();
+        }
+        return 1;
+    }
     switch (command) {
+    case TAIKO_BROWSER_ACCOUNT_LOGIN: {
+        if (!taiko_pc_mode_is_active() || !taiko_pc_mode_is_standalone()) return 0;
+        const auto token = g_browser_accounts.begin();
+        if (!token) return 1;
+        g_browser_card_lease = taiko_card_browser_begin();
+        if (!g_browser_card_lease) g_browser_accounts.fail(token, "Reader busy - try again");
+        else g_browser_accounts.status = "Waiting for pairing PIN...";
+        g_song_search_active.store(false, std::memory_order_release);
+        g_browser_players.collapse();
+        show_current_song();
+        show_browser_login();
+        break;
+    }
+    case TAIKO_BROWSER_PLAYER1_TOGGLE:
+    case TAIKO_BROWSER_PLAYER2_TOGGLE: {
+        if (!taiko_pc_mode_is_active() || !taiko_pc_mode_is_standalone()) return 0;
+        if (g_browser_accounts.busy()) return 1;
+        const unsigned slot = command == TAIKO_BROWSER_PLAYER1_TOGGLE ? 0 : 1;
+        const bool leaving = g_browser_players.joined & (1u << slot);
+        if (leaving) g_browser_players.leave(slot);
+        else g_browser_players.join(slot);
+        browser_sfx(leaving ? TaikoPlusSfx::Cancel : TaikoPlusSfx::Confirm);
+        show_current_song();
+        break;
+    }
     case TAIKO_BROWSER_SEARCH_TOGGLE: {
         g_browser_players.collapse();
         bool start_global_search = false;
@@ -1534,4 +1593,159 @@ extern "C" void taiko_frontend_browser_account(unsigned slot, const char* name, 
     std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     g_browser_accounts.players[slot] = {name ? name : "", authenticated != 0};
     taiko_overlay_set_browser_account(slot, name, authenticated);
+}
+
+extern "C" void taiko_frontend_browser_login_tick(uint32_t manager, int score_pending)
+{
+    // This boundary and the native response dispatcher run on the main PPU
+    // thread. In particular, state 8 is written BEFORE the crown vector, so
+    // observing it from an input or rendering thread would not be sufficient.
+    static thread_local bool in_tick = false;
+    if (in_tick) return;
+    struct Guard { bool& flag; Guard(bool& f): flag(f) { flag = true; } ~Guard() { flag = false; } } guard(in_tick);
+    std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    constexpr uint32_t storage = 0xcffb0000u;
+    constexpr uint32_t receiver = storage + 0x1000;
+    constexpr uint32_t blank = storage + 0x1100;
+    constexpr uint32_t wrapper = storage + 0x1600;
+    static bool constructed = false;
+    static unsigned stage = 0;
+    static unsigned slot = 0;
+    static uint64_t token = 0;
+    static std::chrono::steady_clock::time_point deadline;
+    const auto call = [](uint32_t fn, uint32_t a, uint32_t b = 0) {
+        // Request OPDs use the network TOC; Entry methods use the Entry TOC.
+        const uint32_t toc = (fn == 0x000a1138 || fn == 0x000a0ca4 || fn == 0x000a0998 ||
+                              fn == 0x00626e30 || fn == 0x006285b8)
+                                 ? 0x01027c58 : 0x01037a88;
+        return static_cast<uint32_t>(ppu_guest_call_ct(fn, toc, a, b, 0, 0));
+    };
+    const bool browser = g_phase.load(std::memory_order_acquire) == Phase::SongSelect &&
+                         !g_song_launch_requested.load(std::memory_order_acquire);
+    if (!browser && !stage) {
+        if (g_browser_card_lease) cancel_browser_login();
+        return;
+    }
+    if (g_browser_accounts.phase == taiko_plus::AccountPhase::WaitingForCard &&
+        taiko_card_browser_take(g_browser_card_lease, g_browser_card_code, g_browser_card_uid)) {
+        taiko_card_browser_end(g_browser_card_lease);
+        g_browser_card_lease = 0;
+        g_browser_accounts.card_ready(g_browser_accounts.generation);
+        g_browser_accounts.status = "Choose 1 for P1 or 2 for P2";
+        show_browser_login();
+    }
+    const uint32_t owner = vm_read32(0x01033f08);
+    if (!stage && g_browser_accounts.phase == taiko_plus::AccountPhase::Loading) {
+        if (score_pending) {
+            g_browser_accounts.status = "Waiting for previous score to save...";
+            show_browser_login();
+            return;
+        }
+        token = g_browser_accounts.generation;
+        if (!manager || !owner || vm_read32(owner + 8)) {
+            g_browser_accounts.fail(token, "Native login service is busy - try again");
+            show_browser_login();
+            return;
+        }
+        if (!constructed) {
+            for (unsigned off = 0; off < 0x1700; off += 4) vm_write32(storage + off, 0);
+            // Construct owning profiles once; assignment releases previous
+            // strings/vectors. These bounded records live until process exit.
+            call(0x00626e30, storage + 0x58);
+            call(0x00626e30, storage + 0x548);
+            call(0x00626e30, blank);
+            constructed = true;
+        }
+        slot = static_cast<unsigned>(g_browser_accounts.destination);
+        const uint32_t record = storage + 0x38 + slot * 0x4f0;
+        call(0x006285b8, record + 0x20, blank);
+        vm_write32(storage + 0xc, manager);
+        vm_write8(record, 1);
+        vm_write8(record + 1, 0);
+        // Reader record uses NUL-terminated UID and access-code strings.
+        char uid[9];
+        std::snprintf(uid, sizeof uid, "%02X%02X%02X%02X", g_browser_card_uid[0],
+                      g_browser_card_uid[1], g_browser_card_uid[2], g_browser_card_uid[3]);
+        for (unsigned i = 0; i < 36; ++i) vm_write8(record + 0x3ae + i, i < 8 ? uid[i] : 0);
+        for (unsigned i = 0; i < 24; ++i) vm_write8(record + 0x3d2 + i, i < 20 ? g_browser_card_code[i] : 0);
+        vm_write32(record + 0x3ec, 2); // BanaPassport (native reader kind 7).
+        std::memset(g_browser_card_code, 0, sizeof g_browser_card_code);
+        for (unsigned off = 0; off < 0x2c; off += 4) vm_write32(receiver + off, 0);
+        vm_write32(receiver + 0x14, 0xb4);
+        vm_write32(receiver + 0x18, slot);
+        vm_write32(receiver + 0x28, manager);
+        call(0x00233820, receiver, storage);
+        call(0x00233254, receiver, record);
+        vm_write32(wrapper, record);
+        g_browser_accounts.native_started(token);
+        stage = 1;
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        g_browser_accounts.status = "Looking up BanaPassport...";
+        show_browser_login();
+        call(0x000a1138, wrapper);
+        return;
+    }
+    if (!stage) return;
+    // Keep the receiver bound after cancellation/timeout until the in-flight
+    // response arrives. Starting another request would redirect late callbacks.
+    const uint32_t state = vm_read32(receiver + 0xc);
+    const uint32_t result = vm_read32(receiver + 0x1c);
+    const bool terminal = state == 3 || state == 4 || state == 7 || state == 8 || result != 0;
+    if (!terminal) {
+        if (std::chrono::steady_clock::now() >= deadline &&
+            g_browser_accounts.phase == taiko_plus::AccountPhase::Loading) {
+            g_browser_accounts.fail(token, "Login timed out - waiting for request to close");
+            show_browser_login();
+        }
+        return;
+    }
+    const uint32_t record = storage + 0x38 + slot * 0x4f0;
+    const bool valid = browser && token == g_browser_accounts.generation &&
+                      g_browser_accounts.phase == taiko_plus::AccountPhase::Loading;
+    const bool success = result == 1 && vm_read8(receiver + 1) && vm_read8(record + 0x3ad);
+    if (valid && success && stage < 3) {
+        ++stage;
+        call(0x00233254, receiver, record);
+        g_browser_accounts.status = stage == 2 ? "Loading player data..." : "Loading crowns...";
+        show_browser_login();
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        call(stage == 2 ? 0x000a0ca4 : 0x000a0998, wrapper);
+        return;
+    }
+    if (valid && success && stage == 3 && state == 8 && !score_pending) {
+        const uint32_t map = manager + 0x370;
+        // Do not let both player slots submit results for the same identity.
+        bool duplicate = false;
+        const uint32_t begin = vm_read32(map), count = vm_read32(map + 4);
+        if (count <= 2) for (unsigned i = 0; i < count; ++i) {
+            const uint32_t other = begin + i * 0x7a8;
+            if (vm_read32(other) != slot && vm_read8(other + 0x395) &&
+                vm_read32(other + 0x40) == vm_read32(record + 0x58)) duplicate = true;
+        }
+        if (!duplicate && count <= 2) {
+            vm_write32(wrapper + 4, slot);
+            const uint32_t destination = call(0x005c59bc, map, wrapper + 4);
+            if (destination) {
+                // Native map accessor returns the value/profile, already past the slot key.
+                call(0x006285b8, destination, record + 0x20);
+                call(0x001edf48, storage, slot);
+                const uint32_t profile = destination;
+                const uint32_t length = vm_read32(profile + 0x14), capacity = vm_read32(profile + 0x18);
+                const uint32_t data = capacity <= 15 ? profile + 4 : vm_read32(profile + 4);
+                char name[128] = {};
+                if (data && length < sizeof name && length <= capacity)
+                    for (unsigned i = 0; i < length; ++i) name[i] = vm_read8(data + i);
+                if (g_browser_accounts.complete(token, {name, true})) {
+                    taiko_overlay_set_browser_account(slot, name, 1);
+                    g_browser_players.join(slot);
+                    g_browser_players.ready = 0;
+                    show_current_song();
+                }
+            } else g_browser_accounts.fail(token, "Could not assign player");
+        } else g_browser_accounts.fail(token, duplicate ? "Account is already assigned to the other player" : "Invalid player session");
+    } else if (valid) g_browser_accounts.fail(token, "Unable to load account - try again");
+    call(0x00233804, receiver);
+    g_browser_accounts.native_finished(token);
+    stage = 0;
+    show_browser_login();
 }

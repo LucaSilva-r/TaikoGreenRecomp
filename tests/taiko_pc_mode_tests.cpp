@@ -26,6 +26,8 @@ void vm_write32(uint32_t a, uint32_t v) {
 constexpr uint32_t root=0x10000, manager=root+0xd8, owner=0x20000;
 constexpr uint32_t setup=0x30000, p1=0x40000, p2=0x50000, scene=0x60000;
 static bool ready=false, gameplay=false;
+static bool costume_busy=true;
+static unsigned costume_applied[2]{};
 static uint8_t expected_mask=3;
 static uint8_t expected_difficulties[2]={1,3};
 static uint8_t present_players=1;
@@ -46,6 +48,7 @@ extern "C" void taiko_frontend_enter_song_select_shell() { ++menus; }
 extern "C" void taiko_frontend_standalone_failure(const char*) { ++failures; }
 extern "C" void taiko_frontend_standalone_session_begin() {}
 extern "C" void taiko_frontend_browser_account(unsigned, const char*, int) {}
+extern "C" void taiko_frontend_browser_login_tick(uint32_t, int) {}
 extern "C" void taiko_frontend_standalone_gameplay() { gameplay=true; }
 void taiko_host_audio_set_scene_active(bool) {}
 static float group_gains[68]{};
@@ -56,6 +59,26 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code,uint32_t toc,uint64_t a,uint
     CHECK(toc == ((code==0x717aec || code==0x621784 || code==0x62a318 ||
                    code==0x12ee34) ? 0x1027c58u : 0x1037a88u));
     switch(code) {
+    case 0x5c573c:
+        CHECK(a==manager);
+        vm_write32(0x130000,0x131000);
+        vm_write32(0x01038e40,0x132000);
+        vm_write8(0x132008,1);
+        vm_write8(0x132009,costume_busy);
+        return 0x130000;
+    case 0x7f9a9c:
+        CHECK(vm_read32(a)==0x130000 && b<2);
+        if (expected_mask==2) {
+            CHECK(b==0 && vm_read32(c+0x28)==p2);
+        } else {
+            CHECK(expected_mask & (1u << b));
+            CHECK(vm_read32(c+0x28)==(b ? p2 : p1));
+        }
+        CHECK(!costume_busy);
+        ++costume_applied[b];
+        // P1 already has these parts; native reports no new load required.
+        // P2 starts a fresh load. Both must allow the transition to proceed.
+        return b==0 ? 0 : 1;
     case 0x621784: return 0;
     case 0x62a318:
         for (unsigned i=0;i<0x2d0;++i) vm_write8(a+i,0);
@@ -148,7 +171,12 @@ int main() {
     CHECK(failures==1 && commits==0 && runtime.state()==taiko_plus::State::Browser);
     CHECK(vm_read32(manager+0x40c)==3); // Rejected launches leave session rules intact.
     CHECK(runtime.enqueue_launch(match()));
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(costume_applied[0]==0 && costume_applied[1]==0 && !gameplay);
+    CHECK(std::find(calls.begin(),calls.end(),0x5c583c)==calls.end());
+    costume_busy=false;
     for (unsigned i=0;i<150;++i) CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(costume_applied[0]==1 && costume_applied[1]==1);
     CHECK(commits==1 && !gameplay); // Cannot launch merely because 120 frames elapsed.
     ready=true;
     taiko_pc_mode_setup_tick(&ctx); // One-shot acceptance switches the service to busy.
