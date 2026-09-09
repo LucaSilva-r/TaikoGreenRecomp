@@ -25,6 +25,11 @@ int main(int argc, char** argv)
                 else if ((pixels[i] & 0xffffff) == 0xffffff) ++fill;
                 else if (!(pixels[i] & 0xffffff)) ++outline;
             }
+            // Both ends must remain inside the texture, including long titles.
+            for (unsigned y = 0; y < h; ++y) {
+                CHECK((pixels[y*w] >> 24) == 0);
+                CHECK((pixels[y*w+w-1] >> 24) == 0);
+            }
             CHECK(fill > 100 && outline > 100 && transparent > w * h / 4);
             if (argc > 1 && type == 12 && t == 0) {
                 FILE* out = fopen(argv[1], "wb");

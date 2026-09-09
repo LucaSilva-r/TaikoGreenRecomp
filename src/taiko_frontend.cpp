@@ -37,6 +37,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
 
 extern "C" uint64_t ppu_guest_call_ct(uint32_t code, uint32_t toc,
                                         uint64_t a0, uint64_t a1,
@@ -149,6 +151,8 @@ std::string g_song_query;
 unsigned g_song_browser_position = 0;
 unsigned g_song_category = 0;
 std::string g_custom_folder;
+std::unordered_map<std::string, std::vector<unsigned>> g_osu_groups;
+unsigned g_osu_variant = 0;
 enum class SongBrowserLevel { Categories, Songs };
 SongBrowserLevel g_song_browser_level = SongBrowserLevel::Categories;
 bool g_song_global_search = false;
@@ -170,7 +174,7 @@ struct SongCategory {
     const char* genre;
 };
 
-constexpr std::array<SongCategory, 10> kSongCategories{{
+constexpr std::array<SongCategory, 11> kSongCategories{{
     {"J-POP", "J-POP"},
     {"ANIME", "アニメ"},
     {"VOCALOID", "ボーカロイド"},
@@ -181,6 +185,7 @@ constexpr std::array<SongCategory, 10> kSongCategories{{
     {"MEDLEY", "メドレー"},
     {"CHILDREN'S SONGS", "童謡"},
     {"CUSTOM TJA", "CUSTOM TJA"},
+    {"OSU! LAZER", "OSU! LAZER"},
 }};
 
 bool enabled()
@@ -250,6 +255,7 @@ std::string searchable_text(const TaikoCatalogSong& song)
     value.append(song.original_title).push_back(' ');
     value.append(song.genre).push_back(' ');
     value.append(taiko_catalog_genre_name(song.genre)).push_back(' ');
+    value.append(song.osu_difficulty).push_back(' ');
     value.append(song.music_id);
     for (char& character : value) {
         const unsigned char byte = static_cast<unsigned char>(character);
@@ -330,6 +336,20 @@ bool custom_folder_browser()
            std::string_view(kSongCategories[g_song_category].genre) == "CUSTOM TJA";
 }
 
+const char* custom_category_colour(const std::string& folder)
+{
+    const auto key = title_sort_key(folder);
+    if (key == "anime") return "ANIME";
+    if (key == "children and folk" || key == "children s songs") return "CHILDREN'S SONGS";
+    if (key == "classical") return "CLASSICAL";
+    if (key == "game music") return "GAME MUSIC";
+    if (key == "namco original") return "NAMCO ORIGINAL";
+    if (key == "pop" || key == "j pop") return "J-POP";
+    if (key == "variety") return "VARIETY";
+    if (key == "vocaloid") return "VOCALOID";
+    return folder.c_str();
+}
+
 void leave_song_folder_locked()
 {
     if (custom_folder_browser() && !g_custom_folder.empty()) {
@@ -346,7 +366,20 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
     g_browser_players.collapse();
     g_song_matches.clear();
     g_song_entries.clear();
+    g_osu_groups.clear();
+    for (unsigned i = 0; i < taiko_catalog_count(); ++i) {
+        const auto* song = taiko_catalog_song(i);
+        if (song && !song->osu_group.empty()) g_osu_groups[song->osu_group].push_back(i);
+    }
+    for (auto& [group, charts] : g_osu_groups)
+        std::stable_sort(charts.begin(), charts.end(), [](unsigned a, unsigned b) {
+            const auto* left = taiko_catalog_song(a); const auto* right = taiko_catalog_song(b);
+            if (left->stars[3] != right->stars[3]) return left->stars[3] < right->stars[3];
+            return left->osu_difficulty < right->osu_difficulty;
+        });
+    std::unordered_set<std::string> seen_groups;
     std::vector<std::string> folders;
+    std::unordered_map<std::string, unsigned> folder_counts;
     const std::size_t count = taiko_catalog_count();
     for (std::size_t index = 0; index < count; ++index) {
         const TaikoCatalogSong* song = taiko_catalog_song(index);
@@ -358,11 +391,15 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
                 if (song->custom_folder.compare(0, prefix.size(), prefix) != 0) continue;
                 const auto tail = song->custom_folder.substr(prefix.size());
                 const auto child = prefix + tail.substr(0, tail.find('/'));
+                ++folder_counts[child];
                 if (std::find(folders.begin(), folders.end(), child) == folders.end())
                     folders.push_back(child);
                 continue;
             }
-            g_song_matches.push_back(static_cast<unsigned>(index));
+            if (!song->osu_group.empty()) {
+                if (!seen_groups.insert(song->osu_group).second) continue;
+                g_song_matches.push_back(g_osu_groups.at(song->osu_group).front());
+            } else g_song_matches.push_back(static_cast<unsigned>(index));
         }
     }
     std::stable_sort(g_song_matches.begin(), g_song_matches.end(),
@@ -378,7 +415,7 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
     g_song_browser_position = 0;
     std::sort(folders.begin(), folders.end());
     for (const auto& folder : folders)
-        g_song_entries.push_back({true, 0, 0, folder});
+        g_song_entries.push_back({true, folder_counts[folder], 0, folder});
     for (unsigned position = 0; position < g_song_matches.size(); ++position) {
         g_song_entries.push_back(
             {false, g_song_matches[position], position});
@@ -435,9 +472,11 @@ void show_current_song()
         for (unsigned row = 0; row < category_rows; ++row) {
             const unsigned category = first_category + row;
             unsigned category_song_count = 0;
+            std::unordered_set<std::string> category_groups;
             for (std::size_t index = 0; index < count; ++index) {
                 const TaikoCatalogSong* song = taiko_catalog_song(index);
-                if (song && song->genre == kSongCategories[category].genre)
+                if (song && song->genre == kSongCategories[category].genre &&
+                    (song->osu_group.empty() || category_groups.insert(song->osu_group).second))
                     ++category_song_count;
             }
             row_titles[row] = kSongCategories[category].label;
@@ -478,6 +517,8 @@ void show_current_song()
         browser_category_total = g_song_global_search
             ? 0 : static_cast<unsigned>(kSongCategories.size());
         match_total = static_cast<unsigned>(g_song_matches.size());
+        for (const auto& entry : g_song_entries)
+            if (!entry.folder.empty()) match_total += entry.catalog_index;
         if (g_song_entries.empty()) {
             taiko_overlay_show_song_browser(
                 g_session_label, "", "", "", 0, 0, 0,
@@ -512,10 +553,11 @@ void show_current_song()
                 row_titles[row] = entry.folder.empty()
                     ? (custom_folder_browser() && !g_custom_folder.empty() ? "BACK TO PARENT FOLDER" : "BACK TO CATEGORIES")
                     : entry.folder.substr(entry.folder.rfind('/') + 1);
-                row_genres[row] = browser_category;
+                row_genres[row] = entry.folder.empty() ? browser_category
+                    : custom_category_colour(entry.folder);
                 rows[row].title = row_titles[row].c_str();
                 rows[row].genre = row_genres[row].c_str();
-                rows[row].catalog_index = entry.song_position / 10 + 1;
+                rows[row].catalog_index = entry.folder.empty() ? entry.song_position / 10 + 1 : entry.catalog_index;
                 rows[row].selected =
                     first + row == g_song_browser_position;
                 rows[row].kind = entry.folder.empty() ? TAIKO_OVERLAY_ROW_EXIT : TAIKO_OVERLAY_ROW_CATEGORY;
@@ -526,7 +568,8 @@ void show_current_song()
                 taiko_catalog_song(catalog_index);
             if (!visible) continue;
             row_titles[row] = visible->title;
-            row_genres[row] = taiko_catalog_genre_name(visible->genre);
+            row_genres[row] = visible->genre == "CUSTOM TJA" && !visible->custom_folder.empty()
+                ? custom_category_colour(visible->custom_folder) : taiko_catalog_genre_name(visible->genre);
             rows[row].title = row_titles[row].c_str();
             rows[row].genre = row_genres[row].c_str();
             rows[row].catalog_index = entry.song_position;
@@ -556,10 +599,37 @@ void show_current_song()
     if (g_player_song_index != selection) {
         g_browser_players.song_changed(song->difficulty_mask);
         g_player_song_index = selection;
+        g_osu_variant = 0;
     } else g_browser_players.normalize(song->difficulty_mask);
     taiko_overlay_set_browser_players(taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active(),
         g_browser_players.joined, g_browser_players.ready, g_browser_players.difficulty.data());
-    if (g_browser_players.expanded) {
+    if (g_browser_players.expanded && !song->osu_group.empty()) {
+        const auto& charts = g_osu_groups.at(song->osu_group);
+        g_osu_variant %= charts.size();
+        unsigned parent = 0;
+        while (parent < row_count && !rows[parent].selected) ++parent;
+        const auto header = rows[parent];
+        rows = {};
+        rows[0] = header;
+        row_count = 1;
+        const unsigned visible = std::min<unsigned>(charts.size(), TAIKO_OVERLAY_SONG_ROW_COUNT - 1);
+        unsigned first = g_osu_variant > visible / 2 ? g_osu_variant - visible / 2 : 0;
+        if (first + visible > charts.size()) first = charts.size() - visible;
+        for (unsigned d = first; d < first + visible; ++d) {
+            const auto* chart = taiko_catalog_song(charts[d]);
+            auto& row = rows[row_count++];
+            row.title = chart->osu_difficulty.c_str();
+            row.genre = "";
+            row.catalog_index = charts[d];
+            row.kind = TAIKO_OVERLAY_ROW_DIFFICULTY;
+            row.difficulty = 3;
+            row.stars = chart->stars[3];
+            row.selected = d == g_osu_variant;
+            row.cursors = row.selected ? g_browser_players.joined : 0;
+            row.ready = g_browser_players.ready & row.cursors;
+        }
+        song = taiko_catalog_song(charts[g_osu_variant]);
+    } else if (g_browser_players.expanded) {
         unsigned parent = 0;
         while (parent < row_count && !rows[parent].selected) ++parent;
         // Keep the song header and every installed stock course together,
@@ -590,7 +660,11 @@ void show_current_song()
              row_count < TAIKO_OVERLAY_SONG_ROW_COUNT && original[r].title; ++r)
             rows[row_count++] = original[r];
     }
-    publish_preview(song->music_id);
+    // The browser entry is the stable representative of an osu set/audio
+    // group. Changing its selected chart must not replace the preview voice.
+    // Gameplay still uses the selected chart's own identity below/on launch.
+    publish_preview(song->osu_group.empty() ? song->music_id
+                                           : taiko_catalog_song(selection)->music_id);
     unsigned difficulty = g_song_difficulty.load(std::memory_order_acquire);
     difficulty = normalize_difficulty(*song, difficulty);
     g_song_selection.store(selection, std::memory_order_release);
@@ -736,7 +810,12 @@ void change_song_difficulty(int direction, unsigned player)
     }
     const TaikoCatalogSong* song = taiko_catalog_song(selection);
     if (!song) return;
-    if (taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active()) {
+    if (!song->osu_group.empty()) {
+        const auto size = g_osu_groups.at(song->osu_group).size();
+        g_osu_variant = (int64_t(g_osu_variant) + direction + size) % size;
+        if (player < 2) g_browser_players.join(player);
+        g_browser_players.ready = 0;
+    } else if (taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active()) {
         if (player > 1) player = g_browser_players.focus;
         g_browser_players.change_difficulty(player, direction, song->difficulty_mask);
         g_song_difficulty.store(g_browser_players.difficulty[player], std::memory_order_release);
@@ -761,6 +840,11 @@ void request_song_launch(unsigned player = 2)
         selection = g_song_entries[g_song_browser_position].catalog_index;
     }
     const TaikoCatalogSong* song = taiko_catalog_song(selection);
+    if (song && !song->osu_group.empty()) {
+        const auto& charts = g_osu_groups.at(song->osu_group);
+        selection = charts[g_osu_variant % charts.size()];
+        song = taiko_catalog_song(selection);
+    }
     if (!song || g_song_launch_requested.load(std::memory_order_acquire))
         return;
     const unsigned difficulty =

@@ -20,7 +20,7 @@ static unsigned current_song;
 static int browser_level;
 static uint8_t joined, ready;
 static bool standalone = true;
-static unsigned identity_requests;
+static unsigned identity_requests, identity_selection;
 static std::unordered_map<uint32_t, uint8_t> memory;
 uint8_t vm_read8(uint32_t a) { return memory[a]; }
 uint32_t vm_read32(uint32_t a) {
@@ -74,7 +74,12 @@ extern "C" int taiko_pc_mode_is_active() { return 1; }
 extern "C" int taiko_pc_mode_is_standalone() { return standalone; }
 extern "C" void taiko_pc_mode_entry_tick(ppu_context*) {}
 extern "C" int taiko_pc_mode_results_return(uint32_t, uint32_t) { return 0; }
-void taiko_host_audio_select_preview(std::string_view, uint64_t) {}
+static unsigned preview_requests;
+static std::string preview_id;
+void taiko_host_audio_select_preview(std::string_view id, uint64_t) {
+    ++preview_requests;
+    preview_id = id;
+}
 static std::vector<TaikoPlusSfx> sounds;
 void taiko_host_audio_play_sfx(TaikoPlusSfx s) { sounds.push_back(s); }
 void taiko_host_audio_begin_gameplay_handoff() {}
@@ -87,8 +92,9 @@ const char* taiko_catalog_difficulty_name(unsigned d) {
     static const char* names[] = {"EASY", "NORMAL", "HARD", "ONI", "URA"};
     return names[d % 5];
 }
-bool taiko_catalog_content_identity(std::size_t, unsigned, taiko_plus::ContentIdentity&, std::string* error) {
+bool taiko_catalog_content_identity(std::size_t selection, unsigned, taiko_plus::ContentIdentity&, std::string* error) {
     ++identity_requests;
+    identity_selection = selection;
     *error = "test stops before guest launch";
     return false;
 }
@@ -273,27 +279,63 @@ int main() {
     custom.music_id = "tc_fixture";
     custom.title = "Folder song";
     custom.genre = "CUSTOM TJA";
-    custom.custom_folder = "Anime/Pack";
+    custom.custom_folder = "Anime";
     custom.difficulty_mask = 8;
+    songs.push_back(custom);
+    custom.music_id = "tc_fixture2"; custom.title = "Second folder song";
     songs.push_back(custom);
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();
     key(TAIKO_BROWSER_LAST);
+    key(TAIKO_BROWSER_PREVIOUS);
     key(TAIKO_BROWSER_PLAY);
     assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
+    assert(rows[0].catalog_index == 2);
     key(TAIKO_BROWSER_PLAY); // Anime
-    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
-    key(TAIKO_BROWSER_PLAY); // Pack
-    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
+    assert(rows.size() == 3 && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
     key(TAIKO_BROWSER_PLAY);
     assert(courses() == 1);
     key(TAIKO_BROWSER_SEARCH_CLEAR); // collapse
     key(TAIKO_BROWSER_SEARCH_CLEAR); // parent
     assert(rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
-    key(TAIKO_BROWSER_SEARCH_CLEAR); // custom root
     assert(browser_level == TAIKO_OVERLAY_BROWSER_SONGS);
     key(TAIKO_BROWSER_SEARCH_CLEAR); // stock categories
     assert(browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES);
+    key(TAIKO_BROWSER_FIRST);
+
+    // Named osu charts group by set, not by title, and scroll beyond five.
+    const unsigned osu_begin = songs.size();
+    for (unsigned i = 0; i < 12; ++i) {
+        TaikoCatalogSong chart;
+        chart.music_id = "osu" + std::to_string(i);
+        chart.title = "Grouped song";
+        chart.genre = "OSU! LAZER";
+        chart.osu_group = "set-a";
+        chart.osu_difficulty = "Named " + std::to_string(i);
+        chart.stars[3] = 1 + i / 2;
+        chart.difficulty_mask = 8;
+        songs.push_back(chart);
+    }
+    taiko_frontend_standalone_session_begin();
+    taiko_frontend_enter_song_select_shell();
+    key(TAIKO_BROWSER_LAST);
+    key(TAIKO_BROWSER_PLAY);
+    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
+    key(TAIKO_BROWSER_PLAY);
+    assert(courses() == 8); // Visible window, not a five-course truncation.
+    const unsigned preview_before = preview_requests;
+    const std::string original_preview = preview_id;
+    for (unsigned i = 0; i < 10; ++i) key(TAIKO_BROWSER_NEXT);
+    bool reached_tail = false;
+    for (const auto& row : rows)
+        if (row.kind == TAIKO_OVERLAY_ROW_DIFFICULTY && row.selected)
+            reached_tail = row.catalog_index >= osu_begin + 10;
+    assert(reached_tail);
+    assert(preview_requests == preview_before && preview_id == original_preview);
+    key(TAIKO_BROWSER_PLAY);
+    assert(identity_selection == osu_begin + 10);
+    key(TAIKO_BROWSER_SEARCH_CLEAR);
+    key(TAIKO_BROWSER_SEARCH_CLEAR);
     key(TAIKO_BROWSER_FIRST);
 
     standalone = false;

@@ -184,41 +184,51 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
         const fs::path root = configured && *configured ? from_utf8(configured) :
             fs::weakly_canonical(from_utf8(vfs && *vfs ? vfs : "game/vfs") / "data").parent_path() / "custom_songs";
         fs::create_directories(root / "TJA");
-        if (fs::is_empty(root / "TJA")) return;
+
         const auto cache = root / ".cache";
         fs::create_directories(cache);
-        const auto index = cache / "index.bin";
-        if (run_python({"scan", utf8(root / "TJA"), utf8(index)})) {
-            std::fprintf(stderr, "[custom_songs] discovery failed; check Python 3.10+ and TAIKO_CUSTOM_TOOL\n");
-            return;
+        for (bool lazer : {false, true}) {
+        if (!lazer && fs::is_empty(root / "TJA")) continue;
+        const auto index = cache / (lazer ? "osu-index.bin" : "index.bin");
+        const std::vector<std::string> command = lazer
+            ? std::vector<std::string>{"scan-osu", utf8(index)}
+            : std::vector<std::string>{"scan", utf8(root / "TJA"), utf8(index)};
+        if (run_python(command)) {
+            std::fprintf(stderr, "[custom_songs] %s discovery failed; see log above\n", lazer ? "osu!lazer" : "TJA");
+            continue;
         }
         std::ifstream in(index, std::ios::binary);
-        if (word(in) != 0x32434a54) return;
+        if (word(in) != 0x33434a54) continue;
         const uint32_t count = word(in);
-        if (count > 100000) return;
+        if (count > 100000) continue;
         for (uint32_t i = 0; i < count; ++i) {
             TaikoCatalogSong song;
             song.music_id = string(in); song.title = string(in);
             song.custom_subtitle = string(in);
             song.tja_path = string(in); song.audio_path = string(in);
             song.custom_revision = string(in);
+            song.osu_group = string(in); song.osu_difficulty = string(in);
             in.read(reinterpret_cast<char*>(song.stars.data()), 5);
             song.difficulty_mask = uint8_t(in.get());
             song.preview_ms = word(in);
             if (!in || song.music_id.size() != 14 || song.music_id.substr(0, 2) != "tc" ||
                 song.music_id.find_first_not_of("tc0123456789abcdef") != std::string::npos) break;
             if (std::any_of(songs.begin(), songs.end(), [&](const auto& s) {return s.music_id == song.music_id;})) continue;
-            song.custom_folder = utf8(fs::relative(from_utf8(song.tja_path).parent_path(),
+            if (!lazer) song.custom_folder = utf8(fs::relative(from_utf8(song.tja_path).parent_path(),
                                                   fs::canonical(root / "TJA")));
             std::replace(song.custom_folder.begin(), song.custom_folder.end(), '\\', '/');
             if (song.custom_folder == ".") song.custom_folder.clear();
+            // ESE layout: TJA/category/song/assets. Only the category is a
+            // navigation folder; the song directory is an implementation detail.
+            song.custom_folder = song.custom_folder.substr(0, song.custom_folder.find('/'));
             song.original_title = song.title;
-            song.genre = "CUSTOM TJA";
+            song.genre = lazer ? "OSU! LAZER" : "CUSTOM TJA";
             song.unique_id = 0; // Custom scores must never be submitted as cabinet content.
             song.custom_cache = utf8(cache / song.music_id / song.custom_revision);
             songs.push_back(std::move(song));
         }
-        std::fprintf(stderr, "[custom_songs] discovered %u TJA songs\n", count);
+        std::fprintf(stderr, "[custom_songs] discovered %u %s charts\n", count, lazer ? "osu!lazer" : "TJA");
+        }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[custom_songs] discovery failed: %s\n", e.what());
     }
@@ -250,9 +260,13 @@ bool taiko_custom_prepare(const TaikoCatalogSong& song, std::string& error)
     try {
         uint32_t lead = 0;
         if (!chart_ready(song, lead)) {
-            if (run_python({"convert", song.tja_path, song.custom_cache, song.custom_revision}) ||
-                !chart_ready(song, lead)) {
-                error = "TJA conversion failed; see custom_songs log"; return false;
+            std::vector<std::string> command{"convert", song.tja_path, song.custom_cache, song.custom_revision};
+            if (song.genre == "OSU! LAZER") {
+                command.push_back("--osu-level");
+                command.push_back(std::to_string(song.stars[3]));
+            }
+            if (run_python(command) || !chart_ready(song, lead)) {
+                error = "Chart conversion failed; see custom_songs log"; return false;
             }
         }
         TaikoDecodedAudio decoded;

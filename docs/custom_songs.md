@@ -2,9 +2,10 @@
 
 Put TJA charts and their audio beneath `USRDIR/custom_songs/TJA`, then restart
 TaikoRecomp. Open Taiko+ and choose **CUSTOM TJA**. Subfolders are scanned
-recursively and retain their hierarchy inside that category. Open a folder to
-see its songs and subfolders; Back returns to the parent. Search finds songs
-across folders.
+recursively. The first directory beneath TJA is the category; song asset
+directories beneath it are flattened so a category opens directly to playable
+songs. Standard category names use the stock category colors. Search finds
+songs across categories.
 
 ```text
 USRDIR/custom_songs/
@@ -78,9 +79,39 @@ offset retain the existing timing path. Chart preparation adds enough common
 lead-in to place the earliest note at two seconds, padding PCM by exactly the
 same number of samples. Browser previews use the unpadded source audio.
 
-osu!lazer integration is not included yet. Its future adapter should resolve
-Realm records to the existing hashed files and reuse this loading path without
-exporting OSZ archives or duplicating audio.
+## Installed osu!lazer library
+
+**OSU! LAZER** lists installed native osu!taiko maps. Maps are grouped by lazer beatmap-set identity and audio file, so unrelated
+sets with the same title stay separate. Opening a song expands its named
+difficulties, ordered by rating, with scrolling for larger sets. The selected
+osu chart is shared by joined players and plays through Green's Oni slot;
+changing it clears both players' readiness. All named difficulties are retained; osu!standard, catch and mania
+maps are not converted. The displayed 1–10 level is an approximation from
+lazer's stored star rating, not an official Taiko rating.
+
+Discovery checks Linux/XDG, Flatpak and Windows roaming storage and follows
+`storage.ini`'s `FullPath`. Set `TAIKO_OSU_LAZER` to a storage directory or its
+`client.realm` to override it; set it to `0` to disable discovery. Restart after
+changing the installed library. The read-only dynamic Realm helper follows
+[osuplayer's reader](https://github.com/Founntain/osuplayer/blob/master/OsuPlayer.IO/DbReader/RealmReader.cs)
+and osu!'s file models. It never migrates or edits the library. Chart/audio
+paths resolve directly to `files/<first>/<first two>/<hash>`; only indexes and
+converted fumen are cached in TaikoRecomp's custom cache.
+
+Build the pinned Realm 20.1.0 helper with a .NET 8+ SDK:
+
+```sh
+scripts/build_osu_lazer_reader.sh
+# Self-contained distribution (no user .NET installation):
+scripts/build_osu_lazer_reader.sh build-linux/tools/osu_lazer_reader linux-x64
+```
+
+Keep the complete helper directory under `tools/` beside the executable.
+Development DLL builds require a .NET 8 runtime; `TAIKO_DOTNET` overrides its
+command, and `TAIKO_OSU_READER` selects a helper executable or DLL. Windows/Pi
+releases must publish for their own runtime (`win-x64` / `linux-arm64`). Python
+is still needed for chart conversion. If Realm cannot read a library version,
+discovery reports an error and leaves the original library untouched.
 
 ## Automated validation
 
@@ -103,3 +134,10 @@ through the host browser, loaded both native title types (11 and 12), decoded
 reached native Results without the previous null-material/TOCBAD errors.
 This checks integration; musical sync and Windows/Pi playback still require
 platform-specific play testing.
+
+Lazer integration validation (2026-09-09): the real redirected library resolved
+15,779 native taiko records, with 15,778 playable/nonempty charts indexed. A
+selected installed chart converted to big-endian fumen, decoded 3,203,658
+preview frames directly from its hashed audio file, and opened through the
+guest chart overlay. Full gameplay sync and Windows/ARM helper execution are
+not yet live-validated for lazer maps.

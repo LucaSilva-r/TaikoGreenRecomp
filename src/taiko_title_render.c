@@ -1500,6 +1500,35 @@ static int render_short_fixed(const char *title, void *out,
     return 1;
 }
 
+/* Preserve the calibrated glyph height and outline, compressing horizontally
+ * only when a custom title exceeds the native texture's safe width. */
+static int fit_horizontal_title(Buf *text) {
+    const int limit = (int)TITLE_DIM_NAME_W - 2 * INGAME_RIGHT_MARGIN;
+    if (text->w <= limit) return 1;
+    Buf fitted;
+    if (!buf_init(&fitted, limit, text->h)) return 0;
+    for (int y = 0; y < text->h; ++y) {
+        for (int x = 0; x < limit; ++x) {
+            // Area filtering retains thin strokes when several source pixels
+            // contribute to a single destination pixel.
+            const int start = x * text->w;
+            const int end = (x + 1) * text->w;
+            unsigned sums[4] = {0};
+            for (int sx = start / limit; sx < (end + limit - 1) / limit; ++sx) {
+                const int left = start > sx * limit ? start : sx * limit;
+                const int right = end < (sx + 1) * limit ? end : (sx + 1) * limit;
+                const uint8_t *pixel = text->px + ((size_t)y * text->w + sx) * 4;
+                for (int c = 0; c < 4; ++c) sums[c] += pixel[c] * (right - left);
+            }
+            uint8_t *pixel = fitted.px + ((size_t)y * limit + x) * 4;
+            for (int c = 0; c < 4; ++c) pixel[c] = (sums[c] + text->w / 2) / text->w;
+        }
+    }
+    buf_free(text);
+    *text = fitted;
+    return 1;
+}
+
 static int build_horizontal_p(TitleProfile *p, const char *s,
                               float letter_spacing, Buf *out_buf) {
     int cps[256], ncp = 0;
@@ -1546,6 +1575,10 @@ static int build_horizontal_p(TitleProfile *p, const char *s,
     if (ok)
         ok = downscale_buf(&hi, out_buf, p->ss);
     buf_free(&hi);
+    if (ok && !fit_horizontal_title(out_buf)) {
+        buf_free(out_buf);
+        return 0;
+    }
     return ok;
 }
 

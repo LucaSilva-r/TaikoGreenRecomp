@@ -52,6 +52,32 @@ class CustomSongsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed since discovery"):
             custom.convert(self.chart, self.root / "cache", entry["revision"])
 
+    def test_osu_native_chart_conversion(self):
+        raw = b"""osu file format v14
+[General]
+AudioFilename: audio.ogg
+Mode: 1
+[Metadata]
+Title: Fixture
+Version: Named difficulty
+[Difficulty]
+SliderMultiplier: 1.4
+[TimingPoints]
+0,500,4,2,1,100,1,0
+[HitObjects]
+256,192,1000,1,0,0:0:0:0:
+256,192,2000,1,2,0:0:0:0:
+"""
+        chart = self.root / "hashed-osu-file"
+        chart.write_bytes(raw)
+        output = self.root / "osu-cache"
+        custom.convert(chart, output, custom.revision(chart, 5), 5)
+        fumen = parse_fumen(str(output / "m.bin"))
+        self.assertEqual(fumen.header.order, ">")
+        self.assertTrue(fumen.measures)
+        self.assertNotEqual(custom.revision(chart, 5), custom.revision(chart, 6))
+        self.assertEqual(chart.read_bytes(), raw)
+
     def test_missing_wave_is_not_indexed(self):
         self.write()
         (self.root / "audio.ogg").unlink()

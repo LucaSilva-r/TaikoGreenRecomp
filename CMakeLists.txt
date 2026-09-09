@@ -449,6 +449,9 @@ add_custom_target(taiko_custom_song_tools
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/custom_songs.py"
             "$<TARGET_FILE_DIR:taiko_boot>/tools/custom_songs.py"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/osu.py"
+            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/osu.py"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${TAIKO_TJA_CONVERTER_FILES}
             "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/tja2fumen"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different

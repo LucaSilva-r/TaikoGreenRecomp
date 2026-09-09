@@ -731,8 +731,8 @@ static void render_host(void)
         snprintf(result_count, sizeof(result_count), "%u CATEGORIES",
                  g_song_match_total);
     else
-        snprintf(result_count, sizeof(result_count), "%u SONGS",
-                 g_song_match_total);
+        snprintf(result_count, sizeof(result_count), "%u %s",
+                 g_song_match_total, g_song_match_total == 1 ? "SONG" : "SONGS");
     draw_text_right(result_count, 18, 1224, 58);
 
     if (!g_song_catalog_total) {
@@ -741,7 +741,7 @@ static void render_host(void)
         return;
     }
 
-    if (!g_song_match_total &&
+    if (!g_song_row_count &&
         g_song_browser_level == TAIKO_OVERLAY_BROWSER_SONGS) {
         draw_text_at("NO MATCHES", 43, 910, 313);
         draw_text_at("BACKSPACE TO EDIT OR ESC TO CLEAR", 22, 910, 369);
@@ -758,7 +758,7 @@ static void render_host(void)
             if (item->kind == TAIKO_OVERLAY_ROW_DIFFICULTY) {
                 fill_rounded_rect(left, top, 1252, top + 53, 10,
                     item->selected ? RGB_COLOUR(0x3C, 0x52, 0x69) : RGB_COLOUR(0x22, 0x30, 0x42));
-                draw_text_left_fit(item->title, 22, 165, left + 18, top + 27);
+                draw_text_left_fit(item->title, 22, 1032 - left - 110, left + 18, top + 27);
                 char rating[24];
                 if (item->stars) snprintf(rating, sizeof rating, "★ %u", item->stars);
                 else snprintf(rating, sizeof rating, "★ --");
@@ -794,13 +794,13 @@ static void render_host(void)
                                    left + 18, top + 19);
                 draw_text_left_fit(
                     item->kind == TAIKO_OVERLAY_ROW_EXIT
-                        ? "RETURN TO THE CATEGORY LIST" : item->genre,
+                        ? "RETURN TO CATEGORIES" : item->genre,
                     15, 350, left + 19, top + 40);
             }
             char number[24];
             if (item->kind == TAIKO_OVERLAY_ROW_CATEGORY)
-                snprintf(number, sizeof(number), "%u SONGS",
-                         item->catalog_index);
+                snprintf(number, sizeof(number), "%u %s",
+                         item->catalog_index, item->catalog_index == 1 ? "SONG" : "SONGS");
             else if (item->kind == TAIKO_OVERLAY_ROW_EXIT)
                 snprintf(number, sizeof(number), "EXIT");
             else

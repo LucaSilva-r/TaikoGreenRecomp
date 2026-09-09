@@ -104,6 +104,23 @@ int main(void)
     native_count = 0;
     assert(visit_host_ui(1, collect_ui, NULL, &info));
     assert(visit_host_ui(1, NULL, NULL, &info) && !info.animated);
+    // Folder-only levels have zero direct songs but must draw their rows.
+    row.title = "Folder A"; row.kind = TAIKO_OVERLAY_ROW_CATEGORY;
+    taiko_overlay_show_song_browser("P1", "", "", "CUSTOM TJA", 0,
+        0, 0, 1, "CUSTOM TJA", 9, 10, "", 0, "", 0, 1, 1, &row, 1);
+    g_song_animation_start = monotonic_milliseconds() - 200;
+    native_count = 0;
+    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    first_count = native_count;
+    memcpy(first_ids, native_ids, first_count * sizeof(uint64_t));
+    row.title = "Folder B";
+    taiko_overlay_show_song_browser("P1", "", "", "CUSTOM TJA", 0,
+        0, 0, 1, "CUSTOM TJA", 9, 10, "", 0, "", 0, 1, 1, &row, 1);
+    g_song_animation_start = monotonic_milliseconds() - 200;
+    native_count = 0;
+    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(native_count != first_count ||
+           memcmp(first_ids, native_ids, first_count * sizeof(uint64_t)));
     // Incoming panels are opaque as a screen, with a black backing. Polling
     // alone must not spend the animation while the guest is busy loading.
     taiko_overlay_animate_browser(0);

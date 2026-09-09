@@ -7,3 +7,9 @@ MIT license are retained in `tja2fumen/LICENSE.txt`.
 `../custom_songs.py` adapts the connector's `_convert_charts`, `_first_note_ms`
 and lead-in flow for local files. It does not import the connector's service,
 database, catalog, or Sony ATRAC encoding dependencies.
+
+# osu!taiko converter
+
+`osu.py` is copied from `Zucchini-connector/app/osu.py` (2026-09-09).
+The optional rosu import is deferred to OSZ inspection; direct lazer conversion
+uses the installed database rating and needs no additional Python packages.

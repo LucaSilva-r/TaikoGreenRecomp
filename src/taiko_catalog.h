@@ -17,6 +17,7 @@ struct TaikoCatalogSong {
     uint8_t difficulty_mask = 0;
     std::array<uint8_t, 5> stars{}; /* Authored Green ratings; zero means unknown. */
     std::string tja_path, audio_path, custom_cache, custom_revision, custom_subtitle, custom_folder;
+    std::string osu_group, osu_difficulty;
     uint32_t preview_ms = 0;
 };
 

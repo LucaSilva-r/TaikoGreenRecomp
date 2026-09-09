@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import functools
 import struct
 import math
 import os
 from pathlib import Path
 import sys
 import tempfile
+import json
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
+import osu
 from tja2fumen.parsers import parse_tja
 from tja2fumen.converters import convert_tja_to_fumen, fix_dk_note_types_course
 from tja2fumen.writers import write_fumen
@@ -22,13 +26,21 @@ RECIPE = "green-tja-1"
 MAX_MEASURES = 300
 
 
-def revision(path: Path) -> str:
+@functools.lru_cache(maxsize=1)
+def recipe_digest():
     digest = hashlib.sha256(RECIPE.encode())
     digest.update(Path(__file__).read_bytes())
-    digest.update(path.read_bytes())
+    digest.update((Path(__file__).parent / "vendor/osu.py").read_bytes())
     for source in sorted((Path(__file__).parent / "vendor/tja2fumen").glob("*.py")):
         digest.update(source.read_bytes())
     digest.update((Path(__file__).parent / "vendor/tja2fumen/hp_values.csv").read_bytes())
+    return digest
+
+
+def revision(path: Path, osu_level: int = 0) -> str:
+    digest = recipe_digest().copy()
+    digest.update(path.read_bytes())
+    digest.update(bytes([osu_level]))
     return digest.hexdigest()
 
 
@@ -75,9 +87,19 @@ def inspect(path: Path, root: Path) -> dict:
             "revision": revision(path)}
 
 
-def convert(path: Path, output: Path, expected: str) -> None:
-    if revision(path) != expected:
+def convert(path: Path, output: Path, expected: str, osu_level: int = 0) -> None:
+    if revision(path, osu_level) != expected:
         raise ValueError("TJA changed since discovery; restart to refresh the library")
+    if osu_level:
+        fumen = osu.fumen_from_osu(path.read_bytes(), "Oni", osu_level)
+        fumen.header.order = ">"
+        fumens = [("m", fumen)]
+    else:
+        fumens = tja_fumens(path)
+    publish_fumens(fumens, output, expected)
+
+
+def tja_fumens(path: Path):
     parsed = parse_tja(str(path))
     fumens = []
     for course, suffix in zip(COURSES, SUFFIXES):
@@ -89,6 +111,10 @@ def convert(path: Path, output: Path, expected: str) -> None:
         fumen.header.order = ">"
         fix_dk_note_types_course(fumen)
         fumens.append((suffix, fumen))
+    return fumens
+
+
+def publish_fumens(fumens, output, expected):
     earliest = min((m.offset_start + 240000 / m.bpm + n.pos
                     for _, f in fumens for m in f.measures if m.bpm
                     for b in m.branches.values() for n in b.notes), default=math.inf)
@@ -112,6 +138,96 @@ def convert(path: Path, output: Path, expected: str) -> None:
         os.replace(marker, output / "ready")
 
 
+def lazer_root() -> Path | None:
+    configured = os.environ.get("TAIKO_OSU_LAZER")
+    if configured == "0":
+        return None
+    candidates = [Path(configured)] if configured else [
+        Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "osu",
+        Path.home() / ".var/app/sh.ppy.osu/data/osu",
+        Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "osu",
+    ]
+    for root in candidates:
+        if root.name == "client.realm":
+            root = root.parent
+        for _ in range(4):
+            redirect = root / "storage.ini"
+            target = ""
+            if redirect.is_file():
+                for line in redirect.read_text(encoding="utf-8-sig").splitlines():
+                    key, sep, value = line.partition("=")
+                    if sep and key.strip() == "FullPath":
+                        target = value.strip()
+            if not target or Path(target) == root:
+                break
+            root = Path(target)
+        if (root / "client.realm").is_file():
+            return root.resolve()
+    if configured:
+        raise ValueError("configured osu!lazer library has no client.realm")
+    return None
+
+
+def scan_lazer(output: Path) -> list[dict]:
+    root = lazer_root()
+    if root is None:
+        return []
+    directory = Path(__file__).parent / "osu_lazer_reader"
+    executable = directory / ("OsuLazerReader.exe" if os.name == "nt" else "OsuLazerReader")
+    # Self-contained release builds have an adjacent runtime library. A normal
+    # apphost still needs dotnet; use the DLL so custom TAIKO_DOTNET works.
+    bundled = (directory / ("hostfxr.dll" if os.name == "nt" else "libhostfxr.so")).is_file()
+    default_reader = executable if bundled else directory / "OsuLazerReader.dll"
+    reader = Path(os.environ.get("TAIKO_OSU_READER", str(default_reader)))
+    if not reader.is_file():
+        raise ValueError("osu!lazer reader is not built; see docs/custom_songs.md")
+    command = ([os.environ.get("TAIKO_DOTNET", "dotnet"), str(reader)]
+               if reader.suffix == ".dll" else [str(reader)])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    manifest = output.with_suffix(".json")
+    subprocess.run(command + [str(root), str(manifest)], check=True)
+    songs = []
+    for entry in json.loads(manifest.read_text(encoding="utf-8")):
+        try:
+            source = Path(entry["source"])
+            if source.stat().st_size > osu.MAX_OSU_BYTES:
+                raise ValueError("osu chart exceeds 16 MiB")
+            raw = source.read_bytes()
+            parsed = osu.parse_osu(raw)
+            if parsed.mode != 1 or not parsed.hit_objects:
+                continue
+            rating = float(entry["rating"])
+            level = max(1, min(10, math.floor(rating * 1.5 + 0.5))) if math.isfinite(rating) and rating >= 0 else 1
+            title = parsed.title_unicode or parsed.title or source.name
+            preview = 0
+            for line in raw.decode("utf-8-sig").splitlines():
+                if line.startswith("PreviewTime:"):
+                    preview = max(0, int(line.partition(":")[2].strip()))
+            songs.append({"id": "tc" + entry["hash"][:12],
+                "title": title,
+                "group": entry["set_id"] + ":" + Path(entry["audio"]).name,
+                "difficulty": parsed.version or "Taiko",
+                "subtitle": parsed.artist_unicode or parsed.artist,
+                "source": str(source), "audio": entry["audio"],
+                "revision": revision(source, level), "stars": [0, 0, 0, level, 0],
+                "mask": 8, "preview_ms": min(preview, 0xffffffff)})
+        except Exception as exc:
+            print(f"[osu_lazer] skipped chart: {exc}", file=sys.stderr)
+    return songs
+
+
+def write_index(songs, output):
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("wb") as stream:
+        stream.write(b"TJC3" + struct.pack("<I", len(songs)))
+        for song in songs:
+            for key in ("id", "title", "subtitle", "source", "audio", "revision", "group", "difficulty"):
+                value = song.get(key, "").encode("utf-8")
+                stream.write(struct.pack("<I", len(value)) + value)
+            stream.write(bytes(song["stars"]) + bytes([song["mask"]]))
+            stream.write(struct.pack("<I", song["preview_ms"]))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -122,9 +238,15 @@ def main() -> None:
     prep.add_argument("source", type=Path)
     prep.add_argument("output", type=Path)
     prep.add_argument("revision")
+    prep.add_argument("--osu-level", type=int, default=0)
+    lazer = sub.add_parser("scan-osu")
+    lazer.add_argument("output", type=Path)
     args = parser.parse_args()
+    if args.command == "scan-osu":
+        write_index(scan_lazer(args.output), args.output)
+        return
     if args.command == "convert":
-        convert(args.source, args.output, args.revision)
+        convert(args.source, args.output, args.revision, args.osu_level)
         return
     songs = []
     ids = set()
@@ -139,15 +261,7 @@ def main() -> None:
             songs.append(song)
         except Exception as exc:
             print(f"[custom_songs] {path}: {exc}", file=sys.stderr)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("wb") as stream:
-        stream.write(b"TJC2" + struct.pack("<I", len(songs)))
-        for song in songs:
-            for key in ("id", "title", "subtitle", "source", "audio", "revision"):
-                value = song[key].encode("utf-8")
-                stream.write(struct.pack("<I", len(value)) + value)
-            stream.write(bytes(song["stars"]) + bytes([song["mask"]]))
-            stream.write(struct.pack("<I", song["preview_ms"]))
+    write_index(songs, args.output)
 
 
 
