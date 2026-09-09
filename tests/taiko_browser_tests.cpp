@@ -268,6 +268,34 @@ int main() {
     assert(vm_read32(0x300008) == 0); // Release the native response receiver.
     login_fixture = false;
 
+    // Custom folders remain under the single top-level CUSTOM TJA category.
+    TaikoCatalogSong custom;
+    custom.music_id = "tc_fixture";
+    custom.title = "Folder song";
+    custom.genre = "CUSTOM TJA";
+    custom.custom_folder = "Anime/Pack";
+    custom.difficulty_mask = 8;
+    songs.push_back(custom);
+    taiko_frontend_standalone_session_begin();
+    taiko_frontend_enter_song_select_shell();
+    key(TAIKO_BROWSER_LAST);
+    key(TAIKO_BROWSER_PLAY);
+    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
+    key(TAIKO_BROWSER_PLAY); // Anime
+    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
+    key(TAIKO_BROWSER_PLAY); // Pack
+    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
+    key(TAIKO_BROWSER_PLAY);
+    assert(courses() == 1);
+    key(TAIKO_BROWSER_SEARCH_CLEAR); // collapse
+    key(TAIKO_BROWSER_SEARCH_CLEAR); // parent
+    assert(rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
+    key(TAIKO_BROWSER_SEARCH_CLEAR); // custom root
+    assert(browser_level == TAIKO_OVERLAY_BROWSER_SONGS);
+    key(TAIKO_BROWSER_SEARCH_CLEAR); // stock categories
+    assert(browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES);
+    key(TAIKO_BROWSER_FIRST);
+
     standalone = false;
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();

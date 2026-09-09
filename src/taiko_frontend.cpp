@@ -142,11 +142,13 @@ struct SongBrowserEntry {
     bool exit_category;
     unsigned catalog_index;
     unsigned song_position;
+    std::string folder;
 };
 std::vector<SongBrowserEntry> g_song_entries;
 std::string g_song_query;
 unsigned g_song_browser_position = 0;
 unsigned g_song_category = 0;
+std::string g_custom_folder;
 enum class SongBrowserLevel { Categories, Songs };
 SongBrowserLevel g_song_browser_level = SongBrowserLevel::Categories;
 bool g_song_global_search = false;
@@ -322,18 +324,46 @@ std::string title_sort_key(const std::string& title)
     return key;
 }
 
+bool custom_folder_browser()
+{
+    return !g_song_global_search && g_song_query.empty() &&
+           std::string_view(kSongCategories[g_song_category].genre) == "CUSTOM TJA";
+}
+
+void leave_song_folder_locked()
+{
+    if (custom_folder_browser() && !g_custom_folder.empty()) {
+        const auto slash = g_custom_folder.rfind('/');
+        g_custom_folder = slash == std::string::npos ? "" : g_custom_folder.substr(0, slash);
+    } else {
+        g_song_browser_level = SongBrowserLevel::Categories;
+        g_custom_folder.clear();
+    }
+}
+
 void rebuild_song_matches_locked(unsigned preferred_catalog_index)
 {
     g_browser_players.collapse();
     g_song_matches.clear();
     g_song_entries.clear();
+    std::vector<std::string> folders;
     const std::size_t count = taiko_catalog_count();
     for (std::size_t index = 0; index < count; ++index) {
         const TaikoCatalogSong* song = taiko_catalog_song(index);
         const SongCategory& category = kSongCategories[g_song_category];
         if (song && (g_song_global_search || song->genre == category.genre) &&
-            song_matches_query(*song, g_song_query))
+            song_matches_query(*song, g_song_query)) {
+            if (custom_folder_browser() && song->custom_folder != g_custom_folder) {
+                const auto prefix = g_custom_folder.empty() ? "" : g_custom_folder + "/";
+                if (song->custom_folder.compare(0, prefix.size(), prefix) != 0) continue;
+                const auto tail = song->custom_folder.substr(prefix.size());
+                const auto child = prefix + tail.substr(0, tail.find('/'));
+                if (std::find(folders.begin(), folders.end(), child) == folders.end())
+                    folders.push_back(child);
+                continue;
+            }
             g_song_matches.push_back(static_cast<unsigned>(index));
+        }
     }
     std::stable_sort(g_song_matches.begin(), g_song_matches.end(),
                      [](unsigned left, unsigned right) {
@@ -346,6 +376,9 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
         return a->music_id < b->music_id;
     });
     g_song_browser_position = 0;
+    std::sort(folders.begin(), folders.end());
+    for (const auto& folder : folders)
+        g_song_entries.push_back({true, 0, 0, folder});
     for (unsigned position = 0; position < g_song_matches.size(); ++position) {
         g_song_entries.push_back(
             {false, g_song_matches[position], position});
@@ -353,6 +386,8 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
             position + 1 == g_song_matches.size())
             g_song_entries.push_back({true, 0, position});
     }
+    if (!folders.empty() && g_song_matches.empty())
+        g_song_entries.push_back({true, 0, 0});
     const auto existing = std::find_if(
         g_song_entries.begin(), g_song_entries.end(),
         [preferred_catalog_index](const SongBrowserEntry& entry) {
@@ -429,6 +464,7 @@ void show_current_song()
     unsigned row_count = 0;
     bool selection_is_exit = false;
     std::string browser_category;
+    std::string navigation_title;
     unsigned browser_category_index = 0;
     unsigned browser_category_total = 0;
     {
@@ -436,11 +472,13 @@ void show_current_song()
         query = g_song_query;
         browser_category = g_song_global_search
             ? "SEARCH RESULTS" : kSongCategories[g_song_category].label;
+        if (custom_folder_browser() && !g_custom_folder.empty())
+            browser_category += " / " + g_custom_folder;
         browser_category_index = g_song_global_search ? 0 : g_song_category;
         browser_category_total = g_song_global_search
             ? 0 : static_cast<unsigned>(kSongCategories.size());
         match_total = static_cast<unsigned>(g_song_matches.size());
-        if (!match_total || g_song_entries.empty()) {
+        if (g_song_entries.empty()) {
             taiko_overlay_show_song_browser(
                 g_session_label, "", "", "", 0, 0, 0,
                 static_cast<unsigned>(count),
@@ -457,6 +495,9 @@ void show_current_song()
         const SongBrowserEntry& current =
             g_song_entries[g_song_browser_position];
         selection_is_exit = current.exit_category;
+        navigation_title = current.folder.empty()
+            ? (custom_folder_browser() && !g_custom_folder.empty() ? "BACK TO PARENT FOLDER" : "BACK TO CATEGORIES")
+            : current.folder.substr(current.folder.rfind('/') + 1);
         match_position = current.song_position;
         if (!selection_is_exit) selection = current.catalog_index;
 
@@ -468,14 +509,16 @@ void show_current_song()
         for (unsigned row = 0; row < row_count; ++row) {
             const SongBrowserEntry& entry = g_song_entries[first + row];
             if (entry.exit_category) {
-                row_titles[row] = "BACK TO CATEGORIES";
+                row_titles[row] = entry.folder.empty()
+                    ? (custom_folder_browser() && !g_custom_folder.empty() ? "BACK TO PARENT FOLDER" : "BACK TO CATEGORIES")
+                    : entry.folder.substr(entry.folder.rfind('/') + 1);
                 row_genres[row] = browser_category;
                 rows[row].title = row_titles[row].c_str();
                 rows[row].genre = row_genres[row].c_str();
                 rows[row].catalog_index = entry.song_position / 10 + 1;
                 rows[row].selected =
                     first + row == g_song_browser_position;
-                rows[row].kind = TAIKO_OVERLAY_ROW_EXIT;
+                rows[row].kind = entry.folder.empty() ? TAIKO_OVERLAY_ROW_EXIT : TAIKO_OVERLAY_ROW_CATEGORY;
                 continue;
             }
             const unsigned catalog_index = entry.catalog_index;
@@ -497,7 +540,7 @@ void show_current_song()
         g_player_song_index = ~0u;
         publish_preview({});
         taiko_overlay_show_song_browser(
-            g_session_label, "", "BACK TO CATEGORIES",
+            g_session_label, "", navigation_title.c_str(),
             browser_category.c_str(), 0, match_position,
             match_total, static_cast<unsigned>(count),
             browser_category.c_str(), browser_category_index,
@@ -797,8 +840,13 @@ void activate_browser_selection(unsigned player = 2)
                 g_song_selection.load(std::memory_order_acquire));
             g_song_search_active.store(false, std::memory_order_release);
         } else if (!g_song_entries.empty() &&
+                   !g_song_entries[g_song_browser_position].folder.empty()) {
+            g_custom_folder = g_song_entries[g_song_browser_position].folder;
+            rebuild_song_matches_locked(~0u);
+        } else if (!g_song_entries.empty() &&
                    g_song_entries[g_song_browser_position].exit_category) {
-            g_song_browser_level = SongBrowserLevel::Categories;
+            leave_song_folder_locked();
+            rebuild_song_matches_locked(~0u);
             g_song_global_search = false;
             g_song_query.clear();
             g_song_search_active.store(false, std::memory_order_release);
@@ -1202,8 +1250,9 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
                 g_song_query.clear();
                 rebuild_song_matches_locked(selected);
             } else {
-                g_song_browser_level = SongBrowserLevel::Categories;
+                leave_song_folder_locked();
                 g_song_global_search = false;
+                rebuild_song_matches_locked(~0u);
             }
         }
         g_song_search_active.store(false, std::memory_order_release);

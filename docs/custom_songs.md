@@ -2,7 +2,9 @@
 
 Put TJA charts and their audio beneath `USRDIR/custom_songs/TJA`, then restart
 TaikoRecomp. Open Taiko+ and choose **CUSTOM TJA**. Subfolders are scanned
-recursively; this first version puts all local TJA songs in that category.
+recursively and retain their hierarchy inside that category. Open a folder to
+see its songs and subfolders; Back returns to the parent. Search finds songs
+across folders.
 
 ```text
 USRDIR/custom_songs/

@@ -208,6 +208,10 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
             if (!in || song.music_id.size() != 14 || song.music_id.substr(0, 2) != "tc" ||
                 song.music_id.find_first_not_of("tc0123456789abcdef") != std::string::npos) break;
             if (std::any_of(songs.begin(), songs.end(), [&](const auto& s) {return s.music_id == song.music_id;})) continue;
+            song.custom_folder = utf8(fs::relative(from_utf8(song.tja_path).parent_path(),
+                                                  fs::canonical(root / "TJA")));
+            std::replace(song.custom_folder.begin(), song.custom_folder.end(), '\\', '/');
+            if (song.custom_folder == ".") song.custom_folder.clear();
             song.original_title = song.title;
             song.genre = "CUSTOM TJA";
             song.unique_id = 0; // Custom scores must never be submitted as cabinet content.
