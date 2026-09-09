@@ -30,6 +30,16 @@ int audio_sink_start_pull(AudioSinkPull pull) { (void)pull; return 0; }
 #define SDL_MAX_PREBUFFER_BLOCKS 32u
 
 static SDL_AudioStream* s_sdl_stream;
+extern void taiko_sync_test_postmix(const float*, unsigned, unsigned, unsigned,
+                                    uint64_t) __attribute__((weak));
+static void SDLCALL sync_test_postmix(void* userdata, const SDL_AudioSpec* spec,
+                                     float* buffer, int bytes)
+{
+    (void)userdata;
+    if (taiko_sync_test_postmix && spec->channels > 0 && spec->freq > 0 && bytes > 0)
+        taiko_sync_test_postmix(buffer, bytes / (sizeof(float) * spec->channels),
+                               spec->freq, spec->channels, ps3_host_monotonic_ns());
+}
 static AudioSinkPull s_sdl_pull;
 static uint32_t s_sdl_submitted_blocks;
 static uint32_t s_sdl_device_buffer_frames;
@@ -185,6 +195,10 @@ int audio_sink_init(void)
     atomic_store_explicit(&s_sdl_starvation_events, 0, memory_order_relaxed);
     atomic_store_explicit(&s_sdl_starvation_frames, 0, memory_order_relaxed);
     SDL_AudioDeviceID device = SDL_GetAudioStreamDevice(s_sdl_stream);
+    const char* sync_test = getenv("TAIKO_SYNC_AUTO_HIT");
+    if (sync_test && strcmp(sync_test, "1") == 0 && taiko_sync_test_postmix &&
+        !SDL_SetAudioPostmixCallback(device, sync_test_postmix, NULL))
+        fprintf(stderr, "[sync-test] postmix callback failed: %s\n", SDL_GetError());
     SDL_AudioSpec device_spec = {0};
     int device_frames = 0;
     if (SDL_GetAudioDeviceFormat(device, &device_spec, &device_frames) &&

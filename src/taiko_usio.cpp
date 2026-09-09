@@ -24,6 +24,7 @@
 #include <string>
 #include <ps3emu/host_platform.h>
 #include "taiko_host_input.h"
+#include "taiko_sync_test.h"
 
 #ifdef PS3RECOMP_INPUT_BACKEND_WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -946,6 +947,11 @@ void build_input_frames()
 #ifndef PS3RECOMP_INPUT_BACKEND_NULL
     taiko_host_input_snapshot input{};
     taiko_host_input_consume(&input);
+    if (const uint64_t peak = taiko_sync_test_consume(ps3_host_monotonic_ns())) {
+        input.active = 1;
+        input.rising[0] |= TAIKO_ACTION_HIT_CL;
+        input.hit_timestamp_ns[0][1] = peak;
+    }
     if (input.active) {
         for (unsigned player = 0; player < 2; ++player) {
             actions[player] = input.levels[player];

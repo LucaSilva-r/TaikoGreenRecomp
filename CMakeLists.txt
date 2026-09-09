@@ -406,6 +406,7 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"        # host TLS + online redirect
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_decoder.cpp" # shared NUB/RIFF decode and bounded PCM cache
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"    # in-process ATRAC3plus -> game/SPU PCM ring
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sync_test.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_offset.cpp" # persistent gameplay A/V latency calibration
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_audio.cpp" # Taiko+ cellAudio mix ownership
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_spu.c"  # raw lifted bnusCore mixer
@@ -829,6 +830,12 @@ if(BUILD_TESTING AND NOT WIN32)
     target_include_directories(taiko_host_input_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_host_input_tests COMMAND taiko_host_input_tests)
+    add_executable(taiko_sync_detector_tests "tests/taiko_sync_detector_tests.cpp")
+    target_include_directories(taiko_sync_detector_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_sync_detector_tests COMMAND taiko_sync_detector_tests)
+    add_executable(taiko_audio_clock_tests "tests/taiko_audio_clock_tests.cpp")
+    target_include_directories(taiko_audio_clock_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_audio_clock_tests COMMAND taiko_audio_clock_tests)
 
     add_executable(taiko_audio_offset_tests
         "tests/taiko_audio_offset_tests.cpp"

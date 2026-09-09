@@ -436,11 +436,15 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   clean rainbow arch while preserving the life meter and scene beneath it.
 - **Gameplay chart/audio synchronization is repaired** (2026-08-25; live
   validated on x86-64 and the Pi). The song used to jump forward in discrete
-  steps and finish seconds before the chart. Three separate faults, all of them
-  permanent losses because **nothing ever resyncs audio to the chart** -- the
-  chart reads `sys_time_get_system_time`, the song runs on the device clock, and
-  there is no feedback path between them. Every lost block or slot is a
-  permanent forward offset.
+  steps and finish seconds before the chart. Three separate faults caused
+  persistent audio losses, described below. September 9 investigation corrected
+  the earlier claim that there is no timing feedback: guest timer `0025B6A8`
+  interpolates an external sound reference. Its separate elapsed-read/reset
+  calls could discard host preemption time (approximately 104 ms in a captured
+  failure). The narrowly guarded default correction preserves that interval;
+  `TAIKO_GUEST_CLOCK_ATOMIC=0` disables it for comparison. The user confirmed
+  sustained sync under load with the correction. Experimental decoder recovery
+  remains opt-in. See `docs/sync_test.md` for evidence and validation limits.
 
   Establish that first before diagnosing anything here: the guest reads only
   `sys_time_get_system_time` and `mftb`, never `cellGcmGetVBlankCount`,

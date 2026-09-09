@@ -18,6 +18,8 @@
 #include "ppu_recomp.h"
 #include "taiko_audio_decoder.h"
 #include "taiko_audio_offset.h"
+#include "taiko_sync_test.h"
+#include "taiko_audio_clock.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -98,6 +100,7 @@ struct DecoderState {
     uint32_t sample_rate = 0;
     uint32_t ring_ea = 0;
     double gameplay_offset_frames = 0.0;
+    TaikoAudioClock recovery_clock;
     bool gameplay_song = false;
     int32_t loop_num = 0;
     size_t loop_start = 0;
@@ -468,6 +471,7 @@ void set_data_and_get_mem_size(ppu_context* ctx)
         }
 #endif
         if (ready && state.gameplay_song) {
+            taiko_sync_test_start(handle, source.c_str());
             cellAudioGameplayDumpStart();
             const double offset_frames =
                 static_cast<double>(gameplay_audio_offset_ms()) *
@@ -739,10 +743,32 @@ void decode(ppu_context* ctx)
                 if (state.loop_num > 0) state.loop_num--;
             }
             const size_t decode_end = can_loop ? loop_end : total_frames;
-            const double position = std::min<double>(
+            double position = std::min<double>(
                 static_cast<double>(state.decode_cursor) +
                     state.decode_fraction,
                 static_cast<double>(decode_end));
+            const double uncorrected_position = position;
+            static const bool recover_clock = [] {
+                const char* value = std::getenv("TAIKO_AUDIO_CLOCK_RECOVERY");
+                return value && std::strcmp(value, "1") == 0;
+            }();
+            if (recover_clock && state.gameplay_song && !can_loop) {
+                const bool was_anchored = state.recovery_clock.anchored;
+                const double skip = state.recovery_clock.correction(
+                    ps3_host_monotonic_ns(), position,
+                    state.gameplay_offset_frames, state.sample_rate);
+                if (!was_anchored && state.recovery_clock.anchored)
+                    std::fprintf(stderr, "[audio-clock] anchored handle=%08X rate=%u\n",
+                                 handle, state.sample_rate);
+                if (skip > 0) {
+                    const double previous = position;
+                    position = std::min(position + skip, double(decode_end));
+                    std::fprintf(stderr, "[audio-clock] recover handle=%08X skip_ms=%.3f "
+                                 "source=%.0f->%.0f offset_ms=%u\n", handle,
+                                 (position - previous) * 1000 / state.sample_rate,
+                                 previous, position, gameplay_audio_offset_ms());
+                }
+            }
             double source_step = 1.0;
             if (state.gameplay_song && state.sample_rate) {
                 const double target_offset_frames =
@@ -770,7 +796,18 @@ void decode(ppu_context* ctx)
                     for (uint32_t channel = 0; channel < kChannels; channel++) {
                         const float a = (*state.pcm)[first * kChannels + channel];
                         const float b = (*state.pcm)[second * kChannels + channel];
-                        const float sample = a + (b - a) * fraction;
+                        float sample = a + (b - a) * fraction;
+                        // Short crossfade at a recovery seek avoids a hard
+                        // waveform discontinuity; never extends the timeline.
+                        const unsigned fade_frames = state.sample_rate / 200u;
+                        if (position > uncorrected_position && frame < fade_frames) {
+                            const size_t old = std::min<size_t>(
+                                static_cast<size_t>(uncorrected_position) + frame,
+                                decode_end - 1u);
+                            const float weight = float(frame + 1u) / fade_frames;
+                            sample = (*state.pcm)[old * kChannels + channel] * (1 - weight)
+                                   + sample * weight;
+                        }
                         uint32_t bits;
                         std::memcpy(&bits, &sample, sizeof(bits));
                         vm_write32(pcm +
@@ -884,6 +921,7 @@ void decode(ppu_context* ctx)
 void delete_decoder(ppu_context* ctx)
 {
     const uint32_t handle = static_cast<uint32_t>(ctx->gpr[3]);
+    taiko_sync_test_stop(handle);
     std::lock_guard<std::mutex> lock(g_decoder_mutex);
     auto it = g_decoders.find(handle);
     if (it != g_decoders.end()) {
@@ -919,6 +957,7 @@ void reset_play_position(ppu_context* ctx)
             it->second.decode_cursor = static_cast<size_t>(
                 std::min<uint64_t>(adjusted, total_frames));
         it->second.decode_fraction = 0.0;
+        it->second.recovery_clock = {};
     }
     if (std::getenv("TAIKO_ATRAC_TRACE"))
         std::fprintf(stderr,

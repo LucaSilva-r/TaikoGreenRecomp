@@ -95,10 +95,40 @@ static void sys_ppu_thread_once(ppu_context* ctx)
  * Derive this API from the same 80 MHz clock used by lifted mftb/mftbu so all
  * guest clocks remain in one monotonic domain.  Split the conversion to avoid
  * overflowing ticks * 1,000,000 during long runs. */
+extern "C" void taiko_guest_clock_trace(ppu_context*, uint64_t) __attribute__((weak));
 static void sys_time_get_system_time(ppu_context* ctx)
 {
     ppu_time_api_hit("sysTimeGetSystemTime");
     ctx->gpr[3] = ppu_timebase_usec_now();
+    // Green's interpolated song timer samples elapsed time and resets the
+    // stopwatch in separate calls. Reset to the sampled instant, so host
+    // preemption between those calls remains in the next elapsed interval.
+    // Exact caller/object guards keep other stopwatches and clocks untouched.
+    static const bool atomic_song_clock = [] {
+        const char* v = getenv("TAIKO_GUEST_CLOCK_ATOMIC");
+        return !v || strcmp(v, "0") != 0;
+    }();
+    if (atomic_song_clock) {
+        static thread_local uint32_t sampled_object = 0;
+        static thread_local uint64_t sampled_us = 0;
+        if (ctx->lr == 0x0035CA20 &&
+            vm_read64(ctx->gpr[1] + 0x90) == 0x0025B714) {
+            sampled_object = static_cast<uint32_t>(ctx->gpr[31]);
+            sampled_us = ctx->gpr[3];
+        } else if (ctx->lr == 0x0035CA60 &&
+                   vm_read64(ctx->gpr[1] + 0xA0) == 0x0025B750 &&
+                   sampled_object == static_cast<uint32_t>(ctx->gpr[29]) &&
+                   sampled_us) {
+            const uint64_t gap = ctx->gpr[3] - sampled_us;
+            ctx->gpr[3] = sampled_us;
+            sampled_object = 0;
+            sampled_us = 0;
+            if (gap >= 1000)
+                fprintf(stderr, "[guest-clock-preserve] retained_us=%llu\n",
+                        static_cast<unsigned long long>(gap));
+        }
+    }
+    if (taiko_guest_clock_trace) taiko_guest_clock_trace(ctx, ctx->gpr[3]);
 }
 
 /* sys_process_is_stack(u32 addr) -> 1 if addr is in the stack region. We model
