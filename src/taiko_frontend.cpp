@@ -1,3 +1,4 @@
+#include <future>
 /* Host-owned Player Entry frontend.
  *
  * The SDL/input side only updates atomics. The guest side runs from the start
@@ -167,7 +168,7 @@ struct SongCategory {
     const char* genre;
 };
 
-constexpr std::array<SongCategory, 9> kSongCategories{{
+constexpr std::array<SongCategory, 10> kSongCategories{{
     {"J-POP", "J-POP"},
     {"ANIME", "アニメ"},
     {"VOCALOID", "ボーカロイド"},
@@ -177,6 +178,7 @@ constexpr std::array<SongCategory, 9> kSongCategories{{
     {"NAMCO ORIGINAL", "ナムコオリジナル"},
     {"MEDLEY", "メドレー"},
     {"CHILDREN'S SONGS", "童謡"},
+    {"CUSTOM TJA", "CUSTOM TJA"},
 }};
 
 bool enabled()
@@ -391,29 +393,33 @@ void show_current_song()
         g_browser_players.collapse();
         g_player_song_index = ~0u;
         publish_preview({});
-        for (unsigned row = 0; row < kSongCategories.size(); ++row) {
+        const unsigned first_category = category_index >= TAIKO_OVERLAY_SONG_ROW_COUNT
+            ? category_index - TAIKO_OVERLAY_SONG_ROW_COUNT + 1 : 0;
+        const unsigned category_rows = std::min<unsigned>(TAIKO_OVERLAY_SONG_ROW_COUNT,
+            kSongCategories.size() - first_category);
+        for (unsigned row = 0; row < category_rows; ++row) {
+            const unsigned category = first_category + row;
             unsigned category_song_count = 0;
             for (std::size_t index = 0; index < count; ++index) {
                 const TaikoCatalogSong* song = taiko_catalog_song(index);
-                if (song && song->genre == kSongCategories[row].genre)
+                if (song && song->genre == kSongCategories[category].genre)
                     ++category_song_count;
             }
-            row_titles[row] = kSongCategories[row].label;
-            row_genres[row] = kSongCategories[row].label;
+            row_titles[row] = kSongCategories[category].label;
+            row_genres[row] = kSongCategories[category].label;
             rows[row].title = row_titles[row].c_str();
             rows[row].genre = row_genres[row].c_str();
             rows[row].catalog_index = category_song_count;
-            rows[row].selected = row == category_index;
+            rows[row].selected = category == category_index;
             rows[row].kind = TAIKO_OVERLAY_ROW_CATEGORY;
         }
         taiko_overlay_show_song_browser(
             g_session_label, "", kSongCategories[category_index].label,
-            "CATEGORY FOLDER", rows[category_index].catalog_index,
+            "CATEGORY FOLDER", rows[category_index - first_category].catalog_index,
             category_index, static_cast<unsigned>(kSongCategories.size()),
             static_cast<unsigned>(count), "CATEGORIES", category_index,
             static_cast<unsigned>(kSongCategories.size()), "", 0, "", 0,
-            TAIKO_OVERLAY_BROWSER_CATEGORIES, 0, rows.data(),
-            static_cast<unsigned>(kSongCategories.size()));
+            TAIKO_OVERLAY_BROWSER_CATEGORIES, 0, rows.data(), category_rows);
         return;
     }
 
@@ -723,37 +729,41 @@ void request_song_launch(unsigned player = 2)
             show_current_song();
             return;
         }
-        taiko_plus::MatchConfig match;
-        std::string error;
-        bool first = true;
+        taiko_plus::MatchConfig pending;
         for (unsigned slot = 0; slot < 2; ++slot) {
-            auto& spec = match.players[slot];
+            auto& spec = pending.players[slot];
             spec.slot = static_cast<taiko_plus::PlayerSlot>(slot);
             spec.role = taiko_plus::PlayerRole::Local;
             spec.enabled = (g_browser_players.joined & (1u << slot)) != 0;
             spec.difficulty = g_browser_players.difficulty[slot];
-            if (!spec.enabled) continue;
-            taiko_plus::ContentIdentity content;
-            if (!taiko_catalog_content_identity(selection, spec.difficulty, content, &error)) {
-                g_browser_players.ready = 0;
-                std::fprintf(stderr, "[taiko_frontend] P%u launch rejected: %s\n", slot+1, error.c_str());
-                show_current_song();
-                return;
-            }
-            spec.chart_hash = content.chart_hash;
-            if (first) { match.content = std::move(content); first = false; }
         }
-        /* Publish the UI latch before the command becomes visible to the
-         * PPU consumer. A synchronous failure may clear it immediately. */
-        if (g_song_launch_requested.exchange(true, std::memory_order_acq_rel))
-            return;
-        if (!taiko_plus::runtime().enqueue_launch(std::move(match))) {
-            g_song_launch_requested.store(false, std::memory_order_release);
-            std::fprintf(stderr,
-                         "[taiko_frontend] standalone command queue rejected "
-                         "launch\n");
-            show_current_song();
-            return;
+        if (g_song_launch_requested.exchange(true, std::memory_order_acq_rel)) return;
+        pending.generation = taiko_plus::runtime().generation();
+        static std::future<void> preparation;
+        auto prepare = [selection, pending]() mutable {
+            std::string error;
+            bool first = true;
+            try {
+                for (auto& spec : pending.players) {
+                    if (!spec.enabled) continue;
+                    taiko_plus::ContentIdentity content;
+                    if (!taiko_catalog_content_identity(selection, spec.difficulty, content, &error)) {
+                        taiko_frontend_standalone_failure(error.c_str());
+                        return;
+                    }
+                    spec.chart_hash = content.chart_hash;
+                    if (first) { pending.content = std::move(content); first = false; }
+                }
+                if (!taiko_plus::runtime().enqueue_launch(std::move(pending)))
+                    taiko_frontend_standalone_failure("launch queue rejected prepared song");
+            } catch (const std::exception& e) {
+                taiko_frontend_standalone_failure(e.what());
+            }
+        };
+        if (song->tja_path.empty()) prepare();
+        else {
+            taiko_overlay_set_browser_save_status("Preparing custom song...");
+            preparation = std::async(std::launch::async, std::move(prepare));
         }
         browser_sfx(TaikoPlusSfx::Confirm);
         std::fprintf(stderr,
@@ -1565,6 +1575,7 @@ extern "C" void taiko_frontend_standalone_failure(const char* detail)
     if (!taiko_pc_mode_is_active() || !taiko_pc_mode_is_standalone()) return;
     g_song_launch_requested.store(false, std::memory_order_release);
     show_current_song();
+    taiko_overlay_set_browser_save_status(detail ? detail : "Song preparation failed");
     std::fprintf(stderr, "[taiko_frontend] standalone launch failed: %s\n",
                  detail ? detail : "unknown failure");
 }

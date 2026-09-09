@@ -244,10 +244,14 @@ void prepare_overlay(const char* host_path)
 
 } // namespace
 
+FILE* taiko_custom_open(const char*, uint32_t) __attribute__((weak));
+int taiko_custom_stat(const char*, uint64_t*) __attribute__((weak));
+
 extern "C" int taiko_fs_stat_overlay(const char* guest_path,
                                       const char* host_path,
                                       uint64_t* size)
 {
+    if (taiko_custom_stat && taiko_custom_stat(guest_path, size)) return 1;
     if (!guest_path || !host_path || !size ||
         !is_entry_archive(guest_path) || !overlay_enabled())
         return 0;
@@ -261,6 +265,8 @@ extern "C" FILE* taiko_fs_open_overlay(const char* guest_path,
                                         const char* host_path,
                                         uint32_t flags)
 {
+    if (taiko_custom_open)
+        if (FILE* stream = taiko_custom_open(guest_path, flags)) return stream;
     if (!guest_path || !host_path || !is_entry_archive(guest_path) ||
         (flags & kCellFsAccessMask) != kCellFsReadOnly)
         return nullptr;

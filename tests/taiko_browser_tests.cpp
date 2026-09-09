@@ -280,3 +280,4 @@ int main() {
     key(TAIKO_BROWSER_SEARCH_CLEAR);
     assert(!courses());
 }
+extern "C" void taiko_overlay_set_browser_save_status(const char*) {}

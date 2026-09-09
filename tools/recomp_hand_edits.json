@@ -190,6 +190,24 @@
   }
  ],
  "functions": {
+  "func_0054A988": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern int taiko_custom_title_lookup_bridge(ppu_context*);",
+     "        if (taiko_custom_title_lookup_bridge(ctx)) return;"
+    ]
+   }
+  ],
+  "func_00632B5C": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern int taiko_custom_basic_lookup_bridge(ppu_context*);",
+     "        if (taiko_custom_basic_lookup_bridge(ctx)) return;"
+    ]
+   }
+  ],
   "func_0012EE34": [
    {
     "anchor": "loc_0012F1E8:",

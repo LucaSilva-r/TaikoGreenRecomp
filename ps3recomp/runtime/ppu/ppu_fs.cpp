@@ -444,6 +444,12 @@ static void cellFsStat(ppu_context* ctx)
     uint32_t sb = (uint32_t)ctx->gpr[4];
     host_path(hpath, sizeof hpath, gpath);
     struct stat st;
+    uint64_t overlay_size = 0;
+    if (taiko_fs_stat_overlay && taiko_fs_stat_overlay(gpath, hpath, &overlay_size)) {
+        write_stat(sb, CELL_FS_S_IFREG | 0x124, overlay_size);
+        ctx->gpr[3] = CELL_OK;
+        return;
+    }
     if (stat(hpath, &st) != 0) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return; }
     uint32_t mode = (st.st_mode & S_IFDIR) ? (CELL_FS_S_IFDIR | 0x1FF)
                                            : (CELL_FS_S_IFREG | 0x1B6);

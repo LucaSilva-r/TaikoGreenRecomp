@@ -20,6 +20,10 @@
 
 #include <mbedtls/sha256.h>
 
+void taiko_custom_scan(std::vector<TaikoCatalogSong>&) __attribute__((weak));
+bool taiko_custom_identity(const TaikoCatalogSong&, unsigned,
+                           taiko_plus::ContentIdentity&, std::string*) __attribute__((weak));
+
 namespace {
 
 std::once_flag g_once;
@@ -138,7 +142,6 @@ void load_once()
         std::fprintf(stderr,
                      "[taiko_catalog] could not read Green musicinfo.xml "
                      "under %s\n", root.string().c_str());
-        return;
     }
 
     const std::filesystem::path fumen_root = root / "data/fumen";
@@ -174,6 +177,7 @@ void load_once()
         g_songs.emplace_back(std::move(song));
     }
 
+    if (taiko_custom_scan) taiko_custom_scan(g_songs);
     g_loaded = !g_songs.empty();
     std::fprintf(stderr,
                  "[taiko_catalog] loaded %zu playable songs from %zu metadata "
@@ -187,7 +191,8 @@ bool taiko_hash_file_sha256(const std::string& path,
                             taiko_plus::Sha256& hash,
                             std::string* error)
 {
-    std::ifstream stream(path, std::ios::binary);
+    std::ifstream stream(std::filesystem::path(std::u8string(
+        reinterpret_cast<const char8_t*>(path.data()), path.size())), std::ios::binary);
     if (!stream) {
         hash = {};
         if (error) *error = "cannot open " + path;
@@ -269,6 +274,8 @@ bool taiko_catalog_content_identity(std::size_t index, unsigned difficulty,
         if (error) *error = "requested difficulty is unavailable";
         return false;
     }
+    if (!song->tja_path.empty() && taiko_custom_identity)
+        return taiko_custom_identity(*song, difficulty, identity, error);
     static constexpr char suffixes[TAIKO_DIFFICULTY_COUNT] = {
         'e', 'n', 'h', 'm', 'x'
     };

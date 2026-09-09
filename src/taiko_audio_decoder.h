@@ -54,4 +54,13 @@ bool taiko_audio_apply_nsh(const std::vector<uint8_t>& nsh,
 
 uint64_t taiko_audio_hash_bytes(const std::vector<uint8_t>& bytes);
 
+bool taiko_audio_decode_file(const std::string& path, uint32_t output_rate,
+                            const std::atomic<bool>* cancelled,
+                            TaikoDecodedAudio& decoded, std::string& failure);
+/* One immutable prepared custom-song proxy. Decoder handles retain shared PCM
+ * ownership when the next song replaces this registration. */
+void taiko_audio_register_custom_proxy(std::vector<uint8_t> riff,
+                                       TaikoDecodedAudio decoded,
+                                       std::string source);
+
 #endif /* TAIKO_AUDIO_DECODER_H */

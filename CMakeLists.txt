@@ -417,6 +417,9 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_overlay.c"    # on-screen pairing code
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_input.cpp" # portable title input latch
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"  # host view of installed stock songs
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_custom_songs.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_custom_titles.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_title_render.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_frontend.cpp" # host-owned Player Entry/login shell
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_plus_runtime.cpp" # Taiko+ lifecycle and semantic queues
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pc_mode.cpp"  # custom PC mode scene & handoff
@@ -434,6 +437,25 @@ if(ANDROID)
 else()
     add_executable(taiko_boot ${TAIKO_BOOT_SOURCES})
 endif()
+
+# Keep the converter beside the executable, including when only Python changed.
+file(GLOB TAIKO_TJA_CONVERTER_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/tja2fumen/*.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/tja2fumen/*.csv"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/tja2fumen/LICENSE.txt")
+add_custom_target(taiko_custom_song_tools
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/tja2fumen"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/custom_songs.py"
+            "$<TARGET_FILE_DIR:taiko_boot>/tools/custom_songs.py"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${TAIKO_TJA_CONVERTER_FILES}
+            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/tja2fumen"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/README.md"
+            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/README.md"
+    VERBATIM)
+add_dependencies(taiko_boot taiko_custom_song_tools)
 
 add_custom_command(TARGET taiko_boot POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -560,6 +582,7 @@ if(NOT TAIKO_FREETYPE_LIB)
 endif()
 set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_overlay.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_title_render.c"
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_FREETYPE_ROOT}/include/freetype2")
 target_link_libraries(taiko_boot PRIVATE "${TAIKO_FREETYPE_LIB}")
 
@@ -725,6 +748,8 @@ endif()
 # core, so on a 16-core box that is 16 concurrent multi-GB compiles -- which
 # exhausts system RAM and wedges the machine rather than merely being slow.
 # Budget roughly 3 GB per job when raising this.
+set_source_files_properties(src/taiko_custom_songs.cpp PROPERTIES COMPILE_DEFINITIONS TAIKO_CUSTOM_TOOL_DEFAULT="${CMAKE_CURRENT_SOURCE_DIR}/tools/custom_songs.py")
+
 set(TAIKO_COMPILE_JOBS 4 CACHE STRING "Concurrent compiles of the lifted chunks (~3 GB RAM each)")
 set_property(GLOBAL PROPERTY JOB_POOLS taiko_compile=${TAIKO_COMPILE_JOBS} taiko_link=1)
 set_target_properties(taiko_boot PROPERTIES
@@ -957,6 +982,44 @@ if(BUILD_TESTING AND NOT WIN32)
         endif()
     endif()
     add_test(NAME taiko_audio_decoder_tests COMMAND taiko_audio_decoder_tests)
+
+    add_executable(taiko_custom_songs_tests
+        "tests/taiko_custom_songs_tests.cpp"
+        "src/taiko_audio_decoder.cpp"
+        "src/taiko_catalog.cpp"
+        "src/taiko_custom_songs.cpp")
+    target_include_directories(taiko_custom_songs_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${TAIKO_MBEDTLS_ROOT}/include")
+    target_link_libraries(taiko_custom_songs_tests PRIVATE Threads::Threads "${TAIKO_MBEDTLS_CRYPTO}")
+    if(TAIKO_INPROCESS_ATRAC)
+        if(TAIKO_FFMPEG_ROOT)
+            target_link_libraries(taiko_custom_songs_tests PRIVATE
+                ${TAIKO_FFMPEG_LIBS})
+            if(MINGW)
+                target_link_libraries(taiko_custom_songs_tests PRIVATE
+                    ole32 user32 atomic)
+            else()
+                target_link_libraries(taiko_custom_songs_tests PRIVATE
+                    Threads::Threads m ${CMAKE_DL_LIBS})
+            endif()
+        else()
+            target_link_libraries(taiko_custom_songs_tests PRIVATE
+                PkgConfig::TAIKO_FFMPEG)
+        endif()
+    endif()
+    add_test(NAME taiko_custom_songs_tests COMMAND taiko_custom_songs_tests)
+
+    add_executable(taiko_title_render_tests tests/taiko_title_render_tests.c
+        src/taiko_title_render.c)
+    target_include_directories(taiko_title_render_tests PRIVATE src
+        "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+    target_link_libraries(taiko_title_render_tests PRIVATE "${TAIKO_FREETYPE_LIB}")
+    if(TAIKO_OVERLAY_FONT_C)
+        target_sources(taiko_title_render_tests PRIVATE "${TAIKO_OVERLAY_FONT_C}")
+        target_compile_definitions(taiko_title_render_tests PRIVATE TAIKO_OVERLAY_FONT_EMBEDDED)
+    endif()
+    add_test(NAME taiko_title_render_tests COMMAND taiko_title_render_tests)
+
 
     add_executable(taiko_animation_scale_tests "tests/taiko_animation_scale_tests.c")
     target_include_directories(taiko_animation_scale_tests PRIVATE

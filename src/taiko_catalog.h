@@ -16,6 +16,8 @@ struct TaikoCatalogSong {
     uint32_t unique_id = 0;
     uint8_t difficulty_mask = 0;
     std::array<uint8_t, 5> stars{}; /* Authored Green ratings; zero means unknown. */
+    std::string tja_path, audio_path, custom_cache, custom_revision, custom_subtitle;
+    uint32_t preview_ms = 0;
 };
 
 /* Difficulty order matches Green's chart suffixes e/n/h/m/x. */

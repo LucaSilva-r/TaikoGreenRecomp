@@ -79,7 +79,8 @@ rating belongs to `<id>_x.bin` (Ura). Missing or malformed ratings display
 
 The overlay receives explicit chart identities, ratings and player-marker masks
 rather than assuming a fixed difficulty button position. Stock launch mapping
-still uses Green's five courses. Importing osu beatmaps and their arbitrary
+still uses Green's five courses. [Local TJA songs](custom_songs.md) appear in
+CUSTOM TJA, with on-demand conversion and native title textures. Importing osu beatmaps and their arbitrary
 named difficulties is future work; this change establishes the expanded-list
 interaction, using osu's `BeatmapCarousel` song-group/child-row structure and
 `Panel` easing as references.

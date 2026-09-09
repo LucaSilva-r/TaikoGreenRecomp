@@ -21,13 +21,21 @@ extern "C" {
 #include <cstring>
 #include <filesystem>
 #include <list>
+#include <fstream>
 #include <mutex>
 #include <unordered_map>
+
+bool taiko_custom_preview(std::string_view, uint32_t, const std::atomic<bool>*,
+                          TaikoDecodedAudio&, std::string&) __attribute__((weak));
 
 namespace {
 
 constexpr size_t kMaximumRiffBytes = 256u * 1024u * 1024u;
 constexpr uint32_t kChannels = 2;
+std::mutex g_proxy_mutex;
+std::vector<uint8_t> g_proxy_riff;
+TaikoDecodedAudio g_proxy_audio;
+std::string g_proxy_source;
 
 uint32_t read_le32(const uint8_t* data)
 {
@@ -340,7 +348,7 @@ bool decode_uncached(const std::vector<uint8_t>& riff, uint32_t requested_rate,
         format->pb = io;
         format->flags |= AVFMT_FLAG_CUSTOM_IO;
         last_error = avformat_open_input(&format, nullptr,
-                                         av_find_input_format("wav"), nullptr);
+                                         nullptr, nullptr);
         if (last_error < 0) { failure = "open WAV: " + ffmpeg_error(last_error); return false; }
         last_error = avformat_find_stream_info(format, nullptr);
         if (last_error < 0) { failure = "read stream info: " + ffmpeg_error(last_error); return false; }
@@ -384,6 +392,11 @@ bool decode_uncached(const std::vector<uint8_t>& riff, uint32_t requested_rate,
                 const int capacity = swr_get_out_samples(resampler, frame->nb_samples);
                 if (capacity < 0) { failure = "size converted PCM: " + ffmpeg_error(capacity); return false; }
                 const size_t old = decoded.pcm->size();
+                if (static_cast<size_t>(capacity) > kMaximumRiffBytes / sizeof(float) / kChannels ||
+                    old > kMaximumRiffBytes / sizeof(float) - static_cast<size_t>(capacity) * kChannels) {
+                    failure = "decoded audio exceeds 256 MiB";
+                    return false;
+                }
                 decoded.pcm->resize(old + static_cast<size_t>(capacity) * kChannels);
                 uint8_t* output[] = {reinterpret_cast<uint8_t*>(decoded.pcm->data() + old)};
                 const int converted = swr_convert(resampler, output, capacity,
@@ -506,6 +519,15 @@ bool taiko_audio_resolve_riff(uint64_t prefix_hash,
                               std::string& source,
                               std::string& failure)
 {
+    {
+        std::lock_guard<std::mutex> lock(g_proxy_mutex);
+        if (prefix.size() >= 128 && prefix.size() <= g_proxy_riff.size() &&
+            std::equal(prefix.begin(), prefix.end(), g_proxy_riff.begin())) {
+            riff = g_proxy_riff;
+            source = g_proxy_source;
+            return true;
+        }
+    }
     size_t declared = 0;
     if (!riff_declared_size(prefix.data(), prefix.size(), declared)) {
         failure = "invalid RIFF prefix";
@@ -563,6 +585,14 @@ bool taiko_audio_decode_riff(const std::vector<uint8_t>& riff,
                              TaikoDecodedAudio& decoded,
                              std::string& failure)
 {
+    {
+        std::lock_guard<std::mutex> lock(g_proxy_mutex);
+        if (!g_proxy_riff.empty() && riff == g_proxy_riff &&
+            (!output_rate || output_rate == g_proxy_audio.sample_rate)) {
+            decoded = g_proxy_audio;
+            return true;
+        }
+    }
     size_t declared = 0;
     if (!riff_declared_size(riff.data(), riff.size(), declared) ||
         declared != riff.size()) {
@@ -625,6 +655,8 @@ bool taiko_audio_decode_song(std::string_view music_id,
                              TaikoDecodedAudio& decoded,
                              std::string& failure)
 {
+    if (music_id.substr(0, 2) == "tc" && taiko_custom_preview)
+        return taiko_custom_preview(music_id, output_rate, stop, decoded, failure);
     if (!valid_music_id(music_id)) {
         failure = "invalid music_id";
         return false;
@@ -672,4 +704,51 @@ bool taiko_audio_decode_song(std::string_view music_id,
     read_nub_header(nsh_path.string(), nsh);
     taiko_audio_apply_nsh(nsh, decoded);
     return true;
+}
+
+void taiko_audio_register_custom_proxy(std::vector<uint8_t> riff,
+                                       TaikoDecodedAudio decoded, std::string source)
+{
+    std::lock_guard<std::mutex> lock(g_proxy_mutex);
+    g_proxy_riff = std::move(riff);
+    g_proxy_audio = std::move(decoded);
+    g_proxy_source = std::move(source);
+}
+
+bool taiko_audio_decode_file(const std::string& path, uint32_t output_rate,
+                            const std::atomic<bool>* stop,
+                            TaikoDecodedAudio& decoded, std::string& failure)
+{
+    const std::filesystem::path native_path(std::u8string(
+        reinterpret_cast<const char8_t*>(path.data()), path.size()));
+    std::ifstream file(native_path, std::ios::binary | std::ios::ate);
+    const auto length = file ? file.tellg() : std::streampos(-1);
+    if (length <= 0 || length > std::streampos(kMaximumRiffBytes)) {
+        failure = "audio missing, empty, or larger than 256 MiB: " + path;
+        return false;
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    file.seekg(0);
+    if (!file.read(reinterpret_cast<char*>(bytes.data()), bytes.size())) {
+        failure = "cannot read audio: " + path;
+        return false;
+    }
+    const auto hash = taiko_audio_hash_bytes(bytes);
+    if (cache_lookup(hash, bytes.size(), output_rate, decoded)) {
+        decoded.has_loop = false;
+        decoded.loop_start = decoded.loop_end = 0;
+        return true;
+    }
+    if (cancelled(stop)) { failure = "cancelled"; return false; }
+#ifdef TAIKO_HAVE_FFMPEG
+    if (!decode_uncached(bytes, output_rate, stop, decoded, failure)) return false;
+    decoded.has_loop = false;
+    decoded.loop_start = decoded.loop_end = 0;
+    decoded.asset_hash = hash;
+    cache_insert(hash, bytes.size(), output_rate, decoded);
+    return true;
+#else
+    failure = "custom audio requires an FFmpeg-enabled build";
+    return false;
+#endif
 }

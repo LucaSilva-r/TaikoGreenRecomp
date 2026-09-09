@@ -4,6 +4,7 @@
 #include "taiko_overlay.h"
 #include "taiko_plus_runtime.h"
 #include "taiko_host_audio.h"
+#include "taiko_custom_songs.h"
 
 #include <atomic>
 #include <cmath>
@@ -20,6 +21,8 @@ extern "C" void ppu_register_function(uint64_t addr, void (*fn)(ppu_context*));
 extern "C" void ppu_set_project_register_hooks(void (*register_hooks)(void));
 extern "C" uint32_t taiko_animation_frame_ticks(void);
 
+void taiko_custom_titles_select(const std::string&, const std::string&);
+
 namespace {
 
 constexpr uint32_t kSequencePushTaskAddr = 0x008DA500u;
@@ -35,6 +38,12 @@ uint32_t s_lifetime_probe_manager = 0;
 uint64_t s_lifetime_probe_ticks = 0;
 uint32_t s_sequence_runtime = 0;
 uint32_t s_setup_anchor = 0;
+uint32_t s_custom_index = 0xffffffffu;
+std::string s_custom_id;
+bool s_custom_round = false;
+constexpr uint32_t kCustomMetadata = 0xcffc1000u;
+uint32_t s_custom_manager = 0;
+uint32_t s_custom_source_index = 0xffffffffu;
 
 bool lifetime_trace_enabled()
 {
@@ -130,6 +139,10 @@ void service_score_save()
 
 void finish_score_round()
 {
+    if (s_custom_round) {
+        taiko_overlay_set_browser_save_status("Custom song - local play");
+        return;
+    }
     if (s_score_generation == s_launch_generation) return;
     s_score_generation = s_launch_generation;
     s_score_wanted = s_score_queued = 0;
@@ -222,6 +235,62 @@ bool live_song(uint32_t manager, const std::string& id, uint32_t& index)
     return false;
 }
 
+bool custom_slot(uint32_t manager, const TaikoCatalogSong& song, uint32_t& index)
+{
+    if (s_custom_manager != manager) {
+        s_custom_index = s_custom_source_index = 0xffffffffu;
+        s_custom_id.clear();
+        s_custom_manager = manager;
+    }
+    const uint32_t begin = vm_read32(manager + 0x434), end = vm_read32(manager + 0x438);
+    if (!begin || end <= begin || (end-begin)%0x90 || (end-begin)/0x90 > 2048) return false;
+    // Native copy construction owns string allocations and vector relocation.
+    // One reusable slot keeps library size independent of the guest catalog.
+    if (s_custom_index == 0xffffffffu) {
+        uint32_t donor = 0;
+        for (uint32_t p=begin; p<end; p+=0x90)
+            if (vm_read32(p+0x18) == 15 && vm_read32(p+0x14) > 0) {donor=p;break;}
+        if (!donor) return false;
+        ppu_guest_call_ct(0x00632b5c, 0x01027c58, kCustomMetadata + 0x200, manager + 0x464, donor, 0);
+        const uint32_t meta = vm_read32(kCustomMetadata + 0x200);
+        if (!meta) return false;
+        for(unsigned off=0;off<0x110;off+=4) vm_write32(kCustomMetadata+off,vm_read32(meta+off));
+        ppu_guest_call_ct(0x00716850, 0x01027c58, manager+0x430, end, 1, donor);
+        const uint32_t next_begin=vm_read32(manager+0x434), next_end=vm_read32(manager+0x438);
+        if (!next_begin || next_end-next_begin != end-begin+0x90) return false;
+        s_custom_index=(end-begin)/0x90;
+    }
+    if (s_custom_source_index == 0xffffffffu) {
+        const uint32_t source_begin = vm_read32(manager + 0xd04);
+        const uint32_t source_end = vm_read32(manager + 0xd08);
+        if (!source_begin || source_end <= source_begin || (source_end-source_begin)%0x90) return false;
+        const uint32_t donor = vm_read32(manager+0x434) + s_custom_index*0x90;
+        ppu_guest_call_ct(0x00716850, 0x01027c58, manager+0xd00, source_end, 1, donor);
+        const uint32_t next_begin=vm_read32(manager+0xd04), next_end=vm_read32(manager+0xd08);
+        if (!next_begin || next_end-next_begin != source_end-source_begin+0x90) return false;
+        s_custom_source_index=(source_end-source_begin)/0x90;
+    }
+    index=s_custom_index;
+    const auto inline_id=[&](uint32_t str) {
+        for(unsigned i=0;i<16;++i) vm_write8(str+i,i<song.music_id.size()?song.music_id[i]:0);
+        vm_write32(str+0x10,song.music_id.size()); vm_write32(str+0x14,15);
+    };
+    for (const auto [offset, ordinal] : {std::pair{0x434u,s_custom_index},
+                                        std::pair{0xd04u,s_custom_source_index}}) {
+        const uint32_t rec=vm_read32(manager+offset)+ordinal*0x90;
+        if (rec+0x90 > vm_read32(manager+offset+4) || vm_read32(rec+0x18)!=15) return false;
+        inline_id(rec+4);
+        vm_write32(rec+0x1c,6000);
+        vm_write8(rec+0x23,(song.difficulty_mask>>4)&1);
+    }
+    inline_id(kCustomMetadata+4);
+    for(unsigned d=0;d<5;++d) vm_write32(kCustomMetadata+0x1c+d*4,song.stars[d]);
+    for(unsigned d=0;d<4;++d) vm_write32(kCustomMetadata+0x30+d*4,song.stars[d]);
+    vm_write32(kCustomMetadata+0x54,(song.difficulty_mask>>4)&1);
+    s_custom_id=song.music_id;
+    return true;
+}
+
 void prepare_match(const taiko_plus::MatchConfig& match)
 {
     auto& runtime = taiko_plus::runtime();
@@ -232,8 +301,9 @@ void prepare_match(const taiko_plus::MatchConfig& match)
     }
     const uint32_t manager = s_lifetime_probe_manager;
     uint32_t index = 0;
+    const auto* custom = taiko_custom_find(match.content.music_id);
     if (!manager || manager != s_sequence_runtime + 0xd8 ||
-        !live_song(manager, match.content.music_id, index)) {
+        !(custom ? custom_slot(manager, *custom, index) : live_song(manager, match.content.music_id, index))) {
         runtime.fail(match.generation, taiko_plus::GuestErrorCode::InvalidContent,
                      "selected song is absent from the native session catalog");
         return;
@@ -282,6 +352,9 @@ void prepare_match(const taiko_plus::MatchConfig& match)
         ppu_guest_call_ct(0x0062a318, 0x01027c58, round, 0, 0, 0);
     }
     s_round_mask = mask;
+    s_custom_round = custom != nullptr;
+    taiko_custom_titles_select(custom ? custom->title : std::string{},
+                              custom ? custom->custom_subtitle : std::string{});
     for (uint32_t offset = 0; offset < 0x90; offset += 4)
         vm_write32(kScratch + offset, 0);
     for (unsigned slot = 0; slot < 2; ++slot) {
@@ -758,4 +831,23 @@ int taiko_pc_mode_setup_tick(ppu_context* ctx)
     // No Lumen or audio object is created by this idle task.
     taiko_pc_mode_tick(ctx);
     return 1;
+}
+
+/* Same BasicSong metadata contract used by Zucchini's native injector. Only
+ * the reusable custom record is intercepted; stock lookups retain guest code. */
+extern "C" int taiko_custom_basic_lookup(ppu_context* ctx)
+{
+    if (!ctx || s_custom_id.empty()) return 0;
+    const uint32_t out=uint32_t(ctx->gpr[3]), rec=uint32_t(ctx->gpr[5]);
+    if (!out || !rec || vm_read32(rec+0x1c)!=6000 ||
+        vm_read32(rec+0x14)!=s_custom_id.size() || vm_read32(rec+0x18)!=15) return 0;
+    for(unsigned i=0;i<s_custom_id.size();++i)
+        if(vm_read8(rec+4+i)!=uint8_t(s_custom_id[i])) return 0;
+    vm_write32(out,kCustomMetadata);
+    ctx->gpr[3]=out;
+    return 1;
+}
+int taiko_custom_basic_lookup_bridge(ppu_context* ctx)
+{
+    return taiko_custom_basic_lookup(ctx);
 }
