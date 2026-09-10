@@ -11,7 +11,7 @@ typedef struct menu_art {
 } menu_art;
 static menu_art g_menu_art[788];
 static int g_menu_art_loaded;
-static menu_art g_menu_indicator[7];
+static menu_art g_menu_indicator[237];
 
 static uint32_t menu_be32(const unsigned char* p)
 {
@@ -77,8 +77,9 @@ static void menu_load_indicator(const char* root)
     size_t got=fread(header,1,sizeof header,f);
     if(!menu_archive_table(header,got,&table,&count,&base) || count!=373 || fseek(f,0,SEEK_END)) {fclose(f);return;}
     long end=ftell(f);
-    for(unsigned id=2;id<=6;++id) {
-        if(id==4)continue;
+    static const unsigned ids[]={2,3,5,6,212,213,214,215,234,235};
+    for(unsigned i=0;i<sizeof ids/sizeof ids[0];++i) {
+        unsigned id=ids[i];
         size_t offset=base+menu_be32(header+table+id*8), size=menu_be32(header+table+id*8+4);
         if(end<0 || offset>(size_t)end || size>(size_t)end-offset || size>65536 || offset>LONG_MAX)continue;
         unsigned char* data=malloc(size);

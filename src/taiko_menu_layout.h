@@ -114,11 +114,10 @@ static void menu_folder(float x, float y, float w, float h,
         }
     }
     float tab_width = w < 80 ? w : 80;
-    if (tab && !menu_image(style->tab,x,y-14,tab_width,20,0))
-        fill_rounded_rect(x,y-14,x+tab_width*0.6f,y+5,7,0xff000000);
     if (!middle->pixels) {
         fill_rect(x,y,x+w,y+h,0xff000000);
         fill_rect(x+6,y+6,x+w-6,y+h-6,style->colour);
+        if(tab) fill_rounded_rect(x,y-14,x+tab_width*0.6f,y+5,7,style->colour);
         return;
     }
     float lw = left->width*h/left->height, rw = right->width*h/right->height;
@@ -126,7 +125,11 @@ static void menu_folder(float x, float y, float w, float h,
                 x+lw,y,w-lw-rw,h,0);
     menu_image(style->edge-1,x,y,lw,h,0);
     menu_image(style->edge,x+w-rw,y,rw,h,0);
-}
+    /* The authored tab includes the top border outside its raised section.
+     * Put it over the frame so the frame cannot draw a line through the tab. */
+    if (tab && !menu_image(style->tab,x,y-14,tab_width,20,0))
+        fill_rounded_rect(x,y-14,x+tab_width*0.6f,y+5,7,0xff000000);
+ }
 
 /* Selected cards use Green's yellow panel; extend its flat middle while
  * retaining the authored bevel corner sizes. */
@@ -222,6 +225,37 @@ static void menu_control_drums(void)
     }
 }
 
+static menu_art g_menu_nameplates[2];
+static void menu_nameplate(unsigned player,float left,const char* name)
+{
+    menu_art* plate=&g_menu_nameplates[player];
+    const menu_art* source=&g_menu_indicator[214];
+    if(!plate->pixels && source->pixels) {
+        plate->width=source->width;plate->height=source->height;
+        plate->pixels=malloc((size_t)plate->width*plate->height*4);
+        if(plate->pixels) for(unsigned i=0;i<plate->width*plate->height;++i) {
+            uint32_t c=source->pixels[i];
+            unsigned r=c&255,g=(c>>8)&255,b=(c>>16)&255;
+            plate->pixels[i]=(c&0xff000000u)|
+                (r*(player?206:255)/255)|
+                ((g*(player?241:198)/255)<<8)|
+                ((b*(player?244:190)/255)<<16);
+        }
+    }
+    const float top=632;
+    if(plate->pixels) {
+        menu_bitmap(&g_menu_indicator[212],UINT64_C(0x43000000000000d4),left+20,top+2,268,64,0);
+        menu_bitmap(&g_menu_indicator[player?234:213],UINT64_C(0x4300000000000000)+(player?234:213),left+20,top,268,32,0);
+        menu_bitmap(plate,UINT64_C(0x4500000000000000)+player,left+20,top,268,64,0);
+        menu_bitmap(&g_menu_indicator[player?235:215],UINT64_C(0x4300000000000000)+(player?235:215),left,top,64,64,0);
+    } else {
+        fill_rounded_rect(left,top,left+288,top+64,32,0xff000000);
+        fill_rounded_rect(left+4,top+4,left+284,top+60,28,player?RGB_COLOUR(104,191,192):RGB_COLOUR(255,71,40));
+        draw_text_at(player?"2P":"1P",25,left+32,top+32);
+    }
+    draw_text_fit(name,20,210,left+173,top+47);
+}
+
 static void render_green_categories(void)
 {
     menu_load_art();
@@ -229,7 +263,12 @@ static void render_green_categories(void)
     const menu_folder_style* active=menu_style(categories?g_song_title:g_song_category);
     unsigned bg=menu_background(active);
     fill_rect(0,0,1280,720,active->colour);
-    menu_image(bg,0,0,640,720,0); menu_image(bg,640,0,640,720,1);
+    /* Start with 12 logical pixels/second: one mirrored 1280px repeat
+     * every 107 seconds. Absolute time keeps motion independent of FPS. */
+    const double distance=monotonic_milliseconds()*0.012;
+    const float scroll=(float)(distance-(uint64_t)(distance/1280.0)*1280.0);
+    for(unsigned tile=0;tile<4;++tile)
+        menu_image(bg,tile*640.0f-scroll,0,640,720,tile&1);
     if(!menu_image(244,16,12,264,60,0)) draw_text_at("SONG SELECT",36,164,42);
     draw_text_left_fit(categories?"CHOOSE A CATEGORY":"CHOOSE A SONG",18,400,25,89);
     fill_rounded_rect(923,26,1254,75,24,RGB_COLOUR(249,247,220));
@@ -303,11 +342,7 @@ static void render_green_categories(void)
         int joined=(g_browser_joined&(1u<<p))!=0;
         emit_portrait(p,0,255);
         float left=p?966:26;
-        fill_rounded_rect(left,636,left+288,690,26,0xff000000);
-        fill_rounded_rect(left+4,640,left+284,686,23,p?RGB_COLOUR(185,237,240):RGB_COLOUR(255,183,171));
-        if(!menu_image(90+p,left+3,637,52,52,0))
-            draw_text_at(p?"2P":"1P",22,left+29,663);
-        draw_text_left_fit((g_browser_authenticated&(1u<<p))?g_browser_account_names[p]:joined?"GUEST":"HIT DRUM TO JOIN",19,216,left+62,663);
+        menu_nameplate(p,left,(g_browser_authenticated&(1u<<p))?g_browser_account_names[p]:joined?"GUEST":"HIT DRUM TO JOIN");
         snprintf(label,sizeof label,"%u  %s",p+1,joined?"LEAVE PLAYER":"JOIN PLAYER");
         draw_text_at(label,14,left+144,708);
     }

@@ -154,8 +154,8 @@ The asset IDs in `src/taiko_menu_layout.h` refer to Green's 788-entry packlist.
 Folder tabs and edges lose their transparent alignment padding at load time.
 Frames join the original left/right bevel strips with a repeated inside column,
 preserving the artwork's top/bottom edges and gradients as width animates; no
-hand-coloured horizontal borders or extra shadow rectangles are added. The tab's
-flat base sits underneath that same top edge. Medley uses the gold folder set,
+hand-coloured horizontal borders or extra shadow rectangles are added. The tab draws last: its coloured raised section covers the frame's top edge,
+so no horizontal seam crosses the tab. Medley uses the gold folder set,
 osu! uses matching pink pieces, and Nijiiro uses the original rainbow frame.
 The artwork is cached as owning RGBA payloads with a 32 MiB total limit and stable
 GPU IDs. Missing assets use the coloured host primitives and dynamic labels.
@@ -185,3 +185,10 @@ states every 600 ms. This host timing approximates the supplied reference; it
 does not execute the original Lumen timeline. The GPU visitor keeps the menu
 animated, while the CPU fallback refreshes on its existing 16 ms cadence.
 Preview modes `anime`, `songs`, and `return` cover these additions.
+
+The patterned background moves left at an initial 12 logical pixels/second,
+using absolute monotonic time and a repeating mirrored pair of 640px tiles.
+This is an eyeballed speed, independent of display refresh; a full pattern cycle
+lasts about 107 seconds. Player nameplates use indicator textures 212–215 and
+234–235: original shadow/border, red or cyan upper half, large circular player
+badge, and a tinted lower half with the name centred inside it.
