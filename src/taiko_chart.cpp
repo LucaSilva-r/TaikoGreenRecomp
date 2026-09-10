@@ -1,6 +1,7 @@
 // Native port of Zucchini's MIT-licensed tja2fumen writer and note tagging.
 // See tools/vendor/tja2fumen/LICENSE.txt for the original license.
 #include "taiko_chart_internal.h"
+#include "taiko_chart_limits.h"
 #include "taiko_chart_data.h"
 #include <mbedtls/sha256.h>
 #include <algorithm>
@@ -122,7 +123,7 @@ static void tag_notes(Fumen& f) {
     }
 }
 void finish(Fumen& f, int notes) {
-    if (f.measures.empty() || f.measures.size() > 300) throw std::runtime_error("Green supports 1 to 300 measures");
+    if (f.measures.empty() || f.measures.size() > TAIKO_MAX_FUMEN_MEASURES) throw std::runtime_error("chart exceeds the 16384-measure limit");
     f.header[2] = f.course == 0 ? 6000 : f.course < 3 ? 7000 : 8000;
     if (notes > 0 && notes <= 2500) {
         const int l = std::clamp(f.level, 1, 10);
@@ -176,6 +177,7 @@ static std::string serialize(const Fumen& f, unsigned lead) {
     return out;
 }
 void convert(const TaikoCatalogSong& song) {
+    if (song.genre == "NIJIIRO") { convert_nijiiro(song); return; }
     auto raw = read(path(song.tja_path));
     const int level = song.genre == "OSU! LAZER" ? song.stars[3] : 0;
     if (revision(raw, level) != song.custom_revision) throw std::runtime_error("chart changed since discovery; restart to refresh the library");

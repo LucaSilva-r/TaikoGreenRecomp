@@ -37,10 +37,10 @@ int main(int argc, char** argv) {
         try {taiko_chart::tja_fumens("BPM:0\nCOURSE:Oni\n#START\n1,\n#END\n");} catch (...) {rejected = true;}
         check(rejected,"invalid BPM rejection");
         std::string long_tja = "BPM:120\nCOURSE:Oni\nLEVEL:1\n#START\n";
-        for (int i = 0; i < 301; ++i) long_tja += "1,\n";
+        for (int i = 0; i < 16385; ++i) long_tja += "1,\n";
         rejected = false;
         try {taiko_chart::tja_fumens(long_tja+"#END\n");} catch (...) {rejected = true;}
-        check(rejected,"300 measure limit");
+        check(rejected,"16384 measure limit");
         auto root = std::filesystem::temp_directory_path()/("taiko-chart-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(root);
         auto source = root/"shift-jis.tja";

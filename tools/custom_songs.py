@@ -21,7 +21,7 @@ from tja2fumen.writers import write_fumen
 COURSES = ("Easy", "Normal", "Hard", "Oni", "Ura")
 SUFFIXES = "enhmx"
 RECIPE = "green-tja-1"
-MAX_MEASURES = 300
+MAX_MEASURES = 16384
 
 
 @functools.lru_cache(maxsize=1)

@@ -28,13 +28,16 @@ bool chart_ready(const TaikoCatalogSong& song, uint32_t& lead)
     std::string revision;
     if (!(ready >> revision >> lead) || revision != song.custom_revision || lead > 60000) return false;
     uint8_t mask = 0;
-    char course;
+    std::string course;
+    std::set<std::string> seen;
     uint64_t length;
     std::string expected;
     while (ready >> course >> length >> expected) {
-        const auto d = std::string_view("enhmx").find(course);
-        if (d == std::string_view::npos || expected.size() != 64 || (mask & (1u << d))) return false;
-        const auto path = from_utf8(song.custom_cache) / (std::string(1, course) + ".bin");
+        if (course.empty()) return false;
+        const auto d = std::string_view("enhmx").find(course[0]);
+        if (d == std::string_view::npos || expected.size() != 64 || !seen.insert(course).second ||
+            (course.size() != 1 && course != std::string(1,course[0])+"_1" && course != std::string(1,course[0])+"_2")) return false;
+        const auto path = from_utf8(song.custom_cache) / (course + ".bin");
         std::error_code ec;
         if (fs::file_size(path, ec) != length || ec) return false;
         taiko_plus::Sha256 hash;
@@ -43,8 +46,11 @@ bool chart_ready(const TaikoCatalogSong& song, uint32_t& lead)
         for (unsigned i = 0; i < 32; ++i)
             if (expected[i*2] != hex[hash.bytes[i] >> 4] ||
                 expected[i*2+1] != hex[hash.bytes[i] & 15]) return false;
-        mask |= 1u << d;
+        if (course.size() == 1) mask |= 1u << d;
     }
+    if (song.genre == "NIJIIRO") for (unsigned d=0; d<5; ++d) if (song.difficulty_mask & (1u<<d))
+        for (const char* suffix : {"", "_1", "_2"})
+            if (!seen.count(std::string(1,"enhmx"[d])+suffix)) return false;
     return ready.eof() && mask == song.difficulty_mask;
 }
 void put(std::vector<uint8_t>& bytes, size_t at, uint32_t value, bool big = false)
@@ -73,7 +79,11 @@ std::string asset_path(const char* guest)
             if (tail == std::string(1, course) + ".bin" ||
                 tail == std::string(1, course) + "_1.bin" ||
                 tail == std::string(1, course) + "_2.bin")
+            {
+                const auto exact = from_utf8(active_cache) / tail;
+                if (fs::is_regular_file(exact)) return utf8(exact);
                 return utf8(from_utf8(active_cache) / (std::string(1, course) + ".bin"));
+            }
     }
     }
     std::string upper = active_id;
@@ -96,11 +106,14 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
 
         const auto cache = root / ".cache";
         fs::create_directories(cache);
-        for (bool lazer : {false, true}) {
-        if (!lazer && fs::is_empty(root / "TJA")) continue;
+        for (int source = 0; source < 3; ++source) {
+        const bool lazer = source == 1, nijiiro = source == 2;
+        const char* label = nijiiro ? "Nijiiro" : lazer ? "osu!lazer" : "TJA";
+        if (source == 0 && fs::is_empty(root / "TJA")) continue;
         std::vector<TaikoCatalogSong> discovered;
         try {
-            if (lazer) taiko_chart::scan_lazer(discovered);
+            if (nijiiro) taiko_chart::scan_nijiiro(discovered);
+            else if (lazer) taiko_chart::scan_lazer(discovered);
             else {
                 std::vector<fs::path> files;
                 for (const auto& entry : fs::recursive_directory_iterator(root / "TJA", fs::directory_options::skip_permission_denied)) {
@@ -115,13 +128,13 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
                 }
             }
         } catch (const std::exception& e) {
-            std::fprintf(stderr,"[custom_songs] %s discovery failed: %s\n",lazer ? "osu!lazer" : "TJA",e.what());
+            std::fprintf(stderr,"[custom_songs] %s discovery failed: %s\n",label,e.what());
             continue;
         }
         const size_t count = discovered.size();
         for (auto& song : discovered) {
             if (std::any_of(songs.begin(), songs.end(), [&](const auto& s) {return s.music_id == song.music_id;})) continue;
-            if (!lazer) song.custom_folder = utf8(fs::relative(from_utf8(song.tja_path).parent_path(),
+            if (source == 0) song.custom_folder = utf8(fs::relative(from_utf8(song.tja_path).parent_path(),
                                                   fs::canonical(root / "TJA")));
             std::replace(song.custom_folder.begin(), song.custom_folder.end(), '\\', '/');
             if (song.custom_folder == ".") song.custom_folder.clear();
@@ -129,12 +142,12 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
             // navigation folder; the song directory is an implementation detail.
             song.custom_folder = song.custom_folder.substr(0, song.custom_folder.find('/'));
             if (song.original_title.empty()) song.original_title = song.title;
-            song.genre = lazer ? "OSU! LAZER" : "CUSTOM TJA";
+            song.genre = nijiiro ? "NIJIIRO" : lazer ? "OSU! LAZER" : "CUSTOM TJA";
             song.unique_id = 0; // Custom scores must never be submitted as cabinet content.
             song.custom_cache = utf8(cache / song.music_id / song.custom_revision);
             songs.push_back(std::move(song));
         }
-        std::fprintf(stderr, "[custom_songs] discovered %zu %s charts\n", count, lazer ? "osu!lazer" : "TJA");
+        std::fprintf(stderr, "[custom_songs] discovered %zu %s charts\n", count, label);
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[custom_songs] discovery failed: %s\n", e.what());

@@ -39,9 +39,9 @@ class CustomSongsTests(unittest.TestCase):
         self.assertEqual((self.root / "audio.ogg").read_bytes(), b"audio stays untouched")
 
     def test_measure_limit_rejects_before_publication(self):
-        self.write(measures=301)
+        self.write(measures=16385)
         entry = custom.inspect(self.chart, self.root)
-        with self.assertRaisesRegex(ValueError, "300 measures"):
+        with self.assertRaisesRegex(ValueError, "16384 measures"):
             custom.convert(self.chart, self.root / "cache", entry["revision"])
         self.assertFalse((self.root / "cache/ready").exists())
 

@@ -1,5 +1,6 @@
 // Native port of Zucchini-connector's osu!taiko conversion recipe.
 #include "taiko_chart_internal.h"
+#include "taiko_chart_limits.h"
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -85,15 +86,6 @@ std::vector<Hit> hits(const Osu& osu, const std::vector<Timing>& reds) {
     std::stable_sort(out.begin(),out.end(),[](auto& a,auto& b){return a.start == b.start ? a.duration < b.duration : a.start < b.start;});
     return out;
 }
-std::set<double> sample(const std::set<double>& values, int limit) {
-    if (limit <= 0) return {};
-    if (values.size() <= size_t(limit)) return values;
-    std::vector<double> ordered(values.begin(),values.end());
-    if (limit == 1) return {ordered[ordered.size()/2]};
-    std::set<double> out;
-    for (int i = 0; i < limit; ++i) out.insert(ordered[size_t(std::nearbyint(double(i)*(ordered.size()-1)/(limit-1)))]);
-    return out;
-}
 int64_t time_key(double v) {
     if (std::abs(v) > 1e12) throw std::runtime_error("osu timing exceeds supported range");
     return int64_t(std::nearbyint(v*1000));
@@ -121,10 +113,7 @@ std::pair<std::vector<double>,std::set<int64_t>> boundaries(const Osu& osu, cons
         if (t.kiai != kiai) required.insert(t.offset);
         kiai = t.kiai;
     }
-    if (required.size() > 301) throw std::runtime_error("osu chart needs more than 300 BPM/kiai sections");
-    for (double t : required) natural.erase(t);
-    auto structural = required; auto sampled = sample(natural,301-int(required.size()));
-    structural.insert(sampled.begin(),sampled.end());
+    auto structural = required; structural.insert(natural.begin(),natural.end());
     std::set<double> scrolls; double scroll = effects(osu.timing,start).first;
     for (auto& t : osu.timing) {
         if (t.offset <= start+.001) continue; if (t.offset >= end-.001) break;
@@ -134,7 +123,8 @@ std::pair<std::vector<double>,std::set<int64_t>> boundaries(const Osu& osu, cons
             scroll = next;
         }
     }
-    sampled = sample(scrolls,301-int(structural.size())); structural.insert(sampled.begin(),sampled.end());
+    structural.insert(scrolls.begin(),scrolls.end());
+    if (structural.size() > TAIKO_MAX_FUMEN_MEASURES+1) throw std::runtime_error("osu chart exceeds the 16384-measure limit");
     if (structural.size() < 2) throw std::runtime_error("cannot construct osu measures");
     return {{structural.begin(),structural.end()},bars};
 }

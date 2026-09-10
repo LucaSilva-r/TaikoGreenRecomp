@@ -288,6 +288,7 @@ int main() {
     taiko_frontend_enter_song_select_shell();
     key(TAIKO_BROWSER_LAST);
     key(TAIKO_BROWSER_PREVIOUS);
+    key(TAIKO_BROWSER_PREVIOUS); // CUSTOM TJA precedes OSU! LAZER and NIJIIRO.
     key(TAIKO_BROWSER_PLAY);
     assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_CATEGORY);
     assert(rows[0].catalog_index == 2);
@@ -319,6 +320,7 @@ int main() {
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();
     key(TAIKO_BROWSER_LAST);
+    key(TAIKO_BROWSER_PREVIOUS); // OSU! LAZER
     key(TAIKO_BROWSER_PLAY);
     assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
     key(TAIKO_BROWSER_PLAY);

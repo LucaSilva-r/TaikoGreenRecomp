@@ -2,6 +2,7 @@
 
 #ifdef TAIKO_HAVE_FFMPEG
 extern "C" {
+#include <libvgmstream.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
@@ -317,6 +318,88 @@ std::string ffmpeg_error(int error)
     char text[AV_ERROR_MAX_STRING_SIZE]{};
     av_strerror(error, text, sizeof text);
     return text;
+}
+
+// Restrict vgmstream to the already-read bank. No companion-file reads and no
+// second open of a potentially changed source between hashing and decoding.
+libstreamfile_t* bank_stream(const std::vector<uint8_t>* bytes)
+{
+    auto sf = new (std::nothrow) libstreamfile_t{};
+    if (!sf) return nullptr;
+    sf->user_data = const_cast<std::vector<uint8_t>*>(bytes);
+    sf->read = [](void* data, uint8_t* dst, int64_t at, int count) -> int {
+        const auto& b = *static_cast<const std::vector<uint8_t>*>(data);
+        if (at < 0 || uint64_t(at) >= b.size() || count <= 0) return 0;
+        const size_t n = std::min(size_t(count), b.size()-size_t(at));
+        std::memcpy(dst,b.data()+at,n); return int(n);
+    };
+    sf->get_size = [](void* data) -> int64_t {return static_cast<const std::vector<uint8_t>*>(data)->size();};
+    sf->get_name = [](void*) -> const char* {return "song.nus3bank";};
+    sf->open = [](void* data, const char* name) -> libstreamfile_t* {
+        return std::strcmp(name,"song.nus3bank") == 0 ? bank_stream(static_cast<const std::vector<uint8_t>*>(data)) : nullptr;
+    };
+    sf->close = [](libstreamfile_t* s) {delete s;};
+    return sf;
+}
+
+bool decode_bank(const std::vector<uint8_t>& bytes, uint32_t requested_rate,
+                 const std::atomic<bool>* stop, TaikoDecodedAudio& decoded,
+                 std::string& failure)
+{
+    if (bytes.size()<24 || std::memcmp(bytes.data()+8,"BANKTOC ",8)) {
+        failure="invalid NUS3BANK header";return false;
+    }
+    libvgmstream_config_t config{};
+    config.ignore_loop=true; config.disable_config_override=true;
+    config.force_sfmt=LIBVGMSTREAM_SFMT_FLOAT;
+    auto sf=bank_stream(&bytes);
+    if (!sf) {failure="cannot allocate bank reader";return false;}
+    auto vgm=libvgmstream_create(sf,0,&config);
+    libstreamfile_close(sf);
+    if (!vgm) {failure="unsupported or damaged NUS3BANK audio";return false;}
+    struct Release {libvgmstream_t* p;~Release(){libvgmstream_free(p);}} release{vgm};
+    const auto& format=*vgm->format;
+    const uint32_t rate=requested_rate ? requested_rate : format.sample_rate;
+    if (format.channels<1 || format.channels>2 || format.sample_rate<8000 || format.sample_rate>192000 ||
+        rate<8000 || rate>192000 || format.play_samples<=0 || format.subsong_count!=1 ||
+        uint64_t(format.play_samples)*rate/format.sample_rate > kMaximumRiffBytes/sizeof(float)/2) {
+        failure="NUS3BANK layout or duration exceeds supported limits";return false;
+    }
+    AVChannelLayout input{}, stereo=AV_CHANNEL_LAYOUT_STEREO;
+    av_channel_layout_default(&input,format.channels);
+    SwrContext* swr=nullptr;
+    int err=swr_alloc_set_opts2(&swr,&stereo,AV_SAMPLE_FMT_FLT,rate,
+        &input,AV_SAMPLE_FMT_FLT,format.sample_rate,0,nullptr);
+    av_channel_layout_uninit(&input);
+    struct Resample {SwrContext** p;~Resample(){swr_free(p);}} resample{&swr};
+    if(err<0 || !swr || swr_init(swr)<0) {failure="cannot initialize bank resampler";return false;}
+    decoded=TaikoDecodedAudio{};decoded.sample_rate=rate;
+    decoded.pcm=std::make_shared<std::vector<float>>();
+    auto append=[&](const uint8_t* data,int samples) -> int {
+        int capacity=swr_get_out_samples(swr,samples);
+        const size_t old=decoded.pcm->size();
+        if(capacity<0 || uint64_t(old)+uint64_t(capacity)*2>kMaximumRiffBytes/sizeof(float))return -1;
+        decoded.pcm->resize(old+size_t(capacity)*2);
+        uint8_t* output[]={reinterpret_cast<uint8_t*>(decoded.pcm->data()+old)};
+        int count=swr_convert(swr,output,capacity,data?&data:nullptr,samples);
+        if(count<0)return -1;
+        decoded.pcm->resize(old+size_t(count)*2);return count;
+    };
+    int64_t source_samples=0;
+    while(!vgm->decoder->done) {
+        if(cancelled(stop)) {failure="cancelled";return false;}
+        if(libvgmstream_render(vgm)<0) {failure="NUS3BANK decode failed";return false;}
+        const auto& chunk=*vgm->decoder;
+        if(chunk.buf_samples<0 || (!chunk.done && !chunk.buf_samples) ||
+            source_samples+chunk.buf_samples>format.play_samples ||
+            append(static_cast<const uint8_t*>(chunk.buf),chunk.buf_samples)<0) {
+            failure="invalid or oversized decoded bank audio";return false;
+        }
+        source_samples+=chunk.buf_samples;
+    }
+    if(source_samples!=format.play_samples) {failure="truncated bank audio";return false;}
+    for (;;) {int n=append(nullptr,0);if(n<0){failure="bank resample flush failed";return false;}if(!n)break;}
+    return !decoded.pcm->empty();
 }
 
 bool decode_uncached(const std::vector<uint8_t>& riff, uint32_t requested_rate,
@@ -655,7 +738,7 @@ bool taiko_audio_decode_song(std::string_view music_id,
                              TaikoDecodedAudio& decoded,
                              std::string& failure)
 {
-    if (music_id.substr(0, 2) == "tc" && taiko_custom_preview)
+    if ((music_id.substr(0, 2) == "tc" || music_id.substr(0, 2) == "nj") && taiko_custom_preview)
         return taiko_custom_preview(music_id, output_rate, stop, decoded, failure);
     if (!valid_music_id(music_id)) {
         failure = "invalid music_id";
@@ -741,7 +824,9 @@ bool taiko_audio_decode_file(const std::string& path, uint32_t output_rate,
     }
     if (cancelled(stop)) { failure = "cancelled"; return false; }
 #ifdef TAIKO_HAVE_FFMPEG
-    if (!decode_uncached(bytes, output_rate, stop, decoded, failure)) return false;
+    const bool bank = bytes.size() >= 4 && std::memcmp(bytes.data(), "NUS3", 4) == 0;
+    if (!(bank ? decode_bank(bytes, output_rate, stop, decoded, failure) :
+                 decode_uncached(bytes, output_rate, stop, decoded, failure))) return false;
     decoded.has_loop = false;
     decoded.loop_start = decoded.loop_end = 0;
     decoded.asset_hash = hash;

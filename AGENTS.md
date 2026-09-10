@@ -45,6 +45,7 @@ either build directory can be deleted and recreated freely.
 scripts/setup_sdl_gpu_mingw.sh # once: pinned SDL3 + shadercross + DXC target bundle
 scripts/setup_sdl_gpu_linux.sh # once: the same bundle for the native build
 scripts/build_ffmpeg_mingw.sh # once: pinned minimal static ATRAC3plus decoder
+scripts/setup_nijiiro.sh     # once: native NUS3BANK IDSP/BNSF decoder sources
 
 # Windows (via mingw-w64 + Wine)
 cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release

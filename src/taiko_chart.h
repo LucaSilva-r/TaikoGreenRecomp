@@ -18,4 +18,9 @@ TaikoCatalogSong inspect_osu(const std::filesystem::path& source,
                              const std::string& set_id, double rating);
 void convert(const TaikoCatalogSong& song);
 void scan_lazer(std::vector<TaikoCatalogSong>& songs);
+void scan_nijiiro(std::vector<TaikoCatalogSong>& songs);
+void convert_nijiiro(const TaikoCatalogSong& song);
+// Validate the native binary layout and return Green byte order, preserving
+// authored fields. earliest receives the earliest note time before padding.
+std::string nijiiro_fumen(std::string bytes, unsigned lead, double& earliest);
 }

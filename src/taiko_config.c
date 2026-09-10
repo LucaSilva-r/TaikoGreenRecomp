@@ -41,6 +41,9 @@ static const config_binding k_bindings[] = {
 
     {"songs", "custom_folder", "TAIKO_CUSTOM_SONGS"},
     {"songs", "osu_lazer", "TAIKO_OSU_LAZER"},
+    {"songs", "nijiiro", "TAIKO_NIJIIRO"},
+    {"songs", "nijiiro_fumen_key", "TAIKO_NIJIIRO_FUMEN_KEY"},
+    {"songs", "nijiiro_datatable_key", "TAIKO_NIJIIRO_DATATABLE_KEY"},
 
     {"network", "host", "TAIKO_ONLINE_HOST"},
     {"network", "port", "TAIKO_ONLINE_PORT"},

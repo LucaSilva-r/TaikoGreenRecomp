@@ -63,8 +63,8 @@ receive the new section automatically on launch while retaining known values.
 Parser and converter errors appear in the game log; preparation failure is
 reported in the browser.
 
-Green has a fixed 300-measure chart pool. Longer converted charts are rejected
-before reaching the guest. Encoded audio and decoded stereo PCM each have a
+TaikoRecomp extends Green’s original 300-measure pool to 16,384 measures.
+Longer charts are rejected before reaching the guest. Encoded audio and decoded stereo PCM each have a
 256 MiB limit. These limits apply to individual songs, not library size.
 Custom results are not uploaded using a stock song identity; persistent custom
 scores are not implemented yet.
@@ -174,3 +174,62 @@ and one matching rejection. Direct installed-lazer discovery finds the same
 decoding and the guest file overlay. The original Realm database SHA-256 remains
 unchanged. Native chart and Realm tests also pass on Windows under Wine.
 Full gameplay and ARM execution of this replacement still need live validation.
+
+## Nijiiro library
+
+Run `scripts/setup_nijiiro.sh` once before building to fetch pinned vgmstream
+and G.719 decoder sources. They compile into the native executable; song loading
+uses no external converter or audio helper.
+
+Set `[songs] nijiiro` to a Nijiiro installation, its `Data/x64` directory, or
+its `fumen` directory. `TAIKO_NIJIIRO` overrides it. Restart and open **NIJIIRO**
+in Taiko+. Songs are grouped by their Nijiiro genre, with English titles when
+available and Japanese fallback. The library is read in place; prepared charts
+use the existing custom-song cache. Stock song identities remain separate.
+Duplicate wordlist keys retain their first nonempty title; missing titles display
+the song ID. Nijiiro genre numbers map to Pop, Anime, Kids, Vocaloid, Game Music,
+Namco Original, Variety and Classical in that order.
+
+The importer accepts plaintext or gzip fumen and JSON metadata, as well as
+AES-256-CBC files with a prefixed IV, PKCS#7 padding and gzip payload. A full
+installation can supply hexadecimal key candidates from
+`Executable/Release/bnusio.dll`; candidates must decrypt valid data. Data-only
+installations can instead set `nijiiro_fumen_key` and `nijiiro_datatable_key`
+(or `TAIKO_NIJIIRO_FUMEN_KEY` / `TAIKO_NIJIIRO_DATATABLE_KEY`). Keys are not
+embedded in the executable or written into chart caches.
+
+Fumen conversion preserves authored fields while translating byte order for
+Green. Solo and both authored duet files are retained; absent duet variants
+fall back to the solo chart. Shared lead-in padding applies equally to every
+course/player and the decoded song. IDSP and BNSF/IS22 audio is decoded directly
+from single-song NUS3BANK containers, resampled to the existing host PCM path,
+and played once without bank looping. The guarded 39.06 bank template also
+supplies its preview cue; other bank layouts preview from the beginning.
+
+Standard note IDs 1–13 are accepted. Courses containing unverified note IDs,
+malformed data or excessive measures are excluded with a log message; the
+importer does not silently drop their notes or guess replacements. Revisions
+include all selected source charts, including duet variants, and cached assets
+are verified individually before use.
+
+Validation on the installed 39.06 Megamix pack indexed and prepared 2,612 songs;
+two songs and 27 courses were excluded for unverified note types. Real IDSP and
+BNSF songs passed audio decoding, chart preparation and duet-file overlay checks.
+The browser's song-ID preview dispatch is tested for both real audio formats;
+it routes Nijiiro IDs to their source banks instead of looking for Green NUBs.
+The Linux executable builds and the focused regression tests pass. The new
+decoder, importer and overflow helper also cross-compile with MinGW; a full
+Windows executable rebuild and live gameplay/synchronization remain unvalidated.
+
+## Extended chart capacity
+
+TaikoRecomp supports up to 16,384 measures per course. Green keeps its first
+300 embedded records; longer charts allocate additional 128-byte records from
+the guest chart allocator. Its existing dynamically sized pointer list refers
+to both regions. Overflow storage is released during lane teardown or constructor
+reuse. See `docs/fumen_capacity.md` for the guest hooks and validation limits.
+
+osu conversion now retains every natural barline, BPM/kiai boundary and scroll
+change within that capacity. The old 300-measure boundary sampling is removed;
+charts over the new limit are rejected rather than thinned. TJA and Nijiiro use
+the same capacity. Existing conversion caches receive new recipe revisions.

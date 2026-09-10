@@ -1,6 +1,7 @@
 // Native port of the vendored MIT tja2fumen parser/converter.
 // See tools/vendor/tja2fumen/LICENSE.txt for attribution.
 #include "taiko_chart_internal.h"
+#include "taiko_chart_limits.h"
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -302,7 +303,7 @@ std::vector<Segment> process(const std::vector<RawMeasure>& branch, double bpm) 
             }
         }
         current.end = m.subdivisions; out.push_back(std::move(current));
-        if (out.size() > 300) throw std::runtime_error("Green supports at most 300 measures");
+        if (out.size() > TAIKO_MAX_FUMEN_MEASURES) throw std::runtime_error("chart exceeds the 16384-measure limit");
     }
     return out;
 }

@@ -70,6 +70,17 @@ def main():
             source = root / f"fixture-{i}.tja"
             source.write_text(base + body + "#END\n", encoding="shift_jis" if i == 0 else "utf-8-sig")
             cases.append((source, 0))
+        source = root / "long.tja"
+        source.write_text(base + "1000,\n" * 1200 + "#END\n")
+        cases.append((source, 0))
+        source = root / "dense-scroll.osu"
+        timing = "0,500,4,2,0,100,1,0\n" + "".join(
+            f"{i*100},{-100 if i%2 else -50},4,2,0,100,0,{1 if i%3 else 0}\n"
+            for i in range(1, 1500))
+        source.write_text("osu file format v14\n[General]\nMode:1\n"
+                          "[Difficulty]\nSliderMultiplier:1.4\n[TimingPoints]\n" + timing +
+                          "[HitObjects]\n" + "".join(f"256,192,{i*100},1,0\n" for i in range(1501)))
+        cases.append((source, 7))
         if args.tja_root:
             files = sorted(p for p in args.tja_root.rglob("*") if p.suffix.lower() == ".tja")
             random.Random(9).shuffle(files)

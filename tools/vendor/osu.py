@@ -22,11 +22,10 @@ from tja2fumen.converters import fix_dk_note_types_course
 
 MAX_OSU_BYTES = 16 * 1024 * 1024
 MAX_AUDIO_BYTES = 512 * 1024 * 1024
-# Green's fumen loader has a fixed pool of 300 measure records.  Writing a
-# larger count corrupts adjacent loader state instead of failing gracefully.
-MAX_FUMEN_MEASURES = 300
+# TaikoRecomp extends Green's embedded pool with guest-owned overflow records.
+MAX_FUMEN_MEASURES = 16384
 SCORE_TARGET = 1_000_000
-CONVERTER_VERSION = 4
+CONVERTER_VERSION = 5
 
 COURSES = (
     ("e", "Easy", 2),
@@ -569,29 +568,9 @@ def _measure_boundaries(
             required.add(point.offset)
         kiai = point.kiai
 
-    required_boundaries = sorted(required)
-    required_measures = len(required_boundaries) - 1
-    if required_measures > MAX_FUMEN_MEASURES:
-        raise ValueError(
-            "osu! chart requires "
-            f"{required_measures} BPM/kiai timing sections, but the game "
-            f"supports at most {MAX_FUMEN_MEASURES}."
-        )
+    # Retain every natural barline and timing transition.
+    structural = required | set(natural_barlines)
 
-    # Ordinary barlines are musically useful but may be thinned for a song
-    # longer than 300 natural measures.  Note timestamps remain exact because
-    # their positions are recalculated relative to whichever boundary remains.
-    available = MAX_FUMEN_MEASURES + 1 - len(required_boundaries)
-    selected_barlines = _evenly_sample(
-        [value for value in natural_barlines if value not in required],
-        available,
-    )
-    structural = required | set(selected_barlines)
-
-    # A fumen measure stores only one scroll speed.  Mid-measure inherited
-    # timing points are therefore useful approximation boundaries, not hard
-    # structural requirements.  Keep all of them when possible; otherwise
-    # sample them evenly across the song to stay inside the game's fixed pool.
     scroll_boundaries: list[float] = []
     scroll = _timing_effects(points, start)[0]
     for point in points:
@@ -609,27 +588,12 @@ def _measure_boundaries(
                 scroll_boundaries.append(point.offset)
             scroll = new_scroll
 
-    available = MAX_FUMEN_MEASURES + 1 - len(structural)
-    selected_scroll = _evenly_sample(scroll_boundaries, available)
-    boundaries = sorted(structural | set(selected_scroll))
+    boundaries = sorted(structural | set(scroll_boundaries))
+    if len(boundaries) > MAX_FUMEN_MEASURES + 1:
+        raise ValueError(f"osu chart exceeds the {MAX_FUMEN_MEASURES}-measure limit")
     if len(boundaries) < 2:
         raise ValueError("Could not construct measures for osu!taiko chart.")
     return boundaries, barlines
-
-
-def _evenly_sample(values: list[float], limit: int) -> list[float]:
-    """Return at most ``limit`` ordered values spread over the full input."""
-    values = sorted(set(values))
-    if limit <= 0:
-        return []
-    if len(values) <= limit:
-        return values
-    if limit == 1:
-        return [values[len(values) // 2]]
-    return [
-        values[round(index * (len(values) - 1) / (limit - 1))]
-        for index in range(limit)
-    ]
 
 
 def _shinuchi_score_init(combo_notes: int) -> int:

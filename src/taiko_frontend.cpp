@@ -174,7 +174,7 @@ struct SongCategory {
     const char* genre;
 };
 
-constexpr std::array<SongCategory, 11> kSongCategories{{
+constexpr std::array<SongCategory, 12> kSongCategories{{
     {"J-POP", "J-POP"},
     {"ANIME", "アニメ"},
     {"VOCALOID", "ボーカロイド"},
@@ -186,6 +186,7 @@ constexpr std::array<SongCategory, 11> kSongCategories{{
     {"CHILDREN'S SONGS", "童謡"},
     {"CUSTOM TJA", "CUSTOM TJA"},
     {"OSU! LAZER", "OSU! LAZER"},
+    {"NIJIIRO", "NIJIIRO"},
 }};
 
 bool enabled()
@@ -333,7 +334,8 @@ std::string title_sort_key(const std::string& title)
 bool custom_folder_browser()
 {
     return !g_song_global_search && g_song_query.empty() &&
-           std::string_view(kSongCategories[g_song_category].genre) == "CUSTOM TJA";
+           (std::string_view(kSongCategories[g_song_category].genre) == "CUSTOM TJA" ||
+            std::string_view(kSongCategories[g_song_category].genre) == "NIJIIRO");
 }
 
 const char* custom_category_colour(const std::string& folder)
@@ -568,7 +570,7 @@ void show_current_song()
                 taiko_catalog_song(catalog_index);
             if (!visible) continue;
             row_titles[row] = visible->title;
-            row_genres[row] = visible->genre == "CUSTOM TJA" && !visible->custom_folder.empty()
+            row_genres[row] = (visible->genre == "CUSTOM TJA" || visible->genre == "NIJIIRO") && !visible->custom_folder.empty()
                 ? custom_category_colour(visible->custom_folder) : taiko_catalog_genre_name(visible->genre);
             rows[row].title = row_titles[row].c_str();
             rows[row].genre = row_genres[row].c_str();

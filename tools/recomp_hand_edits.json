@@ -997,6 +997,51 @@
      "        if (taiko_pc_mode_setup_complete((uint32_t)ctx->gpr[20], (uint32_t)ctx->gpr[18])) goto loc_000E467C;"
     ]
    }
+  ],
+  "func_0040BB54": [
+   {
+    "anchor": "        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(4);",
+    "lines": [
+     "        extern uint32_t taiko_fumen_measure_address(uint32_t);",
+     "        ctx->gpr[9] = taiko_fumen_measure_address(static_cast<uint32_t>(ctx->gpr[28]));"
+    ]
+   }
+  ],
+  "func_0040BC44": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
+  ],
+  "func_0040B8A0": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
+  ],
+  "func_0040B948": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
+  ],
+  "func_0040BA0C": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
   ]
  },
  "security": {
