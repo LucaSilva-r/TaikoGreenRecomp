@@ -98,3 +98,31 @@ Keyboard/wheel navigation uses the same feedback. The samples preload off the
 input/audio threads, then play from a bounded 16-voice pool with the game's
 menu volume. Missing/invalid bank data leaves feedback silent. Gameplay
 handoff fades host voices out with the browser audio.
+
+The player cards display the native animated P1/P2 Don-chans for joined players,
+with P2's texture flipped horizontally. Browser entry reuses the session's character service returned
+by `005C573C`; no Player Entry or Song Select controller is cloned. The setup
+follows Player Entry `00232E24`: camera preset 4, idle animation `0x2D`, and
+independent red/blue model variants. The browser reads each logged-in player's native profile and applies its
+colors and costume parts through `007F9A9C`, including the special whole-body
+variant. Guests use the native slot defaults. Changes wait for the model loader
+and are applied once; profile pointers are reacquired after login can relocate
+the player map.
+
+The character service's normal traversal renders its transparent targets
+(`002A4224` -> `002A406C`). `00298F34` selects the current final target key;
+`00518768` resolves its color buffer, whose `+0xF8` texture descriptor supplies
+the address and dimensions. The overlay publishes only those values under its
+lock. SDL_GPU samples the matching persistent color surface directly, skipping
+missing targets rather than showing a white fallback. The native camera's
+transparent padding is included when sizing the portraits. Null/CPU-only UI
+paths omit the portraits.
+
+Joining plays `don_entry_in` followed by the idle loop. Starting a song plays
+the corresponding `select1P_out`/`select2P_out` motion with follow-up `-1`;
+native `0029BD88` holds its final frame instead of restarting the jump.
+Portraits follow the outgoing panels' slide and fade until the handoff ends.
+Gameplay takes ownership of the character service without a visibility reset;
+returning initializes the browser settings again. Tests cover separate target
+identities, service readiness, loader retries, join/departure requests,
+participation visibility, P2 mirroring, and handoff cleanup.

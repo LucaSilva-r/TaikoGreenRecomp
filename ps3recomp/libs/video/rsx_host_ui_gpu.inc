@@ -23,7 +23,8 @@ static const char* ui_fs =
     "Texture2D tex:register(t0,space2); SamplerState samp:register(s0,space2);\n"
     "cbuffer Params:register(b0,space3) { float4 rect; float4 colour; float4 shape; };\n"
     "float4 main(float4 pos:SV_Position,float2 uv:TEXCOORD0):SV_Target {"
-    "float4 c=tex.Sample(samp,uv)*colour;"
+    "float2 sample_uv=uv; if(shape.w>0) sample_uv.x=1-sample_uv.x;"
+    "float4 c=tex.Sample(samp,sample_uv)*colour;"
     "if(shape.z>0) { float2 q=abs((uv-0.5)*shape.xy)-shape.xy*0.5+shape.z;"
     "float d=length(max(q,0))+min(max(q.x,q.y),0)-shape.z;"
     "c.a*=saturate(0.5-d/max(fwidth(d),0.0001)); } return c; }\n";
@@ -109,7 +110,20 @@ static void ui_emit(void* user, const HostUiDraw* draw)
     UiBatch* batch = user;
     if (batch->count == UI_DRAWS) { batch->failed = 1; return; }
     SDL_GPUTexture* tex = ui_white;
-    if (draw->texture_id) {
+    if (draw->surface_address) {
+        tex = NULL;
+        for (unsigned i = 0; i < s_sdl.surface_count; ++i) {
+            const gpu_surface* surface = &s_sdl.surfaces[i];
+            if (!surface->ref.is_depth && !surface->ref.is_display &&
+                surface->ref.resolved_offset == draw->surface_address &&
+                surface->ref.width == draw->width &&
+                surface->ref.height == draw->height) {
+                tex = surface->texture;
+                break;
+            }
+        }
+        if (!tex) return;
+    } else if (draw->texture_id) {
         unsigned found = UI_TEXTURES, oldest = 0;
         for (unsigned i = 0; i < UI_TEXTURES; ++i) {
             if (ui_textures[i].id == draw->texture_id) { found = i; break; }
@@ -168,7 +182,7 @@ static int draw_host_ui(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* target,
             d->w*scale/width*2, -d->h*scale/height*2,
             (d->colour&255)/255.0f, ((d->colour>>8)&255)/255.0f,
             ((d->colour>>16)&255)/255.0f, (d->colour>>24)/255.0f,
-            d->w*scale, d->h*scale, d->radius*scale, 0
+            d->w*scale, d->h*scale, d->radius*scale, d->flip_x ? 1.0f : 0.0f
         };
         SDL_GPUTextureSamplerBinding binding = {batch.textures[i], s_overlay.sampler};
         SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);

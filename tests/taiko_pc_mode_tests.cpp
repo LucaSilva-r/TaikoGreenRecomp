@@ -2,6 +2,7 @@
 #include "taiko_pc_mode.h"
 #include "taiko_plus_runtime.h"
 #include "taiko_browser_players.h"
+#include "taiko_custom_songs.h"
 #include <cstdlib>
 #include <cstdio>
 #include <map>
@@ -28,6 +29,8 @@ constexpr uint32_t setup=0x30000, p1=0x40000, p2=0x50000, scene=0x60000;
 static bool ready=false, gameplay=false;
 static bool costume_busy=true;
 static unsigned costume_applied[2]{};
+static unsigned portrait_costumes[2]{};
+static uint32_t portrait_profiles[2]{};
 static uint8_t expected_mask=3;
 static uint8_t expected_difficulties[2]={1,3};
 static uint8_t present_players=1;
@@ -38,6 +41,20 @@ static unsigned save_builds=0, queued_scores=0;
 static bool reject_enqueue=false;
 static int reject_slot=-1;
 extern "C" void taiko_overlay_set_browser_save_status(const char* text) { save_status=text; }
+static uint32_t portrait_addresses[2]{};
+static uint8_t browser_joined = 3;
+static bool browser_visible = true;
+extern "C" uint8_t taiko_overlay_browser_joined(void) { return browser_joined; }
+extern "C" int taiko_overlay_browser_visible(void) { return browser_visible; }
+static unsigned join_animations[2]{}, departure_animations[2]{};
+extern "C" void taiko_overlay_set_browser_portrait(unsigned p, uint32_t address,
+                                                   uint32_t w, uint32_t h) {
+    CHECK(p < 2);
+    CHECK(!address || (w == 600 && h == 600));
+    portrait_addresses[p] = address;
+}
+const TaikoCatalogSong* taiko_custom_find(std::string_view) { return nullptr; }
+void taiko_custom_titles_select(const std::string&, const std::string&) {}
 extern "C" void ppu_register_function(uint64_t, void (*)(ppu_context*)) {}
 extern "C" void ppu_set_project_register_hooks(void (*)(void)) {}
 static uint32_t animation_ticks = 1;
@@ -54,11 +71,37 @@ void taiko_host_audio_set_scene_active(bool) {}
 static float group_gains[68]{};
 void taiko_host_audio_set_group_gain(uint32_t g, float v) { group_gains[g]=v; }
 void taiko_host_audio_reacquire_menu() {}
-extern "C" uint64_t ppu_guest_call_ct(uint32_t code,uint32_t toc,uint64_t a,uint64_t b,uint64_t c,uint64_t) {
+extern "C" uint64_t ppu_guest_call_ct(uint32_t code,uint32_t toc,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
     calls.push_back(code);
     CHECK(toc == ((code==0x717aec || code==0x621784 || code==0x62a318 ||
                    code==0x12ee34) ? 0x1027c58u : 0x1037a88u));
     switch(code) {
+    case 0x298fd0:
+        CHECK(b < 2);
+        if (c == 0x2c) { CHECK(d == 0x2d); ++join_animations[b]; }
+        if (c == 0x4a || c == 0x4c) {
+            CHECK(c == (b ? 0x4c : 0x4a) && d == UINT32_MAX);
+            ++departure_animations[b];
+        }
+        return 0;
+    case 0x298cd4: case 0x298f9c: case 0x298f18:
+    case 0x298d24: case 0x2a2cb0: case 0x2a2d50: case 0x2a2df0:
+        return 0;
+    case 0x29d474:
+        CHECK(!costume_busy && b < 2);
+        for (unsigned i=0;i<5;++i) CHECK(vm_read32(c+i*4)==0);
+        return 0; // Already loaded is a successful request, too.
+    case 0x298f34: CHECK(b<2); return 0x50000011 + b*0x100;
+    case 0x518768: {
+        const unsigned slot = (b - 0x50000011)/0x100;
+        CHECK(slot < 2);
+        const uint32_t color = 0x140000 + slot*0x1000;
+        const uint32_t texture = color + 0x200;
+        vm_write32(a,color); vm_write32(color+0xf8,texture);
+        vm_write32(texture+0x34,0xc1000000+slot*0x200000);
+        vm_write32(texture+0x24,(600u<<16)|600u);
+        return 1;
+    }
     case 0x5c573c:
         CHECK(a==manager);
         vm_write32(0x130000,0x131000);
@@ -68,6 +111,12 @@ extern "C" uint64_t ppu_guest_call_ct(uint32_t code,uint32_t toc,uint64_t a,uint
         return 0x130000;
     case 0x7f9a9c:
         CHECK(vm_read32(a)==0x130000 && b<2);
+        if (c == 0xcffc0150u) {
+            CHECK(!costume_busy);
+            ++portrait_costumes[b];
+            portrait_profiles[b] = vm_read32(c+0x28);
+            return 0;
+        }
         if (expected_mask==2) {
             CHECK(b==0 && vm_read32(c+0x28)==p2);
         } else {
@@ -166,6 +215,49 @@ int main() {
     CHECK(removals==0 && menus==1); // Setup stays alive; no native selector.
     ctx.gpr[3]=setup; ctx.gpr[4]=owner;
     auto& runtime=taiko_plus::runtime();
+    // An unready service must not be touched. Once ready, targets belong to
+    // distinct players, initialization happens once, and busy model loading
+    // is retried without reconstructing any scene or player map.
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(!portrait_addresses[0] && !portrait_addresses[1]);
+    vm_write32(0x131020,3);
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(portrait_addresses[0]==0xc1000000 && portrait_addresses[1]==0xc1200000);
+    CHECK(portrait_costumes[0]==0 && portrait_costumes[1]==0);
+    costume_busy=false;
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(std::count(calls.begin(),calls.end(),0x298cd4)==1);
+    CHECK(portrait_costumes[0]==1 && portrait_costumes[1]==1);
+    CHECK(join_animations[0]==1 && join_animations[1]==1);
+    browser_joined = 1;
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    browser_joined = 3;
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(join_animations[0]==1 && join_animations[1]==2);
+    // Login while browsing updates the matching slot, waits for the loader,
+    // and detects color/variant changes without reloading every frame.
+    vm_write32(manager+0x374,2);
+    vm_write32(0x80000,0); vm_write32(0x807a8,1);
+    vm_write8(0x80395,1); vm_write8(0x80b3d,1);
+    vm_write32(0x80048,7); vm_write32(0x80800,42);
+    costume_busy=true;
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(portrait_costumes[0]==1 && portrait_costumes[1]==1);
+    costume_busy=false;
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(portrait_profiles[0]==0x80008 && portrait_profiles[1]==0x807b0);
+    CHECK(portrait_costumes[0]==2 && portrait_costumes[1]==2);
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(portrait_costumes[0]==2 && portrait_costumes[1]==2);
+    vm_write32(0x80ad0,3); // P2 special whole-body variant.
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(portrait_costumes[0]==2 && portrait_costumes[1]==3);
+    vm_write8(0x80395,0); // Account removed: restore P1 guest defaults.
+    CHECK(taiko_pc_mode_setup_tick(&ctx));
+    CHECK(portrait_profiles[0]==0 && portrait_costumes[0]==3);
+    vm_write32(manager+0x374,1);
+    costume_busy=true;
     auto bad=match(); bad.content.music_id="missing";
     CHECK(runtime.enqueue_launch(bad)); CHECK(taiko_pc_mode_setup_tick(&ctx));
     CHECK(failures==1 && commits==0 && runtime.state()==taiko_plus::State::Browser);
@@ -173,6 +265,7 @@ int main() {
     CHECK(runtime.enqueue_launch(match()));
     taiko_pc_mode_setup_tick(&ctx);
     CHECK(costume_applied[0]==0 && costume_applied[1]==0 && !gameplay);
+    CHECK(portrait_addresses[0] && portrait_addresses[1]); // Still on the host panels.
     CHECK(std::find(calls.begin(),calls.end(),0x5c583c)==calls.end());
     costume_busy=false;
     for (unsigned i=0;i<150;++i) CHECK(taiko_pc_mode_setup_tick(&ctx));
@@ -194,6 +287,12 @@ int main() {
     CHECK(!gameplay);
     taiko_pc_mode_setup_tick(&ctx);
     CHECK(gameplay && runtime.state()==taiko_plus::State::Gameplay);
+    CHECK(departure_animations[0]==1 && departure_animations[1]==1);
+    CHECK(portrait_addresses[0] && portrait_addresses[1]);
+    browser_visible = false;
+    taiko_pc_mode_setup_tick(&ctx);
+    CHECK(!portrait_addresses[0] && !portrait_addresses[1]);
+    browser_visible = true;
     CHECK(std::count(calls.begin(),calls.end(),0x35d1a0)==1);
     vm_write32(0xb0000,0xf92c98); vm_write32(0xb000c,manager);
     vm_write32(root+0x68,0xc0000); vm_write32(root+0x6c,1);

@@ -13,6 +13,10 @@ typedef struct HostUiDraw {
     uint64_t texture_id; /* zero: solid rounded rectangle */
     const uint32_t* pixels;
     uint32_t width, height;
+    /* Existing renderer-owned color target; zero means ordinary UI content.
+     * No guest pointers cross to the render thread. Missing targets are skipped. */
+    uint32_t surface_address;
+    int flip_x;
 } HostUiDraw;
 typedef void (*HostUiEmit)(void*, const HostUiDraw*);
 typedef struct HostUiInfo {

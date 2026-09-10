@@ -86,9 +86,128 @@ uint64_t s_score_generation = 0;
 std::chrono::steady_clock::time_point s_score_retry{};
 
 uint32_t native(uint32_t code, uint32_t a = 0, uint32_t b = 0,
-                uint32_t c = 0)
+                uint32_t c = 0, uint32_t d = 0)
 {
-    return static_cast<uint32_t>(ppu_guest_call_ct(code, kToc, a, b, c, 0));
+    return static_cast<uint32_t>(ppu_guest_call_ct(code, kToc, a, b, c, d));
+}
+
+uint32_t s_portrait_service = 0;
+uint8_t s_portrait_pending = 0;
+uint8_t s_portrait_joined = 0;
+bool s_portrait_departing = false;
+std::array<std::array<uint32_t, 10>, 2> s_portrait_costumes{};
+
+void clear_portraits()
+{
+    s_portrait_service = 0;
+    s_portrait_pending = 0;
+    s_portrait_joined = 0;
+    s_portrait_departing = false;
+    for (unsigned p = 0; p < 2; ++p)
+        taiko_overlay_set_browser_portrait(p, 0, 0, 0);
+}
+
+void service_portraits()
+{
+    const auto state = taiko_plus::runtime().state();
+    const bool browsing = state == taiko_plus::State::Browser ||
+                          state == taiko_plus::State::Error;
+    const bool launching = state == taiko_plus::State::PreparingMatch ||
+                           state == taiko_plus::State::LaunchingGameplay;
+    if (!browsing && !launching) {
+        // The outgoing host panels still sample the last Entry targets. Native
+        // gameplay now owns the character service; do not hide its models.
+        if (s_portrait_service && !taiko_overlay_browser_visible()) clear_portraits();
+        return;
+    }
+    if (browsing && s_portrait_departing) clear_portraits();
+    if (launching && !s_portrait_service) return;
+    const uint32_t service = native(0x005c573c, s_lifetime_probe_manager);
+    const uint32_t owner = service ? vm_read32(service) : 0;
+    if (!owner || vm_read32(owner + 0x20) != 3) return;
+    if (browsing && s_portrait_service != service) {
+        s_portrait_service = service;
+        s_portrait_pending = 3;
+        // Player Entry's 00232E24 setup: clear final targets, camera preset 4,
+        // animation 45. The persistent character service owns all resources
+        // and its normal render traversal advances and draws both models.
+        native(0x00298cd4, service);
+        native(0x00298f9c, service, 1, 0);
+        for (unsigned p = 0; p < 2; ++p) {
+            const uint32_t model = owner + 0x3b0 + p * 0x580;
+            native(0x002a2cb0, model, p);
+            native(0x002a2d50, model, p ^ 1);
+            native(0x002a2df0, model, 3);
+            native(0x00298f18, service, p, 4);
+            native(0x00298fd0, service, p, 0x2d, 0x2d);
+        }
+        std::fprintf(stderr, "[browser_portraits] initialized service=%08X\n", service);
+    }
+    const uint8_t joined = taiko_overlay_browser_joined();
+    const uint32_t scratch = kScratch + 0x100;
+    const uint32_t flags = vm_read32(0x01038e40u);
+    for (unsigned p = 0; p < 2; ++p) {
+        // Read the existing flat map without inserting players. Login can
+        // relocate it, so never retain a guest profile pointer across ticks.
+        uint32_t profile = 0;
+        std::array<uint32_t, 10> costume{};
+        if (browsing) {
+            const uint32_t map = s_lifetime_probe_manager + 0x370;
+            const uint32_t entries = vm_read32(map), count = vm_read32(map + 4);
+            if (entries && count <= 2) for (uint32_t i = 0; i < count; ++i) {
+                const uint32_t entry = entries + i * 0x7a8;
+                if (vm_read32(entry) == p && vm_read8(entry + 0x395)) {
+                    profile = entry + 8;
+                    break;
+                }
+            }
+            if (profile) {
+                costume[0] = 1;
+                // 007F9A9C reads three colors, five parts, and the special
+                // whole-body costume variant at profile +320.
+                for (unsigned i = 0; i < 8; ++i)
+                    costume[i + 1] = vm_read32(profile + 0x40 + i * 4);
+                costume[9] = vm_read32(profile + 0x320);
+            }
+            if (costume != s_portrait_costumes[p]) s_portrait_pending |= 1u << p;
+        }
+        if (browsing && (s_portrait_pending & (1u << p)) && flags &&
+            vm_read8(flags + 8) && !vm_read8(flags + 9) &&
+            static_cast<int32_t>(vm_read32(owner + 0x25c + p * 4)) <= 0) {
+            // Minimal native course record: the helper only reads +28.
+            // Null selects the slot's default guest colors and costume.
+            vm_write32(scratch + 0x40, service);
+            for (unsigned i = 0; i < 12; ++i) vm_write32(scratch + 0x50 + i * 4, 0);
+            vm_write32(scratch + 0x78, profile);
+            native(0x007f9a9c, scratch + 0x40, p, scratch + 0x50);
+            s_portrait_costumes[p] = costume;
+            s_portrait_pending &= ~(1u << p);
+        }
+        if (browsing && !(s_portrait_pending & (1u << p)) &&
+            (joined & (1u << p)) && !(s_portrait_joined & (1u << p))) {
+            // Native animation table 010F95E8: entry_in -> entry_loop.
+            native(0x00298fd0, service, p, 0x2c, 0x2d);
+            s_portrait_joined |= 1u << p;
+        }
+        // 00518768 finds a color buffer by its native render-target key.
+        // Color buffer +f8 owns the sampled texture descriptor (0054CDDC).
+        const uint32_t key = native(0x00298f34, service, p);
+        vm_write32(scratch + 0x20, 0);
+        if (!key || !native(0x00518768, scratch + 0x20, key)) continue;
+        const uint32_t color = vm_read32(scratch + 0x20);
+        const uint32_t texture = color ? vm_read32(color + 0xf8) : 0;
+        if (!texture) continue;
+        const uint32_t address = vm_read32(texture + 0x34);
+        const uint32_t dimensions = vm_read32(texture + 0x24);
+        const uint32_t width = dimensions >> 16;
+        const uint32_t height = dimensions & 0xffff;
+        if (address && width && height && width <= 1024 && height <= 1024)
+            taiko_overlay_set_browser_portrait(p, address, width, height);
+    }
+    s_portrait_joined &= joined;
+    // Loader requests temporarily hide a model; publish participation after
+    // requesting, without restarting its animation on each frame.
+    native(0x00298d24, service, joined & 1, (joined >> 1) & 1);
 }
 
 // This singleton owns serialized copies and persists them to playresultinfo.
@@ -431,6 +550,17 @@ void advance_launch(uint32_t owner)
         std::fprintf(stderr, "[taiko_plus] native player costumes accepted\n");
     }
     if (!s_transition_started) {
+        if (s_portrait_service && !s_portrait_departing) {
+            s_portrait_departing = true;
+            for (unsigned p = 0; p < 2; ++p) {
+                if (!(s_round_mask & (1u << p))) continue;
+                // Native Song Select departure, after costume acceptance so
+                // model loading cannot overwrite the requested motion.
+                const uint32_t motion = p ? 0x4c : 0x4a;
+                // 0029BD88 treats follow-up -1 as hold at the final frame.
+                native(0x00298fd0, s_portrait_service, p, motion, UINT32_MAX);
+            }
+        }
         const uint32_t service = native(0x005c5c1c, manager);
         vm_write32(kScratch, 0);
         // This starts the shared Lumen transition; it is not a pure readiness
@@ -616,6 +746,7 @@ int taiko_pc_mode_destination_override(ppu_context* ctx)
 
 void taiko_pc_mode_deactivate(void)
 {
+    clear_portraits();
     taiko_plus::runtime().deactivate();
     taiko_host_audio_set_scene_active(false);
     s_pc_mode_active.store(false, std::memory_order_release);
@@ -758,6 +889,7 @@ void taiko_pc_mode_tick(ppu_context* ctx)
             prepare_match(command.match);
         }
     }
+    service_portraits();
     advance_launch(static_cast<uint32_t>(ctx->gpr[4]));
     taiko_plus::HostGuestEvent event;
     while (taiko_plus::runtime().try_pop_event(event)) {

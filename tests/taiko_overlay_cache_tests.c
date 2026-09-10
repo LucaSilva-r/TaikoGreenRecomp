@@ -156,6 +156,42 @@ int main(void)
     g_handoff_start = monotonic_milliseconds() - HANDOFF_MS - 1;
     assert(!visit_host_ui(1, NULL, NULL, &info));
     assert(!taiko_host_frame_copy(&cpu, NULL, 0) && cpu.mode == HOST_FRAME_NONE);
+    // GPU-only portraits must survive the CPU panel snapshot used at handoff.
+    // Unjoined slots emit nothing; P2 alone is mirrored and stays on its panel.
+    g_visible = 1; g_mode = 5;
+    taiko_overlay_set_browser_portrait(0, 0xc1000000, 600, 600);
+    taiko_overlay_set_browser_portrait(1, 0xc1200000, 600, 600);
+    taiko_overlay_set_browser_players(1, 0, 0, NULL);
+    native_count = 0;
+    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    for (unsigned i = 0; i < native_count; ++i) assert(!native_draws[i].surface_address);
+    taiko_overlay_set_browser_players(1, 2, 0, NULL);
+    assert(taiko_overlay_browser_joined() == 2);
+    native_count = 0;
+    assert(visit_host_ui(1, collect_ui, NULL, &info) && info.animated);
+    unsigned portraits = 0;
+    for (unsigned i = 0; i < native_count; ++i) {
+        if (!native_draws[i].surface_address) continue;
+        assert(native_draws[i].surface_address == 0xc1200000 && native_draws[i].flip_x);
+        ++portraits;
+    }
+    assert(portraits == 1);
+    taiko_overlay_set_browser_players(1, 3, 0, NULL);
+    taiko_overlay_animate_browser(1);
+    native_count = 0;
+    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(native_count == 5); // Three panels plus two native surfaces.
+    assert(native_draws[1].surface_address == 0xc1000000 && !native_draws[1].flip_x);
+    assert(native_draws[2].surface_address == 0xc1200000 && native_draws[2].flip_x);
+    g_handoff_start = monotonic_milliseconds() - HANDOFF_MS / 2;
+    native_count = 0;
+    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(native_draws[1].x == 178 + native_draws[0].x);
+    assert(native_draws[1].colour == native_draws[0].colour);
+    assert(native_draws[2].colour == native_draws[0].colour);
+    assert(taiko_overlay_browser_visible());
+    g_handoff_start = monotonic_milliseconds() - HANDOFF_MS - 1;
+    assert(!taiko_overlay_browser_visible());
     taiko_overlay_show_entry_menu(0);
     taiko_overlay_animate_browser(1); // Never animate login/pairing accidentally.
     assert(visit_host_ui(1, NULL, NULL, &info) && !info.overlay);

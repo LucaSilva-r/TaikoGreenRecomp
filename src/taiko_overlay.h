@@ -57,6 +57,10 @@ typedef struct taiko_overlay_song_row {
 
 void taiko_overlay_set_browser_login(int phase, const char* status);
 void taiko_overlay_set_browser_account(unsigned slot, const char* name, int authenticated);
+void taiko_overlay_set_browser_portrait(unsigned player, uint32_t address,
+                                        uint32_t width, uint32_t height);
+uint8_t taiko_overlay_browser_joined(void);
+int taiko_overlay_browser_visible(void);
 void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,
                                       const uint8_t difficulties[2]);
 void taiko_overlay_show_song_browser(const char* player_name,

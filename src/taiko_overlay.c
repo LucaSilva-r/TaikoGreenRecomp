@@ -49,6 +49,7 @@ static int g_outline_radius = TEXT_OUTLINE_RADIUS;
 static HostUiEmit g_ui_emit;
 static void* g_ui_user;
 static float g_ui_scale = 1.0f;
+static struct { uint32_t address, width, height; } g_portraits[2];
 static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* info);
 extern HostUiVisit g_rsx_host_ui_visit __attribute__((weak));
 
@@ -632,6 +633,23 @@ static uint32_t genre_colour(const char* genre)
     return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
 }
 
+static void emit_portrait(unsigned slot, float slide, unsigned alpha)
+{
+    if (!g_ui_emit || !(g_browser_joined & (1u << slot)) ||
+        !g_portraits[slot].address) return;
+    HostUiDraw portrait = {0};
+    /* Entry camera includes transparent padding around the model. */
+    portrait.x = 28 + 150 + slide;
+    portrait.y = 100 + slot * 272 - 75;
+    portrait.w = portrait.h = 450;
+    portrait.colour = (alpha << 24) | 0xffffffu;
+    portrait.surface_address = g_portraits[slot].address;
+    portrait.width = g_portraits[slot].width;
+    portrait.height = g_portraits[slot].height;
+    portrait.flip_x = slot == 1;
+    g_ui_emit(g_ui_user, &portrait);
+}
+
 static void render_host(void)
 {
     g_width = HOST_WIDTH;
@@ -822,6 +840,7 @@ static void render_host(void)
                                          : RGB_COLOUR(0xB6, 0x46, 0x55);
             fill_rounded_rect(left, top, left + 509, top + 256, 12,
                               RGB_COLOUR(0x29, 0x39, 0x49));
+            emit_portrait(slot, 0, 255);
             fill_rounded_rect(left + 14, top + 14, left + 63, top + 57, 9, colour);
             char badge[8];
             snprintf(badge, sizeof badge, "P%u", slot + 1);
@@ -946,6 +965,10 @@ static void render_handoff(void)
                     g_pixels[(y + py) * HOST_WIDTH + x + px] = colour;
                 }
             }
+        }
+        if (panel == 0 && g_browser_players_enabled) {
+            emit_portrait(0, (float)x, alpha);
+            emit_portrait(1, (float)x, alpha);
         }
         offset += widths[panel] * heights[panel];
     }
@@ -1127,6 +1150,38 @@ void taiko_overlay_set_browser_account(unsigned slot, const char* name, int auth
     ++g_version;
     pthread_mutex_unlock(&g_lock);
     wake_renderer();
+}
+
+uint8_t taiko_overlay_browser_joined(void)
+{
+    pthread_mutex_lock(&g_lock);
+    const uint8_t joined = g_browser_players_enabled ? g_browser_joined : 0;
+    pthread_mutex_unlock(&g_lock);
+    return joined;
+}
+
+int taiko_overlay_browser_visible(void)
+{
+    pthread_mutex_lock(&g_lock);
+    finish_handoff_if_due();
+    const int visible = g_visible && g_mode == 5;
+    pthread_mutex_unlock(&g_lock);
+    return visible;
+}
+
+void taiko_overlay_set_browser_portrait(unsigned player, uint32_t address,
+                                        uint32_t width, uint32_t height)
+{
+    if (player >= 2) return;
+    pthread_mutex_lock(&g_lock);
+    if (g_portraits[player].address != address ||
+        g_portraits[player].width != width || g_portraits[player].height != height) {
+        g_portraits[player].address = address;
+        g_portraits[player].width = width;
+        g_portraits[player].height = height;
+        ++g_version;
+    }
+    pthread_mutex_unlock(&g_lock);
 }
 
 void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,
@@ -1358,6 +1413,9 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
     }
     info->version = g_version;
     info->animated = g_mode == 5 && (g_gpu_animation_pending || g_handoff);
+    if (g_mode == 5 && g_browser_players_enabled &&
+        ((g_portraits[0].address && (g_browser_joined & 1)) ||
+         (g_portraits[1].address && (g_browser_joined & 2)))) info->animated = 1;
     info->overlay = g_handoff < 0;
     if ((g_mode == 4 || (g_mode == 5 && g_browser_login_phase == 1)) && g_code[0]) info->animated = 1;
     if (emit) {
