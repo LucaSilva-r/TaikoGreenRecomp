@@ -578,6 +578,7 @@ void show_current_song()
             rows[row].catalog_index = entry.song_position;
             rows[row].selected = first + row == g_song_browser_position;
             rows[row].kind = TAIKO_OVERLAY_ROW_SONG;
+            for(unsigned d=0;d<5;++d) rows[row].course_stars[d]=visible->stars[d];
         }
     }
 

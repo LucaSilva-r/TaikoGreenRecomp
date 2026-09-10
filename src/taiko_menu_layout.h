@@ -3,8 +3,16 @@
 /* Category-screen composition in Green's logical 1280x720 coordinates. */
 static int green_categories(void)
 {
-    return g_mode == 5 && g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES;
+    if (g_mode != 5) return 0;
+    if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES) return 1;
+    if (g_song_search_active || g_song_query[0] || !g_song_row_count) return 0;
+    for (unsigned i=0;i<g_song_row_count;++i)
+        if (g_song_rows[i].kind == TAIKO_OVERLAY_ROW_DIFFICULTY ||
+            g_song_rows[i].kind == TAIKO_OVERLAY_ROW_CATEGORY) return 0;
+    return 1;
 }
+
+static unsigned g_menu_alpha=255;
 
 static int menu_bitmap(const menu_art* art, uint64_t texture_id,
                        float x, float y, float w, float h, int flip)
@@ -12,7 +20,7 @@ static int menu_bitmap(const menu_art* art, uint64_t texture_id,
     if (!art->pixels || w <= 0 || h <= 0) return 0;
     if (g_ui_emit) {
         HostUiDraw d = {0};
-        d.x=x; d.y=y; d.w=w; d.h=h; d.colour=0xffffffff;
+        d.x=x; d.y=y; d.w=w; d.h=h; d.colour=(g_menu_alpha<<24)|0xffffff;
         d.texture_id=texture_id;
         d.pixels=art->pixels; d.width=art->width; d.height=art->height; d.flip_x=flip;
         g_ui_emit(g_ui_user,&d);
@@ -25,7 +33,7 @@ static int menu_bitmap(const menu_art* art, uint64_t texture_id,
             if(sx>=art->width || sy>=art->height) continue;
             if(flip) sx=art->width-1-sx;
             uint32_t c=art->pixels[sy*art->width+sx];
-            put_pixel(px,py,c,255);
+            put_pixel(px,py,c,g_menu_alpha);
         }
     }
     return 1;
@@ -58,6 +66,28 @@ static const menu_folder_style* menu_style(const char* title)
         if(!strcmp(title,menu_styles[i].label)) return &menu_styles[i];
     return &menu_styles[9];
 }
+static uint32_t menu_outline(const menu_folder_style* style)
+{
+    uint32_t c=style->colour;
+    unsigned r=(c&255)*3/5,g=((c>>8)&255)*3/5,b=((c>>16)&255)*3/5;
+    return (r<<16)|(g<<8)|b;
+}
+
+static unsigned menu_style_index(const menu_folder_style* style)
+{
+    return (unsigned)(style-menu_styles);
+}
+static unsigned menu_background(const menu_folder_style* style)
+{
+    static const unsigned ids[]={772,773,783,775,776,777,778,780,774,771,774,779};
+    return ids[menu_style_index(style)];
+}
+static unsigned menu_character(const menu_folder_style* style)
+{
+    static const unsigned ids[]={507,509,523,513,515,517,519,525,511,505,521,525};
+    return ids[menu_style_index(style)];
+}
+
 static float menu_card_x(int relative)
 {
     return relative < 0 ? 440 + relative*100 : relative > 0 ? 764 + relative*100 : 440;
@@ -67,7 +97,7 @@ static float menu_card_w(int relative) { return relative ? 76 : 400; }
 static menu_art g_menu_middle[788];
 
 static void menu_folder(float x, float y, float w, float h,
-                         const menu_folder_style* style)
+                         const menu_folder_style* style, int tab)
 {
     const menu_art* left = &g_menu_art[style->edge-1];
     const menu_art* right = &g_menu_art[style->edge];
@@ -84,7 +114,7 @@ static void menu_folder(float x, float y, float w, float h,
         }
     }
     float tab_width = w < 80 ? w : 80;
-    if (!menu_image(style->tab,x,y-14,tab_width,20,0))
+    if (tab && !menu_image(style->tab,x,y-14,tab_width,20,0))
         fill_rounded_rect(x,y-14,x+tab_width*0.6f,y+5,7,0xff000000);
     if (!middle->pixels) {
         fill_rect(x,y,x+w,y+h,0xff000000);
@@ -98,21 +128,49 @@ static void menu_folder(float x, float y, float w, float h,
     menu_image(style->edge,x+w-rw,y,rw,h,0);
 }
 
+/* Selected cards use Green's yellow panel; extend its flat middle while
+ * retaining the authored bevel corner sizes. */
+static menu_art g_menu_yellow[3];
+static void menu_yellow_frame(float x,float y,float w,float h)
+{
+    const menu_art* source=&g_menu_art[354];
+    if(source->pixels && source->width>=32 && source->height>=32 && !g_menu_yellow[0].pixels) {
+        for(unsigned part=0;part<3;++part) {
+            menu_art* a=&g_menu_yellow[part];
+            a->width=part==1?1:16;a->height=461;
+            a->pixels=calloc(a->width*a->height,4);
+            if(!a->pixels)continue;
+            for(unsigned yy=0;yy<a->height;++yy) {
+                unsigned sy=yy<16?yy:yy>=445?source->height-(461-yy):source->height/2;
+                for(unsigned xx=0;xx<a->width;++xx) {
+                    unsigned sx=part==0?xx:part==1?source->width/2:source->width-16+xx;
+                    a->pixels[yy*a->width+xx]=source->pixels[sy*source->width+sx];
+                }
+            }
+        }
+    }
+    if(!g_menu_yellow[0].pixels || !g_menu_yellow[1].pixels || !g_menu_yellow[2].pixels) {fill_rect(x+7,y+7,x+w-7,y+h-7,RGB_COLOUR(255,225,49));return;}
+    menu_bitmap(&g_menu_yellow[0],UINT64_C(0x4400000000000000),x,y,16,h,0);
+    menu_bitmap(&g_menu_yellow[1],UINT64_C(0x4400000000000001),x+16,y,w-32,h,0);
+    menu_bitmap(&g_menu_yellow[2],UINT64_C(0x4400000000000002),x+w-16,y,16,h,0);
+}
+
 /* Native short-title textures keep Zucchini's spacing, UTF-8 punctuation and
  * top anchoring. Each immutable category label becomes one cached GPU quad. */
 static struct {
     char title[256];
     menu_art art;
+    uint32_t outline;
     uint64_t id;
 } g_menu_spines[16];
 static uint64_t g_menu_spine_generation;
 static unsigned g_menu_spine_next;
 
-static void menu_spine(const char* text, float x, float y, float height)
+static void menu_spine(const char* text, float x, float y, float height, uint32_t outline)
 {
     unsigned slot;
     for (slot=0; slot<16; ++slot)
-        if (g_menu_spines[slot].art.pixels && !strcmp(text,g_menu_spines[slot].title)) break;
+        if (g_menu_spines[slot].art.pixels && !strcmp(text,g_menu_spines[slot].title) && g_menu_spines[slot].outline==outline) break;
     if (slot==16) {
         slot=g_menu_spine_next++%16;
         menu_art* art=&g_menu_spines[slot].art;
@@ -120,7 +178,7 @@ static void menu_spine(const char* text, float x, float y, float height)
         art->width=56; art->height=400;
         art->pixels=calloc(56*400,sizeof(uint32_t));
         if (!art->pixels) return;
-        if (!taiko_title_render_spine_argb(text,art->pixels,0)) {
+        if (!taiko_title_render_spine_argb(text,art->pixels,outline)) {
             free(art->pixels);art->pixels=NULL;return;
         }
         /* The guest title renderer returns ARGB words; host UI uses RGBA. */
@@ -129,6 +187,7 @@ static void menu_spine(const char* text, float x, float y, float height)
             art->pixels[i]=(c&0xff00ff00u)|((c>>16)&255)|((c&255)<<16);
         }
         snprintf(g_menu_spines[slot].title,sizeof g_menu_spines[slot].title,"%s",text);
+        g_menu_spines[slot].outline=outline;
         g_menu_spines[slot].id=UINT64_C(0x4200000000000000)+ ++g_menu_spine_generation;
     }
     float width=height*56/400;
@@ -148,20 +207,41 @@ static void menu_title(const char* title,float x,float y,float width)
     draw_text_fit(split+1,34,width,x,y+22);
 }
 
+static void menu_control_drums(void)
+{
+    const float y=555, size=50;
+    const int lit=((unsigned long)(monotonic_milliseconds()/600.0)&1)!=0;
+    menu_bitmap(&g_menu_indicator[2],UINT64_C(0x4300000000000002),430,y,size,size,0);
+    menu_bitmap(&g_menu_indicator[2],UINT64_C(0x4300000000000002),650,y,size,size,0);
+    if(lit) {
+        menu_bitmap(&g_menu_indicator[3],UINT64_C(0x4300000000000003),650,y,size,size,0);
+        menu_bitmap(&g_menu_indicator[5],UINT64_C(0x4300000000000005),430,y,21.43f,size,0);
+        menu_bitmap(&g_menu_indicator[5],UINT64_C(0x4300000000000005),458.57f,y,21.43f,size,1);
+        menu_bitmap(&g_menu_indicator[6],UINT64_C(0x4300000000000006),415,y+15,20,20,0);
+        menu_bitmap(&g_menu_indicator[6],UINT64_C(0x4300000000000006),475,y+15,20,20,1);
+    }
+}
+
 static void render_green_categories(void)
 {
     menu_load_art();
-    fill_rect(0,0,1280,720,RGB_COLOUR(57,194,58));
-    menu_image(771,0,0,640,720,0); menu_image(771,640,0,640,720,1);
+    const int categories=g_song_browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES;
+    const menu_folder_style* active=menu_style(categories?g_song_title:g_song_category);
+    unsigned bg=menu_background(active);
+    fill_rect(0,0,1280,720,active->colour);
+    menu_image(bg,0,0,640,720,0); menu_image(bg,640,0,640,720,1);
     if(!menu_image(244,16,12,264,60,0)) draw_text_at("SONG SELECT",36,164,42);
-    draw_text_left_fit("CHOOSE A CATEGORY",18,400,25,89);
+    draw_text_left_fit(categories?"CHOOSE A CATEGORY":"CHOOSE A SONG",18,400,25,89);
     fill_rounded_rect(923,26,1254,75,24,RGB_COLOUR(249,247,220));
     draw_text_at("TAB / CTRL+F  SEARCH",20,1088,51);
     char label[96];
-    snprintf(label,sizeof label,"%u / %u",g_song_category_index+1,g_song_category_total);
-    fill_rounded_rect(544,22,736,72,24,0xff000000);
-    fill_rounded_rect(549,27,731,67,20,RGB_COLOUR(255,222,44));
-    draw_text_at(label,25,640,47);
+    /* The expanded folder's wide title tab is part of the folder silhouette. */
+    fill_rounded_rect(468,52,812,145,18,0xff000000);
+    fill_rounded_rect(474,58,806,145,13,active->colour);
+    draw_text_fit(categories?g_song_title:g_song_category,34,312,640,88);
+    if (!categories) {
+        fill_rounded_rect(425,117,1280,568,14,active->colour);
+    }
 
     int selected=0;
     for(unsigned i=0;i<g_song_row_count;++i) if(g_song_rows[i].selected) selected=(int)i;
@@ -174,17 +254,48 @@ static void render_green_categories(void)
         float x=row->from_card_x+(menu_card_x(rel)-row->from_card_x)*ease;
         float w=row->from_card_w+(menu_card_w(rel)-row->from_card_w)*ease;
         if(x+w<0 || x>1280) continue;
-        const menu_folder_style* style=menu_style(row->title);
-        menu_folder(x,132,w,421,style);
+        const menu_folder_style* style=categories?menu_style(row->title):active;
+        menu_folder(x,132,w,421,style,rel!=0);
         if(rel==0 && w>230) {
-            menu_image(87,x+w/2-36,182,72,84,0);
-            menu_title(row->title,x+w/2,320,w-48);
-            snprintf(label,sizeof label,"%u %s",row->catalog_index,row->catalog_index==1?"SONG":"SONGS");
-            draw_text_at(label,25,x+w/2,407);
-            draw_text_at(row->catalog_index?"DON TO OPEN":"NO SONGS INSTALLED",17,x+w/2,497);
-        } else if(w<180) menu_spine(row->title,x+w/2,157,360);
+            if(categories) {
+                fill_rounded_rect(x+23,150,x+182,187,18,RGB_COLOUR(255,238,180));
+                snprintf(label,sizeof label,"%u SONGS",row->catalog_index);
+                draw_text_fit(label,23,149,x+102,169);
+                menu_image(menu_character(style),x+28,208,180,320,0);
+                draw_text_at("Play your",23,x+w-94,286);
+                draw_text_at("favourite",23,x+w-94,321);
+                draw_text_at("songs!",23,x+w-94,356);
+                draw_text_at(row->catalog_index?"DON TO OPEN":"NO SONGS",16,x+w-94,473);
+            } else {
+                menu_yellow_frame(x,132,w,421);
+                if(row->kind==TAIKO_OVERLAY_ROW_EXIT) {
+                    menu_image(421,x+36,275,246,246,0);
+                    menu_spine("Return",x+w-61,165,335,0);
+                } else {
+                    menu_spine(row->title,x+w-61,158,362,0);
+                    static const char* courses[]={"EASY","NORMAL","HARD","ONI","URA"};
+                    unsigned shown=0;
+                    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) ++shown;
+                    unsigned column=0;
+                    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) {
+                        float cx=x+36+column++*(w-144)/(shown?shown:1);
+                        fill_rounded_rect(cx,279,cx+38,511,18,active->colour);
+                        static const unsigned icons[]={259,260,261,262,326};
+                        menu_image(icons[d],cx-3,247,44,35,0);
+                        menu_spine(courses[d],cx+19,296,180,0);
+                        unsigned rating=row->course_stars[d];
+                        if(!rating) draw_text_at("--",16,cx+19,483);
+                        else for(unsigned star=0;star<rating && star<10;++star)
+                            draw_text_at("★",11,cx+19,491-star*10);
+                    }
+                    draw_text_at("DON: CHOOSE CHART",17,x+(w-80)/2,238);
+                }
+            }
+        } else if(w<180) menu_spine(row->kind==TAIKO_OVERLAY_ROW_EXIT?"Return":row->title,x+w/2,157,360,menu_outline(style));
     }
+    g_menu_alpha=112;
     menu_image(787,388,314,60,70,0);menu_image(787,832,314,60,70,1);
+    g_menu_alpha=255;
     fill_rect(0,584,1280,720,RGB_COLOUR(255,71,42));
     fill_rect(640,584,1280,720,RGB_COLOUR(100,190,192));
     menu_image(394,0,568,1280,152,0);
@@ -201,8 +312,9 @@ static void render_green_categories(void)
         draw_text_at(label,14,left+144,708);
     }
     fill_rounded_rect(412,558,868,603,22,0xff000000);
-    menu_image(195,430,559,38,44,0);draw_text_at("RIM: BROWSE",17,542,582);
-    menu_image(196,646,559,38,44,0);draw_text_at("DON: OPEN",17,761,582);
+    menu_control_drums();
+    draw_text_at("Choose",21,551,582);
+    draw_text_at("Confirm",21,773,582);
     draw_text_at("B  BANAPASSPORT LOGIN",18,640,646);
     draw_text_at(g_browser_save_status[0]?g_browser_save_status:"FREE PLAY",22,640,687);
     if(g_browser_login_phase) {

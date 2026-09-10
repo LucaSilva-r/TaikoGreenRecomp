@@ -141,8 +141,10 @@ and vertical compression only when needed. Each label is cached as one texture;
 horizontal titles and counts retain the native-resolution text path. The shared
 title renderer now serializes its public calls so browser labels and background
 custom-song title generation cannot race over FreeType profiles. Native character
-portraits sit above the bottom player nameplates. Song lists, custom subfolders,
-search results, and difficulty selection retain the previous layout for now.
+portraits sit above the bottom player nameplates. Song browsing now uses the same carousel, with a category header, yellow
+selected card, native return-folder illustration, and course/rating preview.
+Custom subfolder lists, search results, and expanded difficulty selection retain
+the previous layout for now.
 
 `src/taiko_menu_art.h` reads the unmodified
 `$PS3_VFS_ROOT/data/lumendata/packed/song_select/packeddata.ddp` (defaults to
@@ -155,7 +157,7 @@ preserving the artwork's top/bottom edges and gradients as width animates; no
 hand-coloured horizontal borders or extra shadow rectangles are added. The tab's
 flat base sits underneath that same top edge. Medley uses the gold folder set,
 osu! uses matching pink pieces, and Nijiiro uses the original rainbow frame.
-The artwork is cached as owning RGBA payloads with a 16 MiB total limit and stable
+The artwork is cached as owning RGBA payloads with a 32 MiB total limit and stable
 GPU IDs. Missing assets use the coloured host primitives and dynamic labels.
 No game artwork is embedded, modified, or copied into the repository.
 
@@ -173,3 +175,13 @@ Don-chans are only present in the game. Validation includes the native executabl
 build, GPU previews, malformed/truncated archive tests, both category wrap
 boundaries, opposite-corner portrait placement and handoff, and existing browser,
 text-cache, and host-frame tests.
+
+Category selection also changes the original patterned background and shows the
+corresponding character illustration. Spine outlines use a darkened category
+colour; selected song/return titles remain black. The shared indicator archive
+supplies the original front-facing drum face, red centre, cyan rim halves and
+arrows (textures 2, 3, 5, 6). The Choose/Confirm hints alternate idle/highlight
+states every 600 ms. This host timing approximates the supplied reference; it
+does not execute the original Lumen timeline. The GPU visitor keeps the menu
+animated, while the CPU fallback refreshes on its existing 16 ms cadence.
+Preview modes `anime`, `songs`, and `return` cover these additions.

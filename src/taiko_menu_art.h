@@ -11,6 +11,7 @@ typedef struct menu_art {
 } menu_art;
 static menu_art g_menu_art[788];
 static int g_menu_art_loaded;
+static menu_art g_menu_indicator[7];
 
 static uint32_t menu_be32(const unsigned char* p)
 {
@@ -36,7 +37,7 @@ static int menu_archive_table(const unsigned char* h, size_t size,
     }
     if (p > size || size - p < 18) return 0;
     p += 5; *count = menu_be32(h + p); p += 13;
-    if (*count != 788 || (size_t)*count * 8 + 16 > size - p) return 0;
+    if ((*count != 788 && *count != 373) || (size_t)*count * 8 + 16 > size - p) return 0;
     *table = p; p += (size_t)*count * 8;
     *base = p + 16 + (size_t)menu_be32(h + p);
     return 1;
@@ -66,12 +67,35 @@ static int menu_decode_nut(const unsigned char* b, size_t size, menu_art* out)
     return 1;
 }
 
+static void menu_load_indicator(const char* root)
+{
+    char path[4096];
+    if(snprintf(path,sizeof path,"%s/data/lumendata/packed/indicator/packeddata.ddp",root)>=(int)sizeof path) return;
+    FILE* f=fopen(path,"rb");if(!f)return;
+    unsigned char header[65536];size_t table,base;
+    uint32_t count;
+    size_t got=fread(header,1,sizeof header,f);
+    if(!menu_archive_table(header,got,&table,&count,&base) || count!=373 || fseek(f,0,SEEK_END)) {fclose(f);return;}
+    long end=ftell(f);
+    for(unsigned id=2;id<=6;++id) {
+        if(id==4)continue;
+        size_t offset=base+menu_be32(header+table+id*8), size=menu_be32(header+table+id*8+4);
+        if(end<0 || offset>(size_t)end || size>(size_t)end-offset || size>65536 || offset>LONG_MAX)continue;
+        unsigned char* data=malloc(size);
+        if(data && !fseek(f,(long)offset,SEEK_SET) && fread(data,1,size,f)==size)
+            menu_decode_nut(data,size,&g_menu_indicator[id]);
+        free(data);
+    }
+    fclose(f);
+}
+
 static void menu_load_art(void)
 {
     if (g_menu_art_loaded) return;
     g_menu_art_loaded = 1;
     const char* root = getenv("PS3_VFS_ROOT");
     if (!root || !*root) root = "game/vfs";
+    menu_load_indicator(root);
     char path[4096];
     if (snprintf(path, sizeof path, "%s/data/lumendata/packed/song_select/packeddata.ddp", root) >= (int)sizeof path) return;
     FILE* f = fopen(path, "rb");
@@ -80,7 +104,7 @@ static void menu_load_art(void)
     size_t read = fread(header, 1, sizeof header, f), table, base;
     uint32_t count;
     if (!menu_archive_table(header, read, &table, &count, &base) ||
-        fseek(f, 0, SEEK_END)) { fclose(f); return; }
+        count != 788 || fseek(f, 0, SEEK_END)) { fclose(f); return; }
     long end = ftell(f);
     /* Texture ids from Green's song_select packlist. The border strips and
      * tabs are composed by the layout; dynamic labels remain native text. */
@@ -88,7 +112,9 @@ static void menu_load_art(void)
         657,659,661,663,667,673,676,
         550,551,556,557,561,562,566,567,571,572,576,577,581,582,586,587,
         591,592,596,597,616,617,
-        771,787,87,195,196};
+        771,772,773,774,775,776,777,778,779,780,781,783,
+        505,507,509,511,513,515,517,519,521,523,525,527,421,354,259,260,261,262,326,
+        787,87,195,196};
     unsigned loaded = 0;
     size_t retained = 0;
     for (unsigned i = 0; i < sizeof ids / sizeof ids[0]; ++i) {
@@ -124,7 +150,7 @@ static void menu_load_art(void)
                 a->width=80;a->height=20;
             }
         }
-        if (retained+bytes > 16u*1024u*1024u) {
+        if (retained+bytes > 32u*1024u*1024u) {
             free(g_menu_art[id].pixels);memset(&g_menu_art[id],0,sizeof g_menu_art[id]);
             --loaded;
         } else retained+=bytes;

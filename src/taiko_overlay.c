@@ -98,6 +98,7 @@ typedef struct song_row_storage {
     int kind;
     unsigned difficulty, stars;
     uint8_t cursors, ready;
+    uint8_t course_stars[5];
     float from_y, from_x;
     float from_card_x, from_card_w;
 } song_row_storage;
@@ -1282,6 +1283,7 @@ void taiko_overlay_show_song_browser(const char* player_name,
         item->stars = rows ? rows[row].stars : 0;
         item->cursors = rows ? rows[row].cursors : 0;
         item->ready = rows ? rows[row].ready : 0;
+        for(unsigned d=0;d<5;++d) item->course_stars[d]=rows?rows[row].course_stars[d]:0;
         item->from_y = 111 + row * 59;
         item->from_x = row_target_x(item->kind, item->selected) + 36;
         int relative=(int)row-next_selected;
@@ -1405,7 +1407,7 @@ int taiko_host_frame_copy(HostFrameInfo* info, void* destination,
     }
     const double now = monotonic_milliseconds();
     if (remaining != g_drawn_remaining ||
-        (g_mode == 5 && (g_song_animating || g_handoff) && now - g_song_last_render >= 16.0)) {
+        (g_mode == 5 && (g_song_animating || g_handoff || green_categories()) && now - g_song_last_render >= 16.0)) {
         render(remaining);
         g_song_last_render = now;
         if (song_ease() >= 1.0f) g_song_animating = 0;
@@ -1442,6 +1444,7 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
     }
     info->version = g_version;
     info->animated = g_mode == 5 && (g_gpu_animation_pending || g_handoff);
+    if (green_categories() && g_browser_players_enabled) info->animated = 1;
     if (g_mode == 5 && g_browser_players_enabled &&
         ((g_portraits[0].address && (g_browser_joined & 1)) ||
          (g_portraits[1].address && (g_browser_joined & 2)))) info->animated = 1;
