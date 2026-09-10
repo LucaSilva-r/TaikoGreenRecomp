@@ -7,6 +7,13 @@ directories beneath it are flattened so a category opens directly to playable
 songs. Standard category names use the stock category colors. Search finds
 songs across categories.
 
+With the host browser enabled, its library is indexed once on a background
+thread during game startup, including installed TJA and osu!lazer charts.
+Entering the browser reuses that index; if startup finishes before a very large
+scan, entry waits for the remaining work. This does not change the stock game's
+library loader. Chart conversion and audio decoding still happen on demand.
+The log reports browser preload start and completion time.
+
 ```text
 USRDIR/custom_songs/
   TJA/
@@ -24,10 +31,10 @@ Easy, Normal, Hard, Oni and Ura/Edit solo charts are supported. Both players can
 select independently from those courses; authored STYLE:Double charts are not
 imported in this version.
 
-The first launch converts charts in a background worker using the vendored
-MIT-licensed tja2fumen from Zucchini-connector. Python 3.10 or newer is required.
-Keep the generated `tools/` directory beside the executable when distributing
-a build. It does not need pip packages, the connector server, Wine, or Sony's encoder.
+Charts are converted in a background worker by native C++ code, ported from
+Zucchini-connector's MIT-licensed tja2fumen and osu converters. No Python,
+.NET runtime, converter scripts, or external helper executable is needed for
+custom-song loading. The HP lookup table is embedded in the executable.
 Native FFmpeg decodes WAV, MP3, Ogg/Vorbis, Opus and FLAC; Windows/Pi dependency
 bundles must be rebuilt with the updated `scripts/build_ffmpeg_*.sh` recipe.
 
@@ -39,18 +46,21 @@ The original charts and audio are never modified.
 
 The default custom folder is beside the resolved VFS `data` directory. This
 follows a development checkout's `data` symlink back to its USRDIR. To use a
-different existing song folder, set these in the config's `[environment]`:
+different existing song folder, use the config's `[songs]` section:
 
 ```ini
-TAIKO_CUSTOM_SONGS = /path/to/custom_songs
-# Optional interpreter and converter overrides:
-# TAIKO_PYTHON = /path/to/python3
-# TAIKO_CUSTOM_TOOL = /path/to/tools/custom_songs.py
+[songs]
+custom_folder = /path/to/custom_songs
+osu_lazer = /path/to/osu/storage
 ```
 
 The library root must contain `TJA/`. A symlink to an existing TJA directory
 works without duplicating its audio. The root needs write access for `.cache`.
-Python and converter errors appear in the game log; preparation failure is
+Leave either path blank to use automatic discovery. Set `osu_lazer = 0` to
+disable osu discovery. `TAIKO_CUSTOM_SONGS` and `TAIKO_OSU_LAZER` environment
+variables override these settings for individual runs. Existing config files
+receive the new section automatically on launch while retaining known values.
+Parser and converter errors appear in the game log; preparation failure is
 reported in the browser.
 
 Green has a fixed 300-measure chart pool. Longer converted charts are rejected
@@ -90,40 +100,52 @@ maps are not converted. The displayed 1–10 level is an approximation from
 lazer's stored star rating, not an official Taiko rating.
 
 Discovery checks Linux/XDG, Flatpak and Windows roaming storage and follows
-`storage.ini`'s `FullPath`. Set `TAIKO_OSU_LAZER` to a storage directory or its
+`storage.ini`'s `FullPath`. Set `[songs] osu_lazer` to a storage directory or its
 `client.realm` to override it; set it to `0` to disable discovery. Restart after
-changing the installed library. The read-only dynamic Realm helper follows
+changing the installed library. The native Realm reader follows
 [osuplayer's reader](https://github.com/Founntain/osuplayer/blob/master/OsuPlayer.IO/DbReader/RealmReader.cs)
-and osu!'s file models. It never migrates or edits the library. Chart/audio
-paths resolve directly to `files/<first>/<first two>/<hash>`; only indexes and
+and osu!'s file models. It holds a Realm read transaction to coordinate with
+osu!lazer while reading. Realm may create its normal lock/management files,
+but the reader never starts a write transaction, migrates the database, restores
+backups, or edits chart/audio files. Chart/audio
+paths resolve directly to `files/<first>/<first two>/<hash>`; only
 converted fumen are cached in TaikoRecomp's custom cache.
 
-Build the pinned Realm 20.1.0 helper with a .NET 8+ SDK:
+Developers fetch the pinned Realm Core 14.14.0 sources once:
 
 ```sh
-scripts/build_osu_lazer_reader.sh
-# Self-contained distribution (no user .NET installation):
-scripts/build_osu_lazer_reader.sh build-linux/tools/osu_lazer_reader linux-x64
+scripts/setup_realm.sh
+# Then configure/build TaikoRecomp normally.
 ```
 
-Keep the complete helper directory under `tools/` beside the executable.
-Development DLL builds require a .NET 8 runtime; `TAIKO_DOTNET` overrides its
-command, and `TAIKO_OSU_READER` selects a helper executable or DLL. Windows/Pi
-releases must publish for their own runtime (`win-x64` / `linux-arm64`). Python
-is still needed for chart conversion. If Realm cannot read a library version,
-discovery reports an error and leaves the original library untouched.
+CMake 3.22.1 or newer builds the storage engine statically for the target platform. The setup
+script applies tracked safeguards and portability fixes to the pinned source.
+`TAIKO_REALM_SOURCE` selects another checkout with those same patches. If Realm
+cannot read a library version, discovery reports an error without upgrading or
+restoring the database. The Python converters remain development references;
+they are not packaged or invoked by the game. Python is still used by existing
+build-time code generation outside custom-song loading.
 
 ## Automated validation
 
 ```sh
 python3 tools/tests/test_custom_songs.py
-ctest --test-dir build-linux -R 'taiko_custom_songs_tests|taiko_title_render_tests|taiko_browser_tests|taiko_catalog_identity_tests|taiko_audio_decoder_tests' --output-on-failure
+python3 tools/tests/test_native_charts.py
+ctest --test-dir build-linux -R 'taiko_chart_tests|taiko_custom_songs_tests|taiko_title_render_tests|taiko_browser_tests|taiko_catalog_identity_tests|taiko_audio_decoder_tests' --output-on-failure
 ```
 
 The Python tests cover Shift-JIS metadata, big-endian fumen and lead-in,
 changed-source rejection, missing audio and the measure limit. The C++ fixture
 tests discovery, native audio decoding, chart/audio overlay access, proxy
 resolution, exact PCM padding, and reuse of the disk chart cache.
+
+`test_native_charts.py` compares serialized native output to the Python reference.
+Its optional `--tja-root` and `--osu-manifest` arguments extend the comparison to
+installed chart corpora. The native Realm fixture checks filtering, shared-audio
+grouping, database byte preservation, and rejection of a future database version
+even when an older backup is available. Missing branch measures are copied by
+value to avoid the old reference's duplicate-note bug; equally common BPM values
+use a deterministic tie-break when assigning Don/Ka syllables.
 
 Title-render tests cover Japanese and Latin text, long-title fitting, subtitles,
 and visible fill/outline alpha in both native horizontal texture sizes.
@@ -139,5 +161,16 @@ Lazer integration validation (2026-09-09): the real redirected library resolved
 15,779 native taiko records, with 15,778 playable/nonempty charts indexed. A
 selected installed chart converted to big-endian fumen, decoded 3,203,658
 preview frames directly from its hashed audio file, and opened through the
-guest chart overlay. Full gameplay sync and Windows/ARM helper execution are
-not yet live-validated for lazer maps.
+guest chart overlay. This predates the native converter replacement.
+
+Native replacement validation (2026-09-10): Linux and MinGW game builds pass.
+The Linux chart/audio integration test runs with unavailable interpreter paths;
+discovery with an empty executable search path finds all 2,845 local TJA files.
+The complete TJA corpus plus five fixtures produces 2,847 byte-identical
+conversions and three matching rejections against the corrected Python reference.
+A 500-map osu sample plus those fixtures produces 504 byte-identical conversions
+and one matching rejection. Direct installed-lazer discovery finds the same
+15,778 playable charts, and the selected song passes native conversion, audio
+decoding and the guest file overlay. The original Realm database SHA-256 remains
+unchanged. Native chart and Realm tests also pass on Windows under Wine.
+Full gameplay and ARM execution of this replacement still need live validation.

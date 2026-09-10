@@ -5,6 +5,22 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <atomic>
+#include <vector>
+
+extern "C" void ps3_preload_host_catalog();
+static std::promise<void> scan_started, scan_release;
+static std::atomic<unsigned> scan_calls{0};
+void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
+{
+    ++scan_calls;
+    scan_started.set_value();
+    scan_release.get_future().wait();
+    TaikoCatalogSong song;
+    song.title = "Preloaded custom song";
+    songs.push_back(song);
+}
 
 int main()
 {
@@ -74,6 +90,19 @@ int main()
                                    &error));
     assert(hash.empty());
     std::filesystem::remove(file);
+    setenv("PS3_VFS_ROOT", root.c_str(), 1);
+    setenv("TAIKO_HOST_FRONTEND", "0", 1);
+    ps3_preload_host_catalog();
+    assert(scan_calls == 0);
+    setenv("TAIKO_HOST_FRONTEND", "1", 1);
+    ps3_preload_host_catalog();
+    assert(scan_started.get_future().wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+    ps3_preload_host_catalog(); // Repeated warmup must not launch a second scan.
+    auto reader = std::async(std::launch::async, [] { return taiko_catalog_count(); });
+    assert(reader.wait_for(std::chrono::milliseconds(30)) == std::future_status::timeout);
+    scan_release.set_value();
+    assert(reader.get() == 1 && scan_calls == 1);
+    assert(taiko_catalog_song(0)->title == "Preloaded custom song");
     std::filesystem::remove(root);
     return 0;
 }

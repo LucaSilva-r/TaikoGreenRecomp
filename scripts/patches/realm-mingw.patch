@@ -1,0 +1,170 @@
+diff --git a/src/realm/util/encrypted_file_mapping.cpp b/src/realm/util/encrypted_file_mapping.cpp
+index e809041..faa8aa7 100644
+--- a/src/realm/util/encrypted_file_mapping.cpp
++++ b/src/realm/util/encrypted_file_mapping.cpp
+@@ -44,7 +44,7 @@
+ #endif
+ 
+ #if defined(_WIN32)
+-#include <Windows.h>
++#include <windows.h>
+ #include <bcrypt.h>
+ #pragma comment(lib, "bcrypt.lib")
+ #else
+diff --git a/src/realm/util/file.cpp b/src/realm/util/file.cpp
+index 3dcde11..04b48c1 100644
+--- a/src/realm/util/file.cpp
++++ b/src/realm/util/file.cpp
+@@ -1839,7 +1839,11 @@ std::time_t File::last_write_time(const std::string& path)
+ 
+     using namespace std::chrono;
+ #if __cplusplus >= 202002L
++#ifdef __MINGW32__
++    auto system_time = decltype(time)::clock::to_sys(time);
++#else
+     auto system_time = clock_cast<system_clock>(time);
++#endif
+ #else
+     auto system_time =
+         time_point_cast<system_clock::duration>(time - decltype(time)::clock::now() + system_clock::now());
+diff --git a/src/realm/util/file.hpp b/src/realm/util/file.hpp
+index 450a91b..1603636 100644
+--- a/src/realm/util/file.hpp
++++ b/src/realm/util/file.hpp
+@@ -28,7 +28,7 @@
+ #include <string>
+ 
+ #ifdef _WIN32
+-#include <Windows.h>
++#include <windows.h>
+ #else
+ #include <dirent.h> // POSIX.1-2001
+ #include <sys/stat.h>
+@@ -41,7 +41,7 @@
+ #include <realm/util/safe_int_ops.hpp>
+ #include <realm/utilities.hpp>
+ 
+-#if defined(_MSVC_LANG) // compiling with MSVC
++#if defined(_WIN32) // Windows directory iteration uses std::filesystem
+ #include <filesystem>
+ #define REALM_HAVE_STD_FILESYSTEM 1
+ #else
+diff --git a/src/realm/util/interprocess_condvar.cpp b/src/realm/util/interprocess_condvar.cpp
+index 780ee77..cb09325 100644
+--- a/src/realm/util/interprocess_condvar.cpp
++++ b/src/realm/util/interprocess_condvar.cpp
+@@ -35,7 +35,7 @@
+ #endif
+ 
+ #ifdef _WIN32
+-#include <Windows.h>
++#include <windows.h>
+ #include <set>
+ #include <queue>
+ #include <optional>
+diff --git a/src/realm/util/interprocess_condvar.hpp b/src/realm/util/interprocess_condvar.hpp
+index b4884df..fb38917 100644
+--- a/src/realm/util/interprocess_condvar.hpp
++++ b/src/realm/util/interprocess_condvar.hpp
+@@ -27,6 +27,7 @@
+ #include <fcntl.h>
+ #include <sys/stat.h>
+ #include <mutex>
++#include <chrono>
+ 
+ #if REALM_PLATFORM_APPLE
+ #include <sys/time.h>
+@@ -117,7 +118,10 @@ public:
+             if (tp) {
+                 struct timespec now;
+ #ifdef _WIN32
+-                timespec_get(&now, TIME_UTC);
++                const auto elapsed = std::chrono::system_clock::now().time_since_epoch();
++                const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(elapsed);
++                now.tv_sec = seconds.count();
++                now.tv_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed - seconds).count();
+ #else
+                 clock_gettime(CLOCK_REALTIME, &now);
+ #endif
+diff --git a/src/realm/util/platform_info.cpp b/src/realm/util/platform_info.cpp
+index 9235aa1..9739ca4 100644
+--- a/src/realm/util/platform_info.cpp
++++ b/src/realm/util/platform_info.cpp
+@@ -12,7 +12,7 @@
+ #include <sys/utsname.h>
+ #else
+ #include <windows.h>
+-#include <VersionHelpers.h>
++#include <versionhelpers.h>
+ #endif
+ 
+ using namespace realm;
+diff --git a/src/realm/util/safe_int_ops.hpp b/src/realm/util/safe_int_ops.hpp
+index f92af37..3747c95 100644
+--- a/src/realm/util/safe_int_ops.hpp
++++ b/src/realm/util/safe_int_ops.hpp
+@@ -22,8 +22,10 @@
+ #ifdef _WIN32
+ #undef max // collides with numeric_limits::max called later in this header file
+ #undef min // collides with numeric_limits::min called later in this header file
++#ifdef _MSC_VER
+ #include <safeint.h>
+ #endif
++#endif
+ 
+ #include <realm/util/features.h>
+ #include <realm/util/assert.hpp>
+diff --git a/src/realm/util/thread.hpp b/src/realm/util/thread.hpp
+index 15d6f14..b1207a9 100644
+--- a/src/realm/util/thread.hpp
++++ b/src/realm/util/thread.hpp
+@@ -34,7 +34,7 @@
+ #ifdef _WIN32
+ #include <condition_variable> // for windows non-interprocess condvars we use std::condition_variable
+ #include <thread>
+-#include <Windows.h>
++#include <windows.h>
+ #include <process.h> // _getpid()
+ #else
+ #include <pthread.h>
+diff --git a/src/realm/utilities.cpp b/src/realm/utilities.cpp
+index e98fb42..0dea2cb 100644
+--- a/src/realm/utilities.cpp
++++ b/src/realm/utilities.cpp
+@@ -48,7 +48,7 @@ namespace {
+ #if defined REALM_COMPILER_AVX && defined __GNUC__
+ #define _XCR_XFEATURE_ENABLED_MASK 0
+ 
+-inline unsigned long long _xgetbv(unsigned index)
++inline unsigned long long realm_xgetbv(unsigned index)
+ {
+ #if REALM_HAVE_AT_LEAST_GCC(4, 4)
+     unsigned int eax, edx;
+@@ -111,7 +111,11 @@ void cpuid_init()
+ 
+     if (osUsesXSAVE_XRSTORE && cpuAVXSuport) {
+         // Check if the OS will save the YMM registers
++#ifdef _MSC_VER
+         unsigned long long xcrFeatureMask = _xgetbv(_XCR_XFEATURE_ENABLED_MASK);
++#else
++        unsigned long long xcrFeatureMask = realm_xgetbv(_XCR_XFEATURE_ENABLED_MASK);
++#endif
+         avxSupported = (xcrFeatureMask & 0x6) || false;
+     }
+ #endif
+diff --git a/src/realm/utilities.hpp b/src/realm/utilities.hpp
+index 2125fe2..8d49bf3 100644
+--- a/src/realm/utilities.hpp
++++ b/src/realm/utilities.hpp
+@@ -29,9 +29,9 @@
+ 
+ #ifdef _WIN32
+ 
+-#include <WinSock2.h>
++#include <winsock2.h>
+ #include <intrin.h>
+-#include <BaseTsd.h>
++#include <basetsd.h>
+ 
+ #if !defined(_SSIZE_T_) && !defined(_SSIZE_T_DEFINED)
+ typedef SSIZE_T ssize_t;

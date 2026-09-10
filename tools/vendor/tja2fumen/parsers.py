@@ -434,7 +434,7 @@ def check_branch_length(parsed_branches: Dict[str, List[TJAMeasure]],
                        f"lengths.")
         for idx_m in range(branch_len, expected_len):
             parsed_branches[branch_name].append(
-                parsed_branches[max_branch_name][idx_m]
+                deepcopy(parsed_branches[max_branch_name][idx_m])
             )
     # Otherwise, if length was provided, then simply pad with empty measures
     else:

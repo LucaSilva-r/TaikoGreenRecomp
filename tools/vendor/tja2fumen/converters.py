@@ -541,7 +541,9 @@ def fix_dk_note_types_course(fumen: FumenCourse) -> None:
     # try to determine the song's BPM from its measures
     measure_bpms = [m.bpm for m in fumen.measures]
     unique_bpms = set(measure_bpms)
-    song_bpm = max(unique_bpms, key=measure_bpms.count)
+    # Match the native port's deterministic tie-break; set iteration order
+    # previously changed note syllables when several BPMs were equally common.
+    song_bpm = max(sorted(unique_bpms), key=measure_bpms.count)
 
     # collect the d/k notes for each branch, then fix their types
     for branch_name in BRANCH_NAMES:

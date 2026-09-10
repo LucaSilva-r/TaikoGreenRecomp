@@ -17,6 +17,8 @@
 #include <unordered_map>
 #include <string_view>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 #include <mbedtls/sha256.h>
 
@@ -128,6 +130,7 @@ std::unordered_map<std::string, std::string> load_title_overrides()
 
 void load_once()
 {
+    g_songs.clear(); // A failed background attempt may be retried by call_once.
     const char* configured_root = std::getenv("PS3_VFS_ROOT");
     const std::filesystem::path root =
         configured_root && configured_root[0] ? configured_root : "game/vfs";
@@ -225,6 +228,30 @@ bool taiko_catalog_load()
 {
     std::call_once(g_once, load_once);
     return g_loaded;
+}
+
+extern "C" void ps3_preload_host_catalog()
+{
+    const char* frontend = std::getenv("TAIKO_HOST_FRONTEND");
+    if (!frontend || !frontend[0] || std::string_view(frontend) == "0") return;
+    // Constructed after the catalog globals: joins before their destruction.
+    // call_once makes browser access wait for completion, never a partial list.
+    try {
+        static std::jthread worker([] {
+            const auto start = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "[taiko_catalog] preloading custom browser library\n");
+            try {
+                taiko_catalog_load();
+                const auto elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count();
+                std::fprintf(stderr, "[taiko_catalog] browser preload finished in %.2f s\n", elapsed);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "[taiko_catalog] browser preload failed: %s\n", e.what());
+            }
+        });
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[taiko_catalog] cannot start browser preload: %s\n", e.what());
+    }
 }
 
 std::size_t taiko_catalog_count()

@@ -1,5 +1,7 @@
 #include "taiko_custom_songs.h"
 #include "taiko_audio_decoder.h"
+#include "taiko_chart.h"
+#include <set>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -7,19 +9,6 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
-#ifdef _WIN32
-#include <process.h>
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <spawn.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <cerrno>
-extern char** environ;
-#endif
 
 namespace {
 namespace fs = std::filesystem;
@@ -33,86 +22,6 @@ std::string utf8(const fs::path& path) {
 std::mutex prepare_mutex;
 std::string active_id, active_cache;
 std::mutex assets_mutex;
-std::string tool_path()
-{
-    if (const char* p = std::getenv("TAIKO_CUSTOM_TOOL")) return p;
-    fs::path executable;
-#ifdef _WIN32
-    std::vector<wchar_t> buffer(32768);
-    const DWORD n = GetModuleFileNameW(nullptr, buffer.data(), DWORD(buffer.size()));
-    if (n && n < buffer.size()) executable = std::wstring(buffer.data(), n);
-#else
-    std::array<char, 4096> buffer{};
-    const ssize_t n = readlink("/proc/self/exe", buffer.data(), buffer.size());
-    if (n > 0 && size_t(n) < buffer.size()) executable = std::string(buffer.data(), n);
-#endif
-    if (!executable.empty()) {
-        const auto bundled = executable.parent_path() / "tools/custom_songs.py";
-        if (fs::is_regular_file(bundled)) return utf8(bundled);
-    }
-    if (fs::is_regular_file("tools/custom_songs.py")) return "tools/custom_songs.py";
-    return TAIKO_CUSTOM_TOOL_DEFAULT;
-}
-int run_python(std::vector<std::string> args)
-{
-    const char* python = std::getenv("TAIKO_PYTHON");
-    args.insert(args.begin(), tool_path());
-    args.insert(args.begin(), python && *python ? python :
-#ifdef _WIN32
-        "python"
-#else
-        "python3"
-#endif
-    );
-#ifdef _WIN32
-    std::vector<std::wstring> wide;
-    for (const auto& arg : args) wide.push_back(from_utf8(arg).wstring());
-    // spawn joins argv with spaces. Quote for the Windows CRT argument parser,
-    // including trailing backslashes and literal quotes; no command shell.
-    std::vector<std::wstring> quoted;
-    for (const auto& arg : wide) {
-        std::wstring q(1, L'"');
-        size_t slashes = 0;
-        for (wchar_t c : arg) {
-            if (c == L'\\') { ++slashes; continue; }
-            q.append(slashes * (c == L'"' ? 2 : 1), L'\\');
-            slashes = 0;
-            if (c == L'"') q += L'\\';
-            q += c;
-        }
-        q.append(slashes * 2, L'\\');
-        q += L'"';
-        quoted.push_back(std::move(q));
-    }
-    std::vector<const wchar_t*> argv;
-    for (const auto& arg : quoted) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    return static_cast<int>(_wspawnvp(_P_WAIT, wide[0].c_str(), argv.data()));
-#else
-    std::vector<char*> argv;
-    for (auto& arg : args) argv.push_back(arg.data());
-    argv.push_back(nullptr);
-    pid_t pid;
-    if (posix_spawnp(&pid, argv[0], nullptr, nullptr, argv.data(), environ)) return -1;
-    int status;
-    while (waitpid(pid, &status, 0) < 0) if (errno != EINTR) return -1;
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-#endif
-}
-uint32_t word(std::istream& in)
-{
-    unsigned char b[4]{};
-    in.read(reinterpret_cast<char*>(b), 4);
-    return uint32_t(b[0]) | uint32_t(b[1]) << 8 | uint32_t(b[2]) << 16 | uint32_t(b[3]) << 24;
-}
-std::string string(std::istream& in)
-{
-    const auto length = word(in);
-    if (length > 65536) { in.setstate(std::ios::failbit); return {}; }
-    std::string out(length, '\0');
-    in.read(out.data(), length);
-    return out;
-}
 bool chart_ready(const TaikoCatalogSong& song, uint32_t& lead)
 {
     std::ifstream ready(from_utf8(song.custom_cache) / "ready");
@@ -189,30 +98,28 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
         fs::create_directories(cache);
         for (bool lazer : {false, true}) {
         if (!lazer && fs::is_empty(root / "TJA")) continue;
-        const auto index = cache / (lazer ? "osu-index.bin" : "index.bin");
-        const std::vector<std::string> command = lazer
-            ? std::vector<std::string>{"scan-osu", utf8(index)}
-            : std::vector<std::string>{"scan", utf8(root / "TJA"), utf8(index)};
-        if (run_python(command)) {
-            std::fprintf(stderr, "[custom_songs] %s discovery failed; see log above\n", lazer ? "osu!lazer" : "TJA");
+        std::vector<TaikoCatalogSong> discovered;
+        try {
+            if (lazer) taiko_chart::scan_lazer(discovered);
+            else {
+                std::vector<fs::path> files;
+                for (const auto& entry : fs::recursive_directory_iterator(root / "TJA", fs::directory_options::skip_permission_denied)) {
+                    auto ext = utf8(entry.path().extension());
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {return char(std::tolower(c));});
+                    if (entry.is_regular_file() && ext == ".tja") files.push_back(entry.path());
+                }
+                std::sort(files.begin(), files.end());
+                for (const auto& file : files) {
+                    try {discovered.push_back(taiko_chart::inspect_tja(file,root / "TJA"));}
+                    catch (const std::exception& e) {std::fprintf(stderr,"[custom_songs] %s: %s\n",utf8(file).c_str(),e.what());}
+                }
+            }
+        } catch (const std::exception& e) {
+            std::fprintf(stderr,"[custom_songs] %s discovery failed: %s\n",lazer ? "osu!lazer" : "TJA",e.what());
             continue;
         }
-        std::ifstream in(index, std::ios::binary);
-        if (word(in) != 0x33434a54) continue;
-        const uint32_t count = word(in);
-        if (count > 100000) continue;
-        for (uint32_t i = 0; i < count; ++i) {
-            TaikoCatalogSong song;
-            song.music_id = string(in); song.title = string(in);
-            song.custom_subtitle = string(in);
-            song.tja_path = string(in); song.audio_path = string(in);
-            song.custom_revision = string(in);
-            song.osu_group = string(in); song.osu_difficulty = string(in);
-            in.read(reinterpret_cast<char*>(song.stars.data()), 5);
-            song.difficulty_mask = uint8_t(in.get());
-            song.preview_ms = word(in);
-            if (!in || song.music_id.size() != 14 || song.music_id.substr(0, 2) != "tc" ||
-                song.music_id.find_first_not_of("tc0123456789abcdef") != std::string::npos) break;
+        const size_t count = discovered.size();
+        for (auto& song : discovered) {
             if (std::any_of(songs.begin(), songs.end(), [&](const auto& s) {return s.music_id == song.music_id;})) continue;
             if (!lazer) song.custom_folder = utf8(fs::relative(from_utf8(song.tja_path).parent_path(),
                                                   fs::canonical(root / "TJA")));
@@ -221,13 +128,13 @@ void taiko_custom_scan(std::vector<TaikoCatalogSong>& songs)
             // ESE layout: TJA/category/song/assets. Only the category is a
             // navigation folder; the song directory is an implementation detail.
             song.custom_folder = song.custom_folder.substr(0, song.custom_folder.find('/'));
-            song.original_title = song.title;
+            if (song.original_title.empty()) song.original_title = song.title;
             song.genre = lazer ? "OSU! LAZER" : "CUSTOM TJA";
             song.unique_id = 0; // Custom scores must never be submitted as cabinet content.
             song.custom_cache = utf8(cache / song.music_id / song.custom_revision);
             songs.push_back(std::move(song));
         }
-        std::fprintf(stderr, "[custom_songs] discovered %u %s charts\n", count, lazer ? "osu!lazer" : "TJA");
+        std::fprintf(stderr, "[custom_songs] discovered %zu %s charts\n", count, lazer ? "osu!lazer" : "TJA");
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[custom_songs] discovery failed: %s\n", e.what());
@@ -260,13 +167,9 @@ bool taiko_custom_prepare(const TaikoCatalogSong& song, std::string& error)
     try {
         uint32_t lead = 0;
         if (!chart_ready(song, lead)) {
-            std::vector<std::string> command{"convert", song.tja_path, song.custom_cache, song.custom_revision};
-            if (song.genre == "OSU! LAZER") {
-                command.push_back("--osu-level");
-                command.push_back(std::to_string(song.stars[3]));
-            }
-            if (run_python(command) || !chart_ready(song, lead)) {
-                error = "Chart conversion failed; see custom_songs log"; return false;
+            taiko_chart::convert(song);
+            if (!chart_ready(song, lead)) {
+                error = "Chart cache validation failed"; return false;
             }
         }
         TaikoDecodedAudio decoded;

@@ -8,6 +8,12 @@ MIT license are retained in `tja2fumen/LICENSE.txt`.
 and lead-in flow for local files. It does not import the connector's service,
 database, catalog, or Sony ATRAC encoding dependencies.
 
+These Python modules now serve as development references for the native C++
+converter in `src/taiko_chart*.cpp`; they are not runtime dependencies.
+The native port and reference both break equally common BPM ties deterministically
+and deep-copy missing branch measures, preventing shared measures from duplicating
+notes or consuming another branch's commands.
+
 # osu!taiko converter
 
 `osu.py` is copied from `Zucchini-connector/app/osu.py` (2026-09-09).

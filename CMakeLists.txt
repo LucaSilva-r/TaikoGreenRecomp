@@ -11,7 +11,7 @@
 #         -DCMAKE_TOOLCHAIN_FILE=mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build
 #   wine build/taiko_boot.exe game/EBOOT.elf
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.22.1)
 project(taiko_boot CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -438,28 +438,6 @@ else()
     add_executable(taiko_boot ${TAIKO_BOOT_SOURCES})
 endif()
 
-# Keep the converter beside the executable, including when only Python changed.
-file(GLOB TAIKO_TJA_CONVERTER_FILES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/tja2fumen/*.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/tja2fumen/*.csv"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/tja2fumen/LICENSE.txt")
-add_custom_target(taiko_custom_song_tools
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/tja2fumen"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/custom_songs.py"
-            "$<TARGET_FILE_DIR:taiko_boot>/tools/custom_songs.py"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/osu.py"
-            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/osu.py"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${TAIKO_TJA_CONVERTER_FILES}
-            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/tja2fumen"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/vendor/README.md"
-            "$<TARGET_FILE_DIR:taiko_boot>/tools/vendor/README.md"
-    VERBATIM)
-add_dependencies(taiko_boot taiko_custom_song_tools)
-
 add_custom_command(TARGET taiko_boot POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
@@ -751,10 +729,9 @@ endif()
 # core, so on a 16-core box that is 16 concurrent multi-GB compiles -- which
 # exhausts system RAM and wedges the machine rather than merely being slow.
 # Budget roughly 3 GB per job when raising this.
-set_source_files_properties(src/taiko_custom_songs.cpp PROPERTIES COMPILE_DEFINITIONS TAIKO_CUSTOM_TOOL_DEFAULT="${CMAKE_CURRENT_SOURCE_DIR}/tools/custom_songs.py")
-
 set(TAIKO_COMPILE_JOBS 4 CACHE STRING "Concurrent compiles of the lifted chunks (~3 GB RAM each)")
 set_property(GLOBAL PROPERTY JOB_POOLS taiko_compile=${TAIKO_COMPILE_JOBS} taiko_link=1)
+include(cmake/custom-songs.cmake)
 set_target_properties(taiko_boot PROPERTIES
     JOB_POOL_COMPILE taiko_compile
     JOB_POOL_LINK    taiko_link)
@@ -809,6 +786,23 @@ if(BUILD_TESTING)
     target_include_directories(cell_rtc_tests PRIVATE "${PS3RECOMP_DIR}/include"
         "${PS3RECOMP_DIR}/libs/system" "${PS3RECOMP_DIR}/runtime/ppu")
     add_test(NAME cell_rtc_tests COMMAND cell_rtc_tests)
+endif()
+
+if(BUILD_TESTING AND NOT ANDROID)
+    add_executable(taiko_chart_tests tests/taiko_chart_tests.cpp)
+    target_include_directories(taiko_chart_tests PRIVATE src)
+    target_link_libraries(taiko_chart_tests PRIVATE taiko_charts)
+    add_test(NAME taiko_chart_tests COMMAND taiko_chart_tests)
+
+    add_executable(taiko_lazer_tests tests/taiko_lazer_tests.cpp)
+    target_include_directories(taiko_lazer_tests PRIVATE src)
+    target_link_libraries(taiko_lazer_tests PRIVATE taiko_charts Storage)
+    add_test(NAME taiko_lazer_tests COMMAND taiko_lazer_tests)
+
+    if(MINGW)
+        target_link_options(taiko_chart_tests PRIVATE -static -static-libgcc -static-libstdc++)
+        target_link_options(taiko_lazer_tests PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
 endif()
 
 if(BUILD_TESTING AND NOT WIN32)
@@ -993,7 +987,7 @@ if(BUILD_TESTING AND NOT WIN32)
         "src/taiko_custom_songs.cpp")
     target_include_directories(taiko_custom_songs_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src" "${TAIKO_MBEDTLS_ROOT}/include")
-    target_link_libraries(taiko_custom_songs_tests PRIVATE Threads::Threads "${TAIKO_MBEDTLS_CRYPTO}")
+    target_link_libraries(taiko_custom_songs_tests PRIVATE Threads::Threads "${TAIKO_MBEDTLS_CRYPTO}" taiko_charts)
     if(TAIKO_INPROCESS_ATRAC)
         if(TAIKO_FFMPEG_ROOT)
             target_link_libraries(taiko_custom_songs_tests PRIVATE

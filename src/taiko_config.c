@@ -22,7 +22,7 @@
 #endif
 
 #define TAIKO_CONFIG_NAME "taiko_config.cfg"
-#define TAIKO_CONFIG_VERSION 1
+#define TAIKO_CONFIG_VERSION 2
 
 extern const unsigned char taiko_config_default_data[];
 extern const unsigned taiko_config_default_size;
@@ -38,6 +38,9 @@ static const config_binding k_bindings[] = {
     {"game", "offline_complete", "TAIKO_OFFLINE_COMPLETE"},
     {"game", "plus_standalone", "TAIKO_PLUS_STANDALONE"},
     {"game", "host_frontend", "TAIKO_HOST_FRONTEND"},
+
+    {"songs", "custom_folder", "TAIKO_CUSTOM_SONGS"},
+    {"songs", "osu_lazer", "TAIKO_OSU_LAZER"},
 
     {"network", "host", "TAIKO_ONLINE_HOST"},
     {"network", "port", "TAIKO_ONLINE_PORT"},

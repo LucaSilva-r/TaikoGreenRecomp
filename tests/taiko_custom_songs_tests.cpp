@@ -18,6 +18,11 @@ void env(const char* key,const std::string& value) {
 #endif
 }
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--catalog") {
+        assert(taiko_catalog_load());
+        std::printf("native catalog: %zu songs\n", taiko_catalog_count());
+        return 0;
+    }
     if (argc == 3 && std::string(argv[1]) == "--lazer") {
         assert(taiko_catalog_load());
         const TaikoCatalogSong* selected = nullptr;
@@ -40,6 +45,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     env("TAIKO_OSU_LAZER", "0");
+    env("TAIKO_PYTHON", "/nonexistent/python");
+    env("TAIKO_DOTNET", "/nonexistent/dotnet");
     const auto root=fs::temp_directory_path()/("taiko-custom-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directories(root/"TJA/Anime/Song");
     env("TAIKO_CUSTOM_SONGS",root.string());env("PS3_VFS_ROOT",root.string());

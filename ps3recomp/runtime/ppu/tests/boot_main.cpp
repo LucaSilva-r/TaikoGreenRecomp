@@ -38,6 +38,9 @@ extern const char* ppu_vfs_root;   /* host dir that PS3 mount points map into */
  * table is registered and vm_base is live, before the game runs. */
 void     ps3_load_prx_modules(void) __attribute__((weak));
 void     ps3_load_prx_modules(void) {}
+/* Optional host browser warmup, after configuration and VFS setup. */
+void     ps3_preload_host_catalog(void) __attribute__((weak));
+void     ps3_preload_host_catalog(void) {}
 }
 
 #include <string.h>
@@ -879,6 +882,7 @@ int main(int argc, char** argv)
         derive_vfs_root(argv[1]);
     }
     printf("[boot] VFS root: %s\n", ppu_vfs_root);
+    ps3_preload_host_catalog();
 
     fprintf(stderr,"[boot-dbg] before ppu_recomp_register\n"); fflush(stderr);
     ppu_recomp_register();   /* lifted function table -> address map */

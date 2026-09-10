@@ -25,7 +25,7 @@ int main(int argc, char** argv)
             fread(contents, 1, sizeof(contents) - 1, created);
             fclose(created);
         }
-        const int ok = expect(strstr(contents, "config_version = 1") != NULL,
+        const int ok = expect(strstr(contents, "config_version = 2") != NULL,
                               "create embedded default") &&
                        expect(strstr(contents, "[audio]") != NULL,
                               "created complete schema");
@@ -40,6 +40,7 @@ int main(int argc, char** argv)
           "[network]\nhost = cfg.example\nport = 8443\n\n"
           "[audio]\noffset_ms = 17\n\n"
           "obsolete_key = remove-me\n\n"
+          "[songs]\ncustom_folder = /tmp/My TJA Library\nosu_lazer = /tmp/osu\n\n"
           "[environment]\nRSX_FPS_LOG = 1\n", file);
     fclose(file);
 
@@ -49,6 +50,8 @@ int main(int argc, char** argv)
     unsetenv("TAIKO_ONLINE_PORT");
     unsetenv("TAIKO_AUDIO_OFFSET_MS");
     unsetenv("RSX_FPS_LOG");
+    unsetenv("TAIKO_CUSTOM_SONGS");
+    setenv("TAIKO_OSU_LAZER", "0", 1);
     taiko_config_load();
 
     int ok =
@@ -57,16 +60,19 @@ int main(int argc, char** argv)
                "environment precedence") &&
         expect(!strcmp(getenv("TAIKO_ONLINE_PORT"), "8443"), "network setting") &&
         expect(!strcmp(getenv("TAIKO_AUDIO_OFFSET_MS"), "17"), "audio setting") &&
+        expect(!strcmp(getenv("TAIKO_CUSTOM_SONGS"), "/tmp/My TJA Library"),
+               "custom library path including spaces") &&
+        expect(!strcmp(getenv("TAIKO_OSU_LAZER"), "0"), "osu environment override") &&
         expect(!strcmp(getenv("RSX_FPS_LOG"), "1"), "environment escape hatch") &&
         expect(taiko_config_set("audio", "offset_ms", "23"), "update setting");
 
     file = fopen(path, "rb");
-    char contents[2048] = {0};
+    char contents[4096] = {0};
     if (file) {
         fread(contents, 1, sizeof(contents) - 1, file);
         fclose(file);
     }
-    ok = ok && expect(strstr(contents, "config_version = 1") != NULL,
+    ok = ok && expect(strstr(contents, "config_version = 2") != NULL,
                       "repair schema version") &&
          expect(strstr(contents, "obsolete_key") == NULL,
                 "drop obsolete setting") &&

@@ -338,6 +338,18 @@ int main() {
     key(TAIKO_BROWSER_SEARCH_CLEAR);
     key(TAIKO_BROWSER_FIRST);
 
+    songs[osu_begin].title = "Kawaki wo Ameku";
+    songs[osu_begin].original_title = "カワキヲアメク";
+    taiko_frontend_standalone_session_begin();
+    taiko_frontend_enter_song_select_shell();
+    for (const char* query : {"kawa", "KAWAKI WO AMEKU", "カワキヲアメク"}) {
+        key(TAIKO_BROWSER_SEARCH_TOGGLE);
+        assert(taiko_frontend_browser_text(query));
+        assert(!rows.empty() && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
+        assert(rows.size() == 2); // One matching set and its exit row.
+        key(TAIKO_BROWSER_SEARCH_CLEAR);
+    }
+
     standalone = false;
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();

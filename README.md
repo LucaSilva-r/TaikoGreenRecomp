@@ -202,6 +202,7 @@ is separate from `build*/` so a build directory stays disposable:
 scripts/setup_sdl_gpu_mingw.sh    # SDL3 + SDL_shadercross + DXC (Windows target)
 scripts/setup_sdl_gpu_linux.sh    # the same, for the native Linux build
 scripts/build_ffmpeg_mingw.sh     # minimal static ATRAC3plus decoder
+scripts/setup_realm.sh           # native osu!lazer library reader sources
 ```
 
 Raspberry Pi 5 has a playable ARM64 SDL_GPU build with Vulkan graphics, SDL3
