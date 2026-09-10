@@ -6,7 +6,7 @@
  * does (vertical stacking, sutegana / punctuation / hgroup / rotate handling,
  * outlined glyphs) straight into the overlay's A8R8G8B8 title slot.
  *
- * Uses TaikoRecomp's embedded UI font. Calls require external serialization. */
+ * Uses TaikoRecomp's embedded UI font. Public rendering calls serialize access to the shared face. */
 
 /* Render `title` (UTF-8) into `out`, a W*H A8R8G8B8 buffer matching the
  * overlay title slot (TAIKO_OVL_TITLE_IMAGE_W x _H). Returns 1 on success,
@@ -39,6 +39,12 @@ int taiko_text_render_argb(const char *utf8, void *out, unsigned int max_w,
 #define TITLE_TEX_SONGLIST_SHORT  10u  /* side-column vertical title    (56x400)  */
 #define TITLE_TEX_SONG_NAME_HUD   11u  /* in-game (enso) horizontal name (720x64) */
 #define TITLE_TEX_SONG_NAME_TRANS 12u  /* rainbow scene-change name      (720x104) */
+
+/* Top-aligned 56x400 browser spine, using the calibrated short-title profile.
+ * Unlike title_tex_render, zero explicitly selects a black outline. The caller
+ * provides a zeroed 56*400 A8R8G8B8 buffer. */
+int taiko_title_render_spine_argb(const char *title, void *out,
+                                  unsigned int outline_rgb);
 
 /* Native pixel size of `type`'s texture. Returns 1 if the type is known. */
 int title_tex_dims(unsigned int type, unsigned int *w, unsigned int *h);

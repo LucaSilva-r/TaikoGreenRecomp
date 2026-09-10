@@ -3,7 +3,28 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "line %d: %s\n", __LINE__, #x); return 1; } } while (0)
+
+typedef struct SpineJob {
+    const char* title;
+    uint32_t reference[56*400];
+    int native, failed;
+} SpineJob;
+
+static void* render_spines(void* data)
+{
+    SpineJob* job=data;
+    uint32_t pixels[56*400];
+    for(unsigned i=0;i<24;++i) {
+        memset(pixels,0,sizeof pixels);
+        int ok=job->native
+            ? title_tex_render(TITLE_TEX_SONGLIST_SHORT,job->title,pixels,56,400,0x445566)
+            : taiko_title_render_spine_argb(job->title,pixels,0);
+        if(!ok || memcmp(pixels,job->reference,sizeof pixels)) job->failed=1;
+    }
+    return NULL;
+}
 
 int main(int argc, char** argv)
 {
@@ -39,5 +60,30 @@ int main(int argc, char** argv)
             }
         }
     }
+    const char* spines[]={"J-POP","VOCALOID","CHILDREN'S SONGS",
+        "ゲームミュージック！？", "ひゃく（テスト）ー", "A very long category title with punctuation!?"};
+    for(unsigned t=0;t<sizeof spines/sizeof spines[0];++t) {
+        memset(pixels,0,sizeof pixels);
+        CHECK(taiko_title_render_spine_argb(spines[t],pixels,0));
+        unsigned top=400, fill=0, outline=0;
+        for(unsigned y=0;y<400;++y) for(unsigned x=0;x<56;++x) {
+            uint32_t c=pixels[y*56+x];
+            if(c>>24) {
+                if(y<top) top=y;
+                fill+=(c&0xffffff)==0xffffff;
+                outline+=(c&0xffffff)==0;
+            }
+        }
+        CHECK(top<=2 && fill>20 && outline>20);
+    }
+    // Browser and custom-song workers share the same mutable short-title
+    // profile. Their different outline colours must not bleed into each other.
+    SpineJob jobs[2]={{.title="CUSTOM TJA"},{.title="ゲーム！？",.native=1}};
+    CHECK(taiko_title_render_spine_argb(jobs[0].title,jobs[0].reference,0));
+    CHECK(title_tex_render(TITLE_TEX_SONGLIST_SHORT,jobs[1].title,
+                          jobs[1].reference,56,400,0x445566));
+    pthread_t threads[2];
+    for(unsigned i=0;i<2;++i) CHECK(!pthread_create(&threads[i],NULL,render_spines,&jobs[i]));
+    for(unsigned i=0;i<2;++i) { CHECK(!pthread_join(threads[i],NULL));CHECK(!jobs[i].failed); }
     return 0;
 }

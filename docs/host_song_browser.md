@@ -135,7 +135,12 @@ navigation arrows, drum prompts, player badges, and the red/blue footer.
 The selected folder expands in the centre of a horizontal carousel. Nine
 categories are published around the selection with wraparound; existing rim,
 keyboard, wheel, search, login, and join commands keep their behavior.
-English folder labels and song counts remain host-rendered. Native character
+Folder spines use the existing Zucchini-derived short-title renderer: 56x400
+textures, top-aligned ink, UTF-8, small kana, punctuation groups, rotated dashes,
+and vertical compression only when needed. Each label is cached as one texture;
+horizontal titles and counts retain the native-resolution text path. The shared
+title renderer now serializes its public calls so browser labels and background
+custom-song title generation cannot race over FreeType profiles. Native character
 portraits sit above the bottom player nameplates. Song lists, custom subfolders,
 search results, and difficulty selection retain the previous layout for now.
 
@@ -144,8 +149,13 @@ search results, and difficulty selection retain the previous layout for now.
 `game/vfs` when no root is configured). It parses the archive table and decodes
 only the selected NTP3 textures using the portable BC3 decoder or ARGB conversion.
 The asset IDs in `src/taiko_menu_layout.h` refer to Green's 788-entry packlist.
-Folder-edge textures lose their transparent alignment padding at load time;
-artwork is cached as owning RGBA payloads with a 16 MiB total limit and stable
+Folder tabs and edges lose their transparent alignment padding at load time.
+Frames join the original left/right bevel strips with a repeated inside column,
+preserving the artwork's top/bottom edges and gradients as width animates; no
+hand-coloured horizontal borders or extra shadow rectangles are added. The tab's
+flat base sits underneath that same top edge. Medley uses the gold folder set,
+osu! uses matching pink pieces, and Nijiiro uses the original rainbow frame.
+The artwork is cached as owning RGBA payloads with a 16 MiB total limit and stable
 GPU IDs. Missing assets use the coloured host primitives and dynamic labels.
 No game artwork is embedded, modified, or copied into the repository.
 

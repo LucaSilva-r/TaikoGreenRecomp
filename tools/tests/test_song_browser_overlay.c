@@ -2,7 +2,7 @@
  * This is both a smoke test for the overlay API and a quick visual fixture.
  *
  *   cc -DTAIKO_OVERLAY_FONT_EMBEDDED tools/tests/test_song_browser_overlay.c \
- *      src/taiko_overlay.c build-linux/taiko_overlay_font.c -I src \
+ *      src/taiko_overlay.c src/taiko_title_render.c build-linux/taiko_overlay_font.c -I src \
  *      ps3recomp/libs/video/rsx_render_batch.c \
  *      -I ps3recomp/libs/video -I ps3recomp/include \
  *      -I third_party/freetype-linux/include/freetype2 \

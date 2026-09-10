@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -91,12 +92,11 @@ static float      g_ascent_px, g_char_h;
 
 static int font_ready(void);
 
-/* FreeType face + glyph cache are shared by the title worker and the overlay's
- * flip-hook text cache, so serialize all rendering. */
-/* Calls are serialized by taiko_custom_titles.cpp; this face is independent
- * of the browser overlay's face. */
-static void ft_lock(void) {}
-static void ft_unlock(void) {}
+/* The custom-title worker and browser have different callers/locks. Protect
+ * this shared face and its mutable profile caches at the public API boundary. */
+static pthread_mutex_t g_title_lock = PTHREAD_MUTEX_INITIALIZER;
+static void ft_lock(void) { pthread_mutex_lock(&g_title_lock); }
+static void ft_unlock(void) { pthread_mutex_unlock(&g_title_lock); }
 
 /* --- UTF-8 ---------------------------------------------------------------- */
 static int utf8_next(const char **p) {
@@ -1498,6 +1498,17 @@ static int render_short_fixed(const char *title, void *out,
     buf_free(&fill);
     buf_free(&img);
     return 1;
+}
+
+int taiko_title_render_spine_argb(const char *title, void *out,
+                                  unsigned int outline_rgb)
+{
+    if (!title || !out) return 0;
+    ft_lock();
+    int ok = font_ready() && profiles_ready() &&
+             render_short_fixed(title, out, outline_rgb);
+    ft_unlock();
+    return ok;
 }
 
 /* Preserve the calibrated glyph height and outline, compressing horizontally

@@ -87,7 +87,7 @@ static void menu_load_art(void)
     static const unsigned ids[] = {90,91,244,394,641,643,645,647,649,651,653,655,
         657,659,661,663,667,673,676,
         550,551,556,557,561,562,566,567,571,572,576,577,581,582,586,587,
-        591,592,616,617,
+        591,592,596,597,616,617,
         771,787,87,195,196};
     unsigned loaded = 0;
     size_t retained = 0;
@@ -109,11 +109,19 @@ static void menu_load_art(void)
             if(a->width==32 && a->height==480) {
                 unsigned left=(id==550 || id==556 || id==561 || id==566 ||
                     id==571 || id==576 || id==581 || id==586 || id==591 ||
-                    id==616);
+                    id==596 || id==616);
                 unsigned x=left?6:0, w=left?26:25;
                 for(unsigned y=0;y<461;++y)
                     memmove(a->pixels+y*w,a->pixels+(y+9)*32+x,w*4);
                 a->width=w;a->height=461;
+            }
+        }
+        if (id >= 641 && id <= 676 && g_menu_art[id].pixels) {
+            menu_art* a=&g_menu_art[id];
+            if (a->width==88 && a->height==24) {
+                for (unsigned y=0;y<20;++y)
+                    memmove(a->pixels+y*80,a->pixels+(y+2)*88+3,80*4);
+                a->width=80;a->height=20;
             }
         }
         if (retained+bytes > 16u*1024u*1024u) {

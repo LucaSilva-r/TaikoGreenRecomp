@@ -1,17 +1,19 @@
+#include "taiko_title_render.h"
+
 /* Category-screen composition in Green's logical 1280x720 coordinates. */
 static int green_categories(void)
 {
     return g_mode == 5 && g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES;
 }
 
-static int menu_image(unsigned id, float x, float y, float w, float h, int flip)
+static int menu_bitmap(const menu_art* art, uint64_t texture_id,
+                       float x, float y, float w, float h, int flip)
 {
-    if (id >= 788 || !g_menu_art[id].pixels || w <= 0 || h <= 0) return 0;
-    const menu_art* art = &g_menu_art[id];
+    if (!art->pixels || w <= 0 || h <= 0) return 0;
     if (g_ui_emit) {
         HostUiDraw d = {0};
         d.x=x; d.y=y; d.w=w; d.h=h; d.colour=0xffffffff;
-        d.texture_id=UINT64_C(0x4000000000000000)+id;
+        d.texture_id=texture_id;
         d.pixels=art->pixels; d.width=art->width; d.height=art->height; d.flip_x=flip;
         g_ui_emit(g_ui_user,&d);
     } else {
@@ -29,6 +31,12 @@ static int menu_image(unsigned id, float x, float y, float w, float h, int flip)
     return 1;
 }
 
+static int menu_image(unsigned id, float x, float y, float w, float h, int flip)
+{
+    return id < 788 && menu_bitmap(&g_menu_art[id],
+        UINT64_C(0x4000000000000000)+id, x,y,w,h,flip);
+}
+
 typedef struct menu_folder_style { const char* label; uint32_t colour; unsigned tab, edge; } menu_folder_style;
 static const menu_folder_style menu_styles[] = {
     {"J-POP",RGB_COLOUR(32,158,183),643,557},
@@ -38,11 +46,11 @@ static const menu_folder_style menu_styles[] = {
     {"CLASSICAL",RGB_COLOUR(205,163,13),651,577},
     {"GAME MUSIC",RGB_COLOUR(156,119,183),653,582},
     {"NAMCO ORIGINAL",RGB_COLOUR(255,88,9),655,587},
-    {"MEDLEY",RGB_COLOUR(255,107,97),657,592},
+    {"MEDLEY",RGB_COLOUR(205,180,49),659,597},
     {"CHILDREN'S SONGS",RGB_COLOUR(252,65,137),647,567},
     {"CUSTOM TJA",RGB_COLOUR(50,194,58),641,551},
-    {"OSU! LAZER",RGB_COLOUR(252,65,137),673,567},
-    {"NIJIIRO",RGB_COLOUR(255,107,97),655,592},
+    {"OSU! LAZER",RGB_COLOUR(252,65,137),647,567},
+    {"NIJIIRO",RGB_COLOUR(255,107,97),657,592},
 };
 static const menu_folder_style* menu_style(const char* title)
 {
@@ -56,36 +64,76 @@ static float menu_card_x(int relative)
 }
 static float menu_card_w(int relative) { return relative ? 76 : 400; }
 
-static void menu_folder(float x,float y,float w,float h,const menu_folder_style* style)
+static menu_art g_menu_middle[788];
+
+static void menu_folder(float x, float y, float w, float h,
+                         const menu_folder_style* style)
 {
-    fill_rect(x+5,y+7,x+w+7,y+h+7,RGB_COLOUR(30,91,25));
-    /* Original tab artwork is kept at its authored proportions. */
-    if (!menu_image(style->tab,x,y-15,88,24,0))
-        fill_rounded_rect(x,y-15,x+60,y+16,9,0xff000000);
-    fill_rect(x,y,x+w,y+h,0xff000000);
-    fill_rect(x+6,y+6,x+w-6,y+h-6,style->colour);
-    menu_image(style->edge-1,x,y,22,h,0);
-    menu_image(style->edge,x+w-22,y,22,h,0);
-    /* Stretch the flat bevel between the original left/right corner strips. */
-    uint32_t light=style->colour, dark=style->colour;
-    for(unsigned shift=0;shift<24;shift+=8) {
-        unsigned c=(style->colour>>shift)&255;
-        light=(light&~(255u<<shift))|((c+(255-c)/3)<<shift);
-        dark=(dark&~(255u<<shift))|((c*2/3)<<shift);
+    const menu_art* left = &g_menu_art[style->edge-1];
+    const menu_art* right = &g_menu_art[style->edge];
+    menu_art* middle = &g_menu_middle[style->edge];
+    /* The strip's inside column includes the original top/bottom bevel and
+     * body gradient. Repeating it joins both corners without guessed colours. */
+    if (!middle->pixels && left->pixels && right->pixels &&
+        left->height == right->height) {
+        middle->pixels = malloc(left->height * sizeof(uint32_t));
+        if (middle->pixels) {
+            middle->width = 1; middle->height = left->height;
+            for (unsigned row=0; row<left->height; ++row)
+                middle->pixels[row] = left->pixels[row*left->width+left->width-1];
+        }
     }
-    fill_rect(x+15,y+7,x+w-15,y+11,light);
-    fill_rect(x+15,y+h-13,x+w-15,y+h-8,dark);
+    float tab_width = w < 80 ? w : 80;
+    if (!menu_image(style->tab,x,y-14,tab_width,20,0))
+        fill_rounded_rect(x,y-14,x+tab_width*0.6f,y+5,7,0xff000000);
+    if (!middle->pixels) {
+        fill_rect(x,y,x+w,y+h,0xff000000);
+        fill_rect(x+6,y+6,x+w-6,y+h-6,style->colour);
+        return;
+    }
+    float lw = left->width*h/left->height, rw = right->width*h/right->height;
+    menu_bitmap(middle,UINT64_C(0x4100000000000000)+style->edge,
+                x+lw,y,w-lw-rw,h,0);
+    menu_image(style->edge-1,x,y,lw,h,0);
+    menu_image(style->edge,x+w-rw,y,rw,h,0);
 }
 
-static void menu_spine(const char* text,float x,float y,float height)
+/* Native short-title textures keep Zucchini's spacing, UTF-8 punctuation and
+ * top anchoring. Each immutable category label becomes one cached GPU quad. */
+static struct {
+    char title[256];
+    menu_art art;
+    uint64_t id;
+} g_menu_spines[16];
+static uint64_t g_menu_spine_generation;
+static unsigned g_menu_spine_next;
+
+static void menu_spine(const char* text, float x, float y, float height)
 {
-    size_t length=strlen(text);
-    float step=length>15 ? 22 : 26;
-    float top=y+(height-length*step)/2+step/2;
-    for(size_t i=0;i<length;++i) {
-        char ch[2]={text[i],0};
-        if(ch[0]!=' ') draw_text_at(ch,23,x,top+i*step);
+    unsigned slot;
+    for (slot=0; slot<16; ++slot)
+        if (g_menu_spines[slot].art.pixels && !strcmp(text,g_menu_spines[slot].title)) break;
+    if (slot==16) {
+        slot=g_menu_spine_next++%16;
+        menu_art* art=&g_menu_spines[slot].art;
+        free(art->pixels);
+        art->width=56; art->height=400;
+        art->pixels=calloc(56*400,sizeof(uint32_t));
+        if (!art->pixels) return;
+        if (!taiko_title_render_spine_argb(text,art->pixels,0)) {
+            free(art->pixels);art->pixels=NULL;return;
+        }
+        /* The guest title renderer returns ARGB words; host UI uses RGBA. */
+        for (unsigned i=0;i<56*400;++i) {
+            uint32_t c=art->pixels[i];
+            art->pixels[i]=(c&0xff00ff00u)|((c>>16)&255)|((c&255)<<16);
+        }
+        snprintf(g_menu_spines[slot].title,sizeof g_menu_spines[slot].title,"%s",text);
+        g_menu_spines[slot].id=UINT64_C(0x4200000000000000)+ ++g_menu_spine_generation;
     }
+    float width=height*56/400;
+    menu_bitmap(&g_menu_spines[slot].art,g_menu_spines[slot].id,
+                x-width/2,y,width,height,0);
 }
 
 static void menu_title(const char* title,float x,float y,float width)
