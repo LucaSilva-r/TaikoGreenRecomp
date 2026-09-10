@@ -10,6 +10,7 @@ typedef struct menu_art {
     unsigned width, height;
 } menu_art;
 static menu_art g_menu_art[788];
+static unsigned g_menu_tab_baseline[788];
 static int g_menu_art_loaded;
 static menu_art g_menu_indicator[237];
 
@@ -109,7 +110,7 @@ static void menu_load_art(void)
     long end = ftell(f);
     /* Texture ids from Green's song_select packlist. The border strips and
      * tabs are composed by the layout; dynamic labels remain native text. */
-    static const unsigned ids[] = {90,91,244,394,641,643,645,647,649,651,653,655,
+    static const unsigned ids[] = {90,91,244,492,394,641,643,645,647,649,651,653,655,
         657,659,661,663,667,673,676,
         550,551,556,557,561,562,566,567,571,572,576,577,581,582,586,587,
         591,592,596,597,616,617,
@@ -146,6 +147,10 @@ static void menu_load_art(void)
         if (id >= 641 && id <= 676 && g_menu_art[id].pixels) {
             menu_art* a=&g_menu_art[id];
             if (a->width==88 && a->height==24) {
+                /* Flat borders begin on different source rows across genres. */
+                unsigned baseline=2;
+                while(baseline<22 && !(a->pixels[baseline*88+70]>>24)) ++baseline;
+                g_menu_tab_baseline[id]=baseline-2;
                 for (unsigned y=0;y<20;++y)
                     memmove(a->pixels+y*80,a->pixels+(y+2)*88+3,80*4);
                 a->width=80;a->height=20;

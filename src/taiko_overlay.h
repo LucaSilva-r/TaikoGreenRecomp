@@ -29,7 +29,7 @@ void taiko_overlay_show_entry_progress(const char* player_name);
 void taiko_overlay_show_baid_wait(void);
 void taiko_overlay_show_song_select(const char* player_name);
 
-enum { TAIKO_OVERLAY_SONG_ROW_COUNT = 9 };
+enum { TAIKO_OVERLAY_LIST_ROW_COUNT = 9, TAIKO_OVERLAY_SONG_ROW_COUNT = 11 };
 
 enum taiko_overlay_browser_level {
     TAIKO_OVERLAY_BROWSER_CATEGORIES = 0,

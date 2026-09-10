@@ -122,7 +122,7 @@ int main(void)
     taiko_overlay_show_song_browser("P1", "fixture", "One song", "J-POP", 1,
         0, 1, 1, "J-POP", 0, 9, "ONI", 8, "", 0, 1, 0, &row, 1);
     assert(visit_host_ui(1, NULL, NULL, &info) && info.animated);
-    g_song_animation_start = monotonic_milliseconds() - 200;
+    g_song_animation_start = monotonic_milliseconds() - 600;
     // Even if the first poll is after the deadline, present the final position.
     assert(visit_host_ui(1, NULL, NULL, &info) && info.animated);
     native_count = 0;
@@ -132,7 +132,7 @@ int main(void)
     row.title = "Folder A"; row.kind = TAIKO_OVERLAY_ROW_CATEGORY;
     taiko_overlay_show_song_browser("P1", "", "", "CUSTOM TJA", 0,
         0, 0, 1, "CUSTOM TJA", 9, 10, "", 0, "", 0, 1, 1, &row, 1);
-    g_song_animation_start = monotonic_milliseconds() - 200;
+    g_song_animation_start = monotonic_milliseconds() - 600;
     native_count = 0;
     assert(visit_host_ui(1, collect_ui, NULL, &info));
     first_count = native_count;
@@ -140,7 +140,7 @@ int main(void)
     row.title = "Folder B";
     taiko_overlay_show_song_browser("P1", "", "", "CUSTOM TJA", 0,
         0, 0, 1, "CUSTOM TJA", 9, 10, "", 0, "", 0, 1, 1, &row, 1);
-    g_song_animation_start = monotonic_milliseconds() - 200;
+    g_song_animation_start = monotonic_milliseconds() - 600;
     native_count = 0;
     assert(visit_host_ui(1, collect_ui, NULL, &info));
     assert(native_count != first_count ||
@@ -229,8 +229,10 @@ int main(void)
     assert(visit_host_ui(1,collect_ui,NULL,&info));
     portraits=0;
     for(unsigned i=0;i<native_count;++i) if(native_draws[i].surface_address) {
-        assert(native_draws[i].y==342);
-        assert(native_draws[i].x==(native_draws[i].flip_x?855:-105));
+        assert(native_draws[i].y==190);
+        assert(native_draws[i].w==620 && native_draws[i].h==620);
+        assert(!native_draws[i].flip_x);
+        assert(native_draws[i].x==(portraits?845:-185));
         ++portraits;
     }
     assert(portraits==2);
@@ -239,7 +241,66 @@ int main(void)
     g_handoff_start=monotonic_milliseconds()-HANDOFF_MS/2;
     native_count=0;assert(visit_host_ui(1,collect_ui,NULL,&info));
     for(unsigned i=0;i<native_count;++i) if(native_draws[i].surface_address)
-        assert(native_draws[i].flip_x?native_draws[i].x>855:native_draws[i].x< -105);
+        assert(native_draws[i].x>845 || native_draws[i].x< -185);
+    // A centred category window must stay ordered through steps and wraparound.
+    const char* carousel_titles[]={"C0","C1","C2","C3","C4","C5","C6","C7","C8","C9","C10","C11"};
+    const unsigned selections[]={0,1,0,11,0};
+    taiko_overlay_song_row carousel[TAIKO_OVERLAY_SONG_ROW_COUNT]={0};
+    for(unsigned step=0;step<5;++step) {
+        g_song_animation_start=monotonic_milliseconds()-1000;
+        for(unsigned r=0;r<TAIKO_OVERLAY_SONG_ROW_COUNT;++r) {
+            unsigned category=(selections[step]+12-5+r)%12;
+            carousel[r].title=carousel_titles[category];
+            carousel[r].catalog_index=category;
+            carousel[r].kind=TAIKO_OVERLAY_ROW_CATEGORY;
+            carousel[r].selected=r==5;
+        }
+        taiko_overlay_show_song_browser("P1 + P2","",carousel_titles[selections[step]],"",0,
+            0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+            carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+        // During the idle delay, the selected spine stays closed and centred.
+        g_song_animation_start=monotonic_milliseconds()-200;
+        float hold_x,hold_w;
+        menu_card_pose(g_song_rows[5].from_card_x,g_song_rows[5].from_card_w,0,
+                       song_ease(),&hold_x,&hold_w);
+        assert(fabsf(hold_w-76)<0.01f && fabsf(hold_x+hold_w/2-640)<0.01f);
+        assert(menu_card_x(-5)<0 && menu_card_x(-5)+menu_card_w(-5)>0);
+        assert(menu_card_x(5)<1280 && menu_card_x(5)+menu_card_w(5)>1280);
+        if(!step) continue;
+        for(unsigned tick=0;tick<=4;++tick) {
+            float t=tick/4.0f;
+            for(unsigned r=0;r+1<TAIKO_OVERLAY_SONG_ROW_COUNT;++r) {
+                float x,w,next,next_w;
+                menu_card_pose(g_song_rows[r].from_card_x,g_song_rows[r].from_card_w,(int)r-5,t,&x,&w);
+                menu_card_pose(g_song_rows[r+1].from_card_x,g_song_rows[r+1].from_card_w,(int)r-4,t,&next,&next_w);
+                if(t>=0.45f) {
+                    if(r==5) assert(fabsf(x+w/2-640)<0.01f);
+                    else assert(fabsf(x-menu_card_x((int)r-5))<0.01f);
+                }
+                assert(x+w<=next); // No newly revealed card underneath its neighbour.
+            }
+        }
+    }
+    // Rapid navigation skips directly to the next closed centre spine.
+    g_song_animation_start=monotonic_milliseconds()-20;
+    for(unsigned r=0;r<TAIKO_OVERLAY_SONG_ROW_COUNT;++r) {
+        unsigned category=(1+12-5+r)%12;
+        carousel[r].title=carousel_titles[category];
+        carousel[r].catalog_index=category;
+    }
+    taiko_overlay_show_song_browser("P1 + P2","","C1","",0,
+        0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+        carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+    assert(song_ease()==0.45f);
+    float rapid_x,rapid_w;
+    menu_card_pose(g_song_rows[5].from_card_x,g_song_rows[5].from_card_w,0,
+                   song_ease(),&rapid_x,&rapid_w);
+    assert(rapid_x==602 && rapid_w==76);
+    double rapid_start=g_song_animation_start;
+    taiko_overlay_show_song_browser("P1 + P2","","C1","",0,
+        0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+        carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+    assert(g_song_animation_start==rapid_start);
     for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) release_text_bitmap(&g_text_cache[i]);
     assert(g_text_cache_bytes == 0);
     return 0;

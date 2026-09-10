@@ -15,7 +15,7 @@ int main(int argc, char** argv)
     if (window && argc > 2) SDL_SetWindowSize(window, atoi(argv[1]),atoi(argv[2]));
     const uint8_t difficulties[2]={3,2};
     taiko_overlay_set_browser_players(1,3,1,difficulties);
-    taiko_overlay_song_row rows[9]={0};
+    taiko_overlay_song_row rows[TAIKO_OVERLAY_SONG_ROW_COUNT]={0};
     const char* titles[]={"Before the song","Another song","太鼓の達人 / Groove","EASY","NORMAL","HARD","ONI","URA","Next song"};
     for(unsigned i=0;i<9;++i){ rows[i].title=titles[i];rows[i].genre="VOCALOID";rows[i].catalog_index=i; }
     for(unsigned i=3;i<8;++i){rows[i].kind=TAIKO_OVERLAY_ROW_DIFFICULTY;rows[i].difficulty=i-3;rows[i].stars=i+1;}
@@ -25,26 +25,26 @@ int main(int argc, char** argv)
     const int returning = songs && !strcmp(argv[4], "return");
     const int categories = argc > 4 && (!strcmp(argv[4], "categories") || !strcmp(argv[4], "anime"));
     const char* folders[]={"J-POP","ANIME","VOCALOID","VARIETY","CLASSICAL","GAME MUSIC","NAMCO ORIGINAL","MEDLEY","CHILDREN'S SONGS","CUSTOM TJA","OSU! LAZER","NIJIIRO"};
-    if(categories) for(unsigned i=0;i<9;++i) {
+    if(categories) for(unsigned i=0;i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) {
         memset(&rows[i],0,sizeof rows[i]); rows[i].title=folders[i];rows[i].genre=folders[i];
-        rows[i].kind=TAIKO_OVERLAY_ROW_CATEGORY;rows[i].catalog_index=47+i*51;rows[i].selected=i==4;
+        rows[i].kind=TAIKO_OVERLAY_ROW_CATEGORY;rows[i].catalog_index=47+i*51;rows[i].selected=i==5;
     }
     Uint64 start=SDL_GetTicks();
     unsigned last=~0u;
-    while(SDL_GetTicks()-start<4000){
+    while(SDL_GetTicks()-start<(argc>5 ? strtoul(argv[5],NULL,10) : 4000)){
         unsigned step=(unsigned)((SDL_GetTicks()-start)/200);
         if(step!=last){
             last=step; if(!categories && !songs) { rows[5].selected=step%2; rows[6].selected=!(step%2); }
             if(categories) {
                 /* Move the same centred window as the production frontend. */
-                unsigned selection=!strcmp(argv[4],"anime")?1:step<5?8:step<10?7:6;
-                for(unsigned i=0;i<9;++i) {
-                    unsigned category=(selection+12-4+i)%12;
+                unsigned selection=!strcmp(argv[4],"anime")?1:(12+8-(step/4)%12)%12;
+                for(unsigned i=0;i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) {
+                    unsigned category=(selection+12-5+i)%12;
                     rows[i].title=rows[i].genre=folders[category];
                     rows[i].catalog_index=47+category*51;
-                    rows[i].selected=i==4;
+                    rows[i].selected=i==5;
                 }
-                taiko_overlay_show_song_browser("P1 + P2","",folders[selection],"CATEGORY FOLDER",149,6,12,9845,"CATEGORIES",6,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,rows,9);
+                taiko_overlay_show_song_browser("P1 + P2","",folders[selection],"CATEGORY FOLDER",149,6,12,9845,"CATEGORIES",6,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,rows,TAIKO_OVERLAY_SONG_ROW_COUNT);
             } else if(songs) {
                 static const char* names[]={"Return","1 Dream","1・2・3","88","The New Adventure","太鼓の達人","Another song","Music","Next song"};
                 for(unsigned i=0;i<9;++i) {

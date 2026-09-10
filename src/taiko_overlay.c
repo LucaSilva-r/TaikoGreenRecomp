@@ -47,6 +47,8 @@ static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
      ((uint32_t)(green) << 8) | (uint32_t)(red))
 enum { TEXT_OUTLINE_RADIUS = 3 };
 static int g_outline_radius = TEXT_OUTLINE_RADIUS;
+static int g_menu_text_outline = TEXT_OUTLINE_RADIUS;
+static unsigned g_text_opacity=255;
 static HostUiEmit g_ui_emit;
 static void* g_ui_user;
 static float g_ui_scale = 1.0f;
@@ -155,11 +157,25 @@ static double monotonic_milliseconds(void)
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
 }
 
+static int green_categories(void);
+
 static float song_ease(void)
 {
-    double t = (monotonic_milliseconds() - g_song_animation_start) / 180.0;
-    if (t >= 1.0) return 1.0f;
-    if (t < 0.0) t = 0.0;
+    double elapsed=monotonic_milliseconds()-g_song_animation_start;
+    if(elapsed<0) elapsed=0;
+    if(green_categories()) {
+        /* Measured from the 60 Hz reference: eight sliding frames with
+         * quadratic ease-out, seven closed frames, fifteen opening frames. */
+        if(elapsed<8000.0/60) {
+            double t=elapsed/(8000.0/60);
+            return (float)(0.45*(1-(1-t)*(1-t)));
+        }
+        if(elapsed<250) return 0.45f;
+        if(elapsed>=500) return 1.0f;
+        return (float)(0.45+0.55*(elapsed-250)/250);
+    }
+    double t=elapsed/180.0;
+    if(t>=1) return 1.0f;
     double inverse = 1.0 - t;
     return (float)(1.0 - inverse * inverse * inverse * inverse * inverse);
 }
@@ -506,7 +522,7 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
 {
     if (g_ui_emit) {
         const int native_pixels = (int)ceilf(pixels * g_ui_scale);
-        g_outline_radius = (int)ceilf(TEXT_OUTLINE_RADIUS * g_ui_scale);
+        g_outline_radius = (int)ceilf(g_menu_text_outline * g_ui_scale);
         text_cache_entry* native = get_text(text, native_pixels);
         if (native && rasterize_text(native)) {
             HostUiDraw draw = {0};
@@ -514,7 +530,7 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
             draw.y = centre_y + (native->top + native->baseline_shift) / g_ui_scale;
             draw.w = native->width / g_ui_scale;
             draw.h = native->height / g_ui_scale;
-            draw.colour = 0xffffffffu;
+            draw.colour = (g_text_opacity<<24)|0xffffffu;
             draw.texture_id = native->texture_id;
             draw.pixels = native->bitmap;
             draw.width = native->width;
@@ -524,6 +540,7 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
         g_outline_radius = TEXT_OUTLINE_RADIUS;
         return;
     }
+    g_outline_radius = g_menu_text_outline;
     text_cache_entry* entry = get_text(text, pixels);
     if (!entry || !rasterize_text(entry)) {
         draw_text_uncached(text, pixels, centre_x, centre_y);
@@ -537,10 +554,10 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
         for (int x = 0; x < entry->width; ++x) {
             if (left + x < 0 || left + x >= g_width) continue;
             const uint32_t colour = row[x];
-            if ((colour >> 24) == 255)
+            if ((colour >> 24) == 255 && g_text_opacity==255)
                 g_pixels[(size_t)(top + y) * g_width + left + x] = colour;
             else if (colour >> 24)
-                put_pixel(left + x, top + y, colour, 255);
+                put_pixel(left + x, top + y, colour, g_text_opacity);
         }
     }
 }
@@ -611,7 +628,7 @@ static void fill_rounded_rect(float left, float top, float right, float bottom,
             const int dx = radius - x - 1;
             const int dy = radius - y - 1;
             if (dx * dx + dy * dy > radius_squared) continue;
-            put_pixel(left + x, top + y, colour, 255);
+            put_pixel(left + x, top + y, colour, g_text_opacity);
             put_pixel(right - x - 1, top + y, colour, 255);
             put_pixel(left + x, bottom - y - 1, colour, 255);
             put_pixel(right - x - 1, bottom - y - 1, colour, 255);
@@ -636,7 +653,6 @@ static uint32_t genre_colour(const char* genre)
     return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
 }
 
-static int green_categories(void);
 
 static void emit_portrait(unsigned slot, float slide, unsigned alpha)
 {
@@ -648,15 +664,15 @@ static void emit_portrait(unsigned slot, float slide, unsigned alpha)
     portrait.y = 100 + slot * 272 - 75;
     portrait.w = portrait.h = 450;
     if (green_categories()) {
-        portrait.x = (slot ? 855 : -105) + slide;
-        portrait.y = 342;
-        portrait.w = portrait.h = 430;
+        portrait.x = (slot ? 845 : -185) + slide;
+        portrait.y = 190;
+        portrait.w = portrait.h = 620;
     }
     portrait.colour = (alpha << 24) | 0xffffffu;
     portrait.surface_address = g_portraits[slot].address;
     portrait.width = g_portraits[slot].width;
     portrait.height = g_portraits[slot].height;
-    portrait.flip_x = slot == 1;
+    portrait.flip_x = slot == 1 && !green_categories();
     g_ui_emit(g_ui_user, &portrait);
 }
 
@@ -720,7 +736,13 @@ static void render_host(void)
         return;
     }
 
-    if (green_categories()) { render_green_categories(); return; }
+    if (green_categories()) {
+        g_menu_text_outline=4;
+        render_green_categories();
+        g_menu_text_outline=TEXT_OUTLINE_RADIUS;
+        g_outline_radius=TEXT_OUTLINE_RADIUS;
+        return;
+    }
 
     /* Persistent song details and an animated song/difficulty carousel. Only
      * the 180 ms input transitions redraw; settled screens retain their frame. */
@@ -1267,6 +1289,8 @@ void taiko_overlay_show_song_browser(const char* player_name,
     for(unsigned i=0;i<previous_count;++i) if(previous[i].selected) previous_selected=(int)i;
     for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) if(rows[i].selected) next_selected=(int)i;
     int changed = previous_count != row_count;
+    int card_shift=0, have_card_shift=0;
+    unsigned unmatched_cards=0;
     g_song_row_count = row_count < TAIKO_OVERLAY_SONG_ROW_COUNT
         ? row_count : TAIKO_OVERLAY_SONG_ROW_COUNT;
     for (unsigned row = 0; row < g_song_row_count; ++row) {
@@ -1298,17 +1322,35 @@ void taiko_overlay_show_song_browser(const char* player_name,
                 item->from_y = prior->from_y + (111 + old * 59 - prior->from_y) * old_ease;
                 item->from_x = prior->from_x + (row_target_x(prior->kind, prior->selected) - prior->from_x) * old_ease;
                 int prior_relative=(int)old-previous_selected;
-                item->from_card_x=prior->from_card_x+(menu_card_x(prior_relative)-prior->from_card_x)*old_ease;
-                item->from_card_w=prior->from_card_w+(menu_card_w(prior_relative)-prior->from_card_w)*old_ease;
+                if(!have_card_shift) {
+                    card_shift=prior_relative-relative;
+                    have_card_shift=1;
+                }
+                menu_card_pose(prior->from_card_x,prior->from_card_w,prior_relative,old_ease,
+                               &item->from_card_x,&item->from_card_w);
                 changed |= old != row || prior->selected != item->selected ||
                            prior->cursors != item->cursors || prior->ready != item->ready;
                 break;
             }
         }
         changed |= found < 0;
+        if(found<0) unmatched_cards|=1u<<row;
+    }
+    /* Newly exposed cards enter from beyond the screen edge. Starting them
+     * at their destination made departing neighbours slide across them. */
+    if(have_card_shift && card_shift) for(unsigned row=0;row<g_song_row_count;++row) {
+        if(!(unmatched_cards&(1u<<row))) continue;
+        int relative=(int)row-next_selected+card_shift;
+        g_song_rows[row].from_card_x=menu_card_x(relative);
+        g_song_rows[row].from_card_w=menu_card_w(relative);
     }
     if (changed) {
         g_song_animation_start = monotonic_milliseconds();
+        /* Navigation interrupts, rather than queues behind, an unfinished
+         * carousel animation. Land on the next closed spine immediately and
+         * retain the normal idle delay before opening it. */
+        if(green_categories() && have_card_shift && card_shift && old_ease<1.0f)
+            g_song_animation_start -= 8000.0/60;
         g_song_animating = 1;
         g_gpu_animation_pending = 1;
     } else {

@@ -545,8 +545,9 @@ void show_current_song()
         match_position = current.song_position;
         if (!selection_is_exit) selection = current.catalog_index;
 
-        row_count = std::min<unsigned>(TAIKO_OVERLAY_SONG_ROW_COUNT,
-                                       entry_total);
+        const unsigned window_rows = !g_song_global_search && query.empty() && !custom_folder_browser()
+            ? TAIKO_OVERLAY_SONG_ROW_COUNT : TAIKO_OVERLAY_LIST_ROW_COUNT;
+        row_count = std::min<unsigned>(window_rows, entry_total);
         unsigned first = g_song_browser_position > row_count / 2
             ? g_song_browser_position - row_count / 2 : 0;
         if (first + row_count > entry_total) first = entry_total - row_count;
@@ -616,7 +617,7 @@ void show_current_song()
         rows = {};
         rows[0] = header;
         row_count = 1;
-        const unsigned visible = std::min<unsigned>(charts.size(), TAIKO_OVERLAY_SONG_ROW_COUNT - 1);
+        const unsigned visible = std::min<unsigned>(charts.size(), TAIKO_OVERLAY_LIST_ROW_COUNT - 1);
         unsigned first = g_osu_variant > visible / 2 ? g_osu_variant - visible / 2 : 0;
         if (first + visible > charts.size()) first = charts.size() - visible;
         for (unsigned d = first; d < first + visible; ++d) {
@@ -660,8 +661,8 @@ void show_current_song()
             row.ready = g_browser_players.ready & row.cursors;
             row.selected = row.cursors != 0;
         }
-        for (unsigned r = parent + 1; r < TAIKO_OVERLAY_SONG_ROW_COUNT &&
-             row_count < TAIKO_OVERLAY_SONG_ROW_COUNT && original[r].title; ++r)
+        for (unsigned r = parent + 1; r < TAIKO_OVERLAY_LIST_ROW_COUNT &&
+             row_count < TAIKO_OVERLAY_LIST_ROW_COUNT && original[r].title; ++r)
             rows[row_count++] = original[r];
     }
     // The browser entry is the stable representative of an osu set/audio
@@ -990,9 +991,9 @@ void handle_rising(unsigned player, uint32_t rising)
         const std::size_t count = taiko_catalog_count();
         if (!count) return;
         if (rising & TAIKO_ACTION_UP)
-            move_song_selection(-TAIKO_OVERLAY_SONG_ROW_COUNT + 1, player);
+            move_song_selection(-TAIKO_OVERLAY_LIST_ROW_COUNT + 1, player);
         else if (rising & TAIKO_ACTION_DOWN)
-            move_song_selection(TAIKO_OVERLAY_SONG_ROW_COUNT - 1, player);
+            move_song_selection(TAIKO_OVERLAY_LIST_ROW_COUNT - 1, player);
         else if (rising & TAIKO_ACTION_HIT_SL)
             move_song_selection(-1, player);
         else if (rising & TAIKO_ACTION_HIT_SR)
@@ -1373,10 +1374,10 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
         move_song_selection(1);
         break;
     case TAIKO_BROWSER_PREVIOUS_PAGE:
-        move_song_selection(-TAIKO_OVERLAY_SONG_ROW_COUNT + 1);
+        move_song_selection(-TAIKO_OVERLAY_LIST_ROW_COUNT + 1);
         break;
     case TAIKO_BROWSER_NEXT_PAGE:
-        move_song_selection(TAIKO_OVERLAY_SONG_ROW_COUNT - 1);
+        move_song_selection(TAIKO_OVERLAY_LIST_ROW_COUNT - 1);
         break;
     case TAIKO_BROWSER_FIRST:
         select_song_endpoint(false);
