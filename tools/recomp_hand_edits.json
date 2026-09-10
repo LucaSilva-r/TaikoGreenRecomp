@@ -29,6 +29,46 @@
  ],
  "declarations": [
   {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_00238AF0"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_0005DA38"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E2E00"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E42A0"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E4CDC"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E690C"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_0005D864"
+  },
+  {
+   "symbol": "taiko_animation_frame_ticks",
+   "text": "extern \"C\" uint32_t taiko_animation_frame_ticks(void);",
+   "function": "func_001E2114"
+  },
+  {
    "symbol": "taiko_lumen_skip_redundant_face_seek",
    "text": "extern \"C\" int taiko_lumen_skip_redundant_face_seek(ppu_context* ctx);",
    "function": "func_003E1338"
@@ -72,9 +112,253 @@
    "symbol": "ppu_note_free",
    "text": "extern \"C\" void ppu_note_free(uint32_t ptr, uint32_t lr, uint32_t tid);",
    "function": "func_005A93CC"
+  },
+  {
+   "symbol": "taiko_frontend_guest_tick",
+   "text": "extern \"C\" void taiko_frontend_guest_tick(ppu_context* ctx);",
+   "function": "func_001EF214"
+  },
+  {
+   "symbol": "taiko_frontend_song_select_tick",
+   "text": "extern \"C\" void taiko_frontend_song_select_tick(ppu_context* ctx);",
+   "function": "func_001F5CA8"
+  },
+  {
+   "symbol": "taiko_frontend_results_end_override",
+   "text": "extern \"C\" int taiko_frontend_results_end_override(ppu_context* ctx);",
+   "function": "func_001E31E4"
+  },
+  {
+   "symbol": "taiko_frontend_results_continue_tick",
+   "text": "extern \"C\" int taiko_frontend_results_continue_tick(ppu_context* ctx);",
+   "function": "func_001EBEB0"
+  },
+  {
+   "symbol": "taiko_entry_set_player_data_trace",
+   "text": "extern \"C\" void taiko_entry_set_player_data_trace(ppu_context* ctx);",
+   "function": "func_002287BC"
+  },
+  {
+   "symbol": "taiko_entry_mode_select_end_trace",
+   "text": "extern \"C\" void taiko_entry_mode_select_end_trace(ppu_context* ctx);",
+   "function": "func_00226888"
+  },
+  {
+   "symbol": "taiko_entry_event_trace",
+   "text": "extern \"C\" int taiko_entry_event_trace(ppu_context* ctx);",
+   "function": "func_001ED74C"
+  },
+  {
+   "symbol": "taiko_entry_state_transition_trace",
+   "text": "extern \"C\" void taiko_entry_state_transition_trace(ppu_context* ctx);",
+   "function": "func_001ED698"
+  },
+  {
+   "symbol": "taiko_pc_mode_destination_override",
+   "text": "extern \"C\" int taiko_pc_mode_destination_override(ppu_context* ctx);",
+   "function": "func_001FE470"
+  },
+  {
+   "symbol": "taiko_pc_mode_frame_begin",
+   "text": "extern \"C\" void taiko_pc_mode_frame_begin(ppu_context* ctx);",
+   "function": "func_0026D530"
+  },
+  {
+   "symbol": "taiko_pc_mode_setup_complete",
+   "text": "extern \"C\" int taiko_pc_mode_setup_complete(uint32_t setup, uint32_t owner);",
+   "function": "func_000E4608"
+  },
+  {
+   "symbol": "taiko_pc_mode_frame_dispatch",
+   "text": "extern \"C\" void taiko_pc_mode_frame_dispatch(ppu_context* ctx);",
+   "function": "func_0026D530"
+  },
+  {
+   "symbol": "taiko_pc_mode_setup_tick",
+   "text": "extern \"C\" int taiko_pc_mode_setup_tick(ppu_context* ctx);",
+   "function": "func_000E4608"
+  },
+  {
+   "symbol": "taiko_pc_mode_score_player",
+   "text": "extern \"C\" int taiko_pc_mode_score_player(uint32_t player);",
+   "function": "func_0012EE34"
+  },
+  {
+   "symbol": "taiko_pc_mode_score_enqueued",
+   "text": "extern \"C\" void taiko_pc_mode_score_enqueued(uint32_t success);",
+   "function": "func_0012EE34"
   }
  ],
  "functions": {
+  "func_0054A988": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern int taiko_custom_title_lookup_bridge(ppu_context*);",
+     "        if (taiko_custom_title_lookup_bridge(ctx)) return;"
+    ]
+   }
+  ],
+  "func_00632B5C": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern int taiko_custom_basic_lookup_bridge(ppu_context*);",
+     "        if (taiko_custom_basic_lookup_bridge(ctx)) return;"
+    ]
+   }
+  ],
+  "func_0012EE34": [
+   {
+    "anchor": "loc_0012F1E8:",
+    "lines": [
+     "        if (!taiko_pc_mode_score_player((uint32_t)vm_read64((uint32_t)ctx->gpr[1] + 0x620))) goto loc_001313E4;"
+    ]
+   },
+   {
+    "anchor": "        ctx->lr = 0x0013139C; func_005C43FC(ctx); DRAIN_TRAMPOLINE(ctx);",
+    "lines": [
+     "        taiko_pc_mode_score_enqueued((uint32_t)ctx->gpr[3]);"
+    ]
+   }
+  ],
+  "func_00238AF0": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((11) ? ctx->gpr[11] : 0) + 0x38);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_0005D864": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((29) ? ctx->gpr[29] : 0) + 0x0);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_0005DA38": [
+   {
+    "anchor": "        ctx->gpr[11] = vm_read32(((9) ? ctx->gpr[9] : 0) + 0x0);",
+    "replaces": ["        ctx->gpr[11] = ctx->gpr[11] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[11] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E2114": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((31) ? ctx->gpr[31] : 0) + 0x170);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E2E00": [
+   {
+    "anchor": "        ctx->gpr[3] = vm_read32(((3) ? ctx->gpr[3] : 0) + 0x18);",
+    "replaces": ["        ctx->gpr[3] = ctx->gpr[3] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[3] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E42A0": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((27) ? ctx->gpr[27] : 0) + 0x18);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E4CDC": [
+   {
+    "anchor": "        ctx->gpr[9] = vm_read32(((27) ? ctx->gpr[27] : 0) + 0x18);",
+    "replaces": ["        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(-1);"],
+    "lines": ["        ctx->gpr[9] -= taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001E690C": [
+   {
+    "anchor": "        if (((ctx->cr >> 0) & 4)) goto loc_001E71FC;",
+    "replaces": ["        ctx->gpr[0] = ctx->gpr[9] + (int64_t)(1);"],
+    "lines": ["        ctx->gpr[0] = ctx->gpr[9] + taiko_animation_frame_ticks();"]
+   }
+  ],
+  "func_001FE470": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_pc_mode_destination_override(ctx)) return;"
+    ]
+   }
+  ],
+  "func_001EF214": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_frontend_guest_tick(ctx);"
+    ]
+   }
+  ],
+  "func_001F5CA8": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_frontend_song_select_tick(ctx);"
+    ]
+   }
+  ],
+  "func_001E31E4": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_frontend_results_end_override(ctx)) return;"
+    ]
+   }
+  ],
+  "func_001EBEB0": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_frontend_results_continue_tick(ctx)) return;"
+    ]
+   }
+  ],
+  "func_002287BC": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_entry_set_player_data_trace(ctx);"
+    ]
+   }
+  ],
+  "func_00226888": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_entry_mode_select_end_trace(ctx);"
+    ]
+   }
+  ],
+  "func_001ED74C": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_entry_event_trace(ctx)) return;"
+    ]
+   }
+  ],
+  "func_001ED698": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_entry_state_transition_trace(ctx);"
+    ]
+   }
+  ],
   "func_002A6BB4": [
    {
     "anchor": "        ctx->fpr[31] = ctx->fpr[1];",
@@ -679,6 +963,83 @@
      "            }",
      "            fprintf(stderr, \"'\\n\");",
      "        }"
+    ]
+   }
+  ],
+  "func_0026D530": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        taiko_pc_mode_frame_begin(ctx);"
+    ]
+   },
+   {
+    "anchor": "        ctx->lr = 0x0026DE84; func_008D87D4(ctx); DRAIN_TRAMPOLINE(ctx);",
+    "replaces": [],
+    "lines": [
+     "        taiko_pc_mode_frame_dispatch(ctx);"
+    ]
+   }
+  ],
+  "func_000E4608": [
+   {
+    "anchor": null,
+    "replaces": [],
+    "lines": [
+     "        if (taiko_pc_mode_setup_tick(ctx)) return;"
+    ]
+   },
+   {
+    "anchor": "        if ((!((ctx->cr >> 0) & 2))) goto loc_000E4BD4;",
+    "replaces": [],
+    "lines": [
+     "        if (taiko_pc_mode_setup_complete((uint32_t)ctx->gpr[20], (uint32_t)ctx->gpr[18])) goto loc_000E467C;"
+    ]
+   }
+  ],
+  "func_0040BB54": [
+   {
+    "anchor": "        ctx->gpr[9] = ctx->gpr[9] + (int64_t)(4);",
+    "lines": [
+     "        extern uint32_t taiko_fumen_measure_address(uint32_t);",
+     "        ctx->gpr[9] = taiko_fumen_measure_address(static_cast<uint32_t>(ctx->gpr[28]));"
+    ]
+   }
+  ],
+  "func_0040BC44": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
+  ],
+  "func_0040B8A0": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
+  ],
+  "func_0040B948": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
+    ]
+   }
+  ],
+  "func_0040BA0C": [
+   {
+    "anchor": null,
+    "lines": [
+     "        extern void taiko_fumen_release_pool(uint32_t);",
+     "        taiko_fumen_release_pool(static_cast<uint32_t>(ctx->gpr[3]));"
     ]
    }
   ]

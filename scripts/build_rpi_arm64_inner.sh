@@ -51,6 +51,7 @@ else
     )
 fi
 
+"${repo_dir}/scripts/setup_realm.sh"
 cmake -S "${repo_dir}" -B "${repo_dir}/build-rpi-arm64" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${repo_dir}/cmake/raspberry-pi-aarch64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -79,6 +80,7 @@ if [[ "${headless}" != 1 ]]; then
     cmake -E remove_directory "${bundle}"
     cmake -E make_directory "${bundle}/lib"
     cmake -E copy "${binary}" "${bundle}/taiko_boot"
+    cmake -E copy_directory "${repo_dir}/build-rpi-arm64/licenses" "${bundle}/licenses"
     cp -a "${repo_dir}/third_party/sdl-gpu-rpi-arm64/dxc-v1.8.2502/lib/libdxcompiler.so"* \
         "${bundle}/lib/"
     cp -a "${repo_dir}/third_party/sdl-gpu-rpi-arm64/dxc-v1.8.2502/lib/libdxil.so"* \

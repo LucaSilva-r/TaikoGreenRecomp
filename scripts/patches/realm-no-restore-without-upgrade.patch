@@ -1,0 +1,12 @@
+diff --git a/src/realm/db.cpp b/src/realm/db.cpp
+--- a/src/realm/db.cpp
++++ b/src/realm/db.cpp
+@@ -1172,7 +1172,7 @@
+             target_file_format_version =
+                 Group::get_target_file_format_version_for_session(current_file_format_version, openers_hist_type);
+             BackupHandler backup(path, options.accepted_versions, options.to_be_deleted);
+-            if (backup.must_restore_from_backup(current_file_format_version)) {
++            if (options.allow_file_format_upgrade && backup.must_restore_from_backup(current_file_format_version)) {
+                 // we need to unmap before any file ops that'll change the realm
+                 // file:
+                 // (only strictly needed for Windows)

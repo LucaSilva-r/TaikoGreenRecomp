@@ -4,6 +4,7 @@
 
 #include "rsx_recorder.h"
 #include "rsx_render_batch.h"
+#include "rsx_host_frame.h"
 #include "rsx_vp_decompiler.h"
 #include "rsx_fp_decompiler.h"
 #include "ps3emu/host_platform.h"
@@ -96,6 +97,7 @@ typedef struct shader_entry {
     SDL_ShaderCross_GraphicsShaderResourceInfo resources;
     u8 sampler_units[4]; /* dense SDL slot -> sparse RSX texture unit */
     u8 sampler_unit_count;
+    u8 vertex_constants_uniform;
     /* Dense storage-buffer slot -> guest vp_c[] slot. Address-indexed vertex
      * programs retain the identity mapping for the complete bank. */
     u16 vertex_constant_units[RSX_BATCH_VP_CONSTANTS];
@@ -141,6 +143,30 @@ extern int taiko_audio_offset_get_ms(void);
 extern void taiko_overlay_set_status(const char* text, int expires_in);
 extern int taiko_character_mode_get(void);
 extern int taiko_character_mode_cycle(void);
+extern int taiko_frontend_browser_command(unsigned command);
+extern int taiko_frontend_browser_text(const char* text);
+extern int taiko_frontend_browser_captures_text(void);
+
+enum {
+    TAIKO_BROWSER_SEARCH_TOGGLE = 1,
+    TAIKO_BROWSER_SEARCH_CLEAR,
+    TAIKO_BROWSER_SEARCH_BACKSPACE,
+    TAIKO_BROWSER_PREVIOUS,
+    TAIKO_BROWSER_NEXT,
+    TAIKO_BROWSER_PREVIOUS_PAGE,
+    TAIKO_BROWSER_NEXT_PAGE,
+    TAIKO_BROWSER_FIRST,
+    TAIKO_BROWSER_LAST,
+    TAIKO_BROWSER_RANDOM,
+    TAIKO_BROWSER_CATEGORY_PREVIOUS,
+    TAIKO_BROWSER_CATEGORY_NEXT,
+    TAIKO_BROWSER_DIFFICULTY_PREVIOUS,
+    TAIKO_BROWSER_DIFFICULTY_NEXT,
+    TAIKO_BROWSER_PLAY,
+    TAIKO_BROWSER_PLAYER1_TOGGLE,
+    TAIKO_BROWSER_PLAYER2_TOGGLE,
+    TAIKO_BROWSER_ACCOUNT_LOGIN,
+};
 #endif
 
 enum {
@@ -205,6 +231,8 @@ typedef struct sdl_rsx_state {
     unsigned queue_write;
     unsigned queue_count;
     Uint32 wake_event;
+    int host_present_requested;
+    Uint64 host_last_present_ns;
     gpu_surface surfaces[SDL_RSX_MAX_SURFACES];
     unsigned surface_count;
     SDL_GPUTexture* display;
@@ -339,6 +367,15 @@ typedef struct sdl_rsx_state {
 } sdl_rsx_state;
 
 static sdl_rsx_state s_sdl;
+
+void rsx_sdl_gpu_backend_wake(void)
+{
+    if (!s_sdl.initialized) return;
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = s_sdl.wake_event;
+    SDL_PushEvent(&event);
+}
 
 typedef struct pace_stats {
     double mean_ms;
@@ -857,19 +894,70 @@ static SDL_GPUShader* compile_hlsl(const char* source,
         SDL_ShaderCross_ReflectGraphicsSPIRV(spirv, spirv_size, 0);
     SDL_GPUShader* result = NULL;
     if (metadata) {
-        SDL_ShaderCross_SPIRV_Info info;
-        SDL_zero(info);
-        info.bytecode = spirv;
-        info.bytecode_size = spirv_size;
-        info.entrypoint = "main";
-        info.shader_stage = stage;
         *resources = metadata->resource_info;
         if (getenv("SDL_GPU_DUMP_SHADERS"))
             fprintf(stderr, "[SDL_GPU] resources samplers=%u storage_tex=%u storage_buf=%u uniforms=%u\n",
                     resources->num_samplers, resources->num_storage_textures,
                     resources->num_storage_buffers, resources->num_uniform_buffers);
-        result = SDL_ShaderCross_CompileGraphicsShaderFromSPIRV(
-            s_sdl.device, &info, resources, 0);
+        const char* driver = SDL_GetGPUDeviceDriver(s_sdl.device);
+        if (driver && strcmp(driver, "direct3d12") == 0) {
+            /* Going HLSL -> SPIR-V -> HLSL/DXIL can renumber fragment inputs
+             * after unused varyings are stripped. D3D12 then rejects the PSO
+             * because the vertex and pixel signatures assign the same
+             * TEXCOORD semantic to different hardware registers. Vulkan links
+             * the original SPIR-V locations and is unaffected. Compile the
+             * source straight to DXIL on D3D12. Vertex shaders are rewritten
+             * to use a uniform buffer below because SDL_shadercross explicitly
+             * does not support this mode with StructuredBuffers. */
+            SDL_PropertiesID props = SDL_CreateProperties();
+            if (props) {
+                SDL_SetBooleanProperty(
+                    props,
+                    SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN,
+                    true);
+                hlsl.props = props;
+                size_t dxil_size = 0;
+                Uint8* dxil = (Uint8*)SDL_ShaderCross_CompileDXILFromHLSL(
+                    &hlsl, &dxil_size);
+                SDL_DestroyProperties(props);
+                hlsl.props = 0;
+                if (dxil) {
+                    SDL_GPUShaderCreateInfo create_info;
+                    SDL_zero(create_info);
+                    create_info.code_size = dxil_size;
+                    create_info.code = dxil;
+                    create_info.entrypoint = "main";
+                    create_info.format = SDL_GPU_SHADERFORMAT_DXIL;
+                    create_info.stage =
+                        stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX
+                            ? SDL_GPU_SHADERSTAGE_VERTEX
+                            : SDL_GPU_SHADERSTAGE_FRAGMENT;
+                    create_info.num_samplers = resources->num_samplers;
+                    create_info.num_storage_textures =
+                        resources->num_storage_textures;
+                    create_info.num_storage_buffers =
+                        resources->num_storage_buffers;
+                    create_info.num_uniform_buffers =
+                        resources->num_uniform_buffers;
+                    result = SDL_CreateGPUShader(s_sdl.device, &create_info);
+                    SDL_free(dxil);
+                }
+            }
+            if (!result)
+                fprintf(stderr,
+                        "[SDL_GPU] direct HLSL-to-DXIL creation failed "
+                        "(%016llx): %s\n",
+                        (unsigned long long)hash, SDL_GetError());
+        } else {
+            SDL_ShaderCross_SPIRV_Info info;
+            SDL_zero(info);
+            info.bytecode = spirv;
+            info.bytecode_size = spirv_size;
+            info.entrypoint = "main";
+            info.shader_stage = stage;
+            result = SDL_ShaderCross_CompileGraphicsShaderFromSPIRV(
+                s_sdl.device, &info, resources, 0);
+        }
         SDL_free(metadata);
     }
     SDL_free(spirv);
@@ -1174,6 +1262,7 @@ static shader_entry* get_shader(const rsx_render_op* op,
     unsigned sampler_unit_count = 0;
     u16 vertex_constant_units[RSX_BATCH_VP_CONSTANTS];
     unsigned vertex_constant_count = 0;
+    int vertex_constants_uniform = 0;
     if (stage == SDL_SHADERCROSS_SHADERSTAGE_VERTEX && blob->size) {
         result = rsx_vp_decompile(blob->data, (u32)blob->size,
                                   source, 512u * 1024u,
@@ -1239,6 +1328,24 @@ static shader_entry* get_shader(const rsx_render_op* op,
         replace_all(source, 512u * 1024u,
                     "cbuffer VPConst : register(b0)",
                     "cbuffer VPConst : register(b0, space1)");
+        const char* driver = SDL_GetGPUDeviceDriver(s_sdl.device);
+        if (driver && strcmp(driver, "direct3d12") == 0) {
+            char declaration[160];
+            snprintf(declaration, sizeof(declaration),
+                     "cbuffer VPDirect : register(b0, space1) { "
+                     "float4 rsx_vp_constants[%u]; };",
+                     vertex_constant_count ? vertex_constant_count : 1u);
+            replace_all(source, 512u * 1024u,
+                        "StructuredBuffer<float4> rsx_vp_constants : "
+                        "register(t0, space0);\n"
+                        "cbuffer VPBase : register(b0, space1) { "
+                        "uint rsx_vp_base; uint3 rsx_vp_pad; };",
+                        declaration);
+            replace_all(source, 512u * 1024u,
+                        "rsx_vp_constants[rsx_vp_base+",
+                        "rsx_vp_constants[");
+            vertex_constants_uniform = 1;
+        }
     } else if (stage == SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT && blob->size) {
         const u8* fragment_data = outline_bypass
             ? s_direct_copy_fp : blob->data;
@@ -1340,6 +1447,7 @@ static shader_entry* get_shader(const rsx_render_op* op,
     entry->flags = flags;
     entry->shader = compile_hlsl(source, stage, &entry->resources, hash);
     entry->sampler_unit_count = (u8)sampler_unit_count;
+    entry->vertex_constants_uniform = (u8)vertex_constants_uniform;
     memcpy(entry->sampler_units, sampler_units, sizeof(entry->sampler_units));
     entry->vertex_constant_count = (u16)vertex_constant_count;
     memcpy(entry->vertex_constant_units, vertex_constant_units,
@@ -1915,6 +2023,24 @@ static int same_draw_attachments(const rsx_render_op* a,
     return get_surface(&a->depth) == get_surface(&b->depth);
 }
 
+static void copy_vertex_constant(const rsx_render_op* op, unsigned guest,
+                                 float value[4])
+{
+    memset(value, 0, 4u * sizeof(float));
+    const u64 source_offset = (u64)guest * 4u * sizeof(float);
+    if (source_offset + 4u * sizeof(float) <=
+        op->data.draw.vertex_constants.size)
+        memcpy(value, op->data.draw.vertex_constants.data + source_offset,
+               4u * sizeof(float));
+    /* RSXB v2's VP epilogue constants are defined in clip space. Canonicalize
+     * x/y at the consumer boundary so older captures remain valid. */
+    if (guest == 512) {
+        value[0] = 1.0f; value[1] = 1.0f; value[3] = 1.0f;
+    } else if (guest == 513) {
+        value[0] = 0.0f; value[1] = 0.0f; value[3] = 0.0f;
+    }
+}
+
 static void execute_draw(SDL_GPUCommandBuffer* commands,
                          SDL_GPURenderPass* pass,
                          const rsx_render_op* op,
@@ -1941,7 +2067,17 @@ static void execute_draw(SDL_GPUCommandBuffer* commands,
             : s_sdl.default_sampler;
     }
     if (!vertex_shader || !fragment_shader) return;
-    if (vertex_shader->resources.num_uniform_buffers) {
+    if (vertex_shader->vertex_constants_uniform) {
+        float constants[RSX_BATCH_VP_CONSTANTS][4];
+        for (unsigned dense = 0;
+             dense < vertex_shader->vertex_constant_count; ++dense)
+            copy_vertex_constant(
+                op, vertex_shader->vertex_constant_units[dense],
+                constants[dense]);
+        SDL_PushGPUVertexUniformData(
+            commands, 0, constants,
+            vertex_shader->vertex_constant_count * 4u * sizeof(float));
+    } else if (vertex_shader->resources.num_uniform_buffers) {
         u32 base_uniform[4] = {vertex_constant_base, 0, 0, 0};
         SDL_PushGPUVertexUniformData(commands, 0, base_uniform,
                                      sizeof(base_uniform));
@@ -2069,12 +2205,8 @@ static SDL_GPUTexture* presentation_texture(Uint32* source_width,
     return result;
 }
 
-/* Optional overlay, supplied by the title layer (src/taiko_overlay.c): a
- * straight-alpha RGBA image drawn over the presented frame. Windowed output
- * uses the GPU quad below; direct KMS blends it during the scanout CPU copy.
- * A build without the title hook simply draws nothing. */
-const uint32_t* (*g_rsx_overlay_frame)(int* width, int* height,
-                                      uint32_t* version);
+/* Optional copied host frame supplied by the title layer. */
+RsxHostFrameCopy g_rsx_host_frame_copy;
 
 static struct {
     SDL_GPUTexture* texture;
@@ -2084,6 +2216,10 @@ static struct {
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUSampler* sampler;
     SDL_GPUTextureFormat pipeline_format;
+    uint8_t* pixels;
+    size_t pixel_capacity;
+    HostFrameInfo frame;
+    uint32_t presented_version;
 } s_overlay;
 
 static struct {
@@ -2202,6 +2338,8 @@ static int overlay_pipeline_ready(SDL_GPUTextureFormat format)
     }
     return s_overlay.sampler != NULL;
 }
+
+#include "rsx_host_ui_gpu.inc"
 
 static void fps_overlay_set_value(double fps)
 {
@@ -2358,6 +2496,57 @@ static int draw_fps_overlay(SDL_GPUCommandBuffer* commands,
     return 1;
 }
 
+static int copy_host_frame(void)
+{
+    ui_active = g_rsx_host_ui_visit && g_rsx_host_ui_visit(1.0f, NULL, NULL, &ui_info);
+    if (ui_active) {
+        s_overlay.frame.mode = ui_info.overlay ? HOST_FRAME_OVERLAY : HOST_FRAME_FULLSCREEN;
+        s_overlay.frame.width = 1280; s_overlay.frame.height = 720;
+        s_overlay.frame.pitch = 1280 * 4;
+        s_overlay.frame.version = ui_info.version;
+        return 1;
+    }
+    HostFrameInfo queried;
+    SDL_zero(queried);
+    if (!g_rsx_host_frame_copy ||
+        !g_rsx_host_frame_copy(&queried, NULL, 0)) {
+        s_overlay.frame = queried;
+        return 0;
+    }
+    if (!queried.width || !queried.height ||
+        queried.pitch < queried.width * sizeof(uint32_t) ||
+        queried.height > SIZE_MAX / queried.pitch) {
+        SDL_zero(s_overlay.frame);
+        return 0;
+    }
+    const size_t required = (size_t)queried.pitch * queried.height;
+    if (required > s_overlay.pixel_capacity) {
+        void* resized = realloc(s_overlay.pixels, required);
+        if (!resized) return 0;
+        s_overlay.pixels = (uint8_t*)resized;
+        s_overlay.pixel_capacity = required;
+    }
+    if (s_overlay.frame.version == queried.version &&
+        s_overlay.frame.mode == queried.mode &&
+        s_overlay.frame.width == queried.width &&
+        s_overlay.frame.height == queried.height &&
+        s_overlay.frame.pitch == queried.pitch)
+        return 1;
+
+    HostFrameInfo copied;
+    SDL_zero(copied);
+    if (!g_rsx_host_frame_copy(&copied, s_overlay.pixels,
+                               s_overlay.pixel_capacity))
+        return 0;
+    if (!copied.width || !copied.height ||
+        copied.pitch < copied.width * sizeof(uint32_t) ||
+        copied.height > SIZE_MAX / copied.pitch ||
+        (size_t)copied.pitch * copied.height > s_overlay.pixel_capacity)
+        return 0;
+    s_overlay.frame = copied;
+    return 1;
+}
+
 /* Upload when the pixels changed, then blit into the frame's top-left. */
 static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapchain,
                          Uint32 swapchain_width, Uint32 swapchain_height,
@@ -2365,11 +2554,24 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
                          Uint32 frame_width, Uint32 frame_height,
                          SDL_GPUTextureFormat target_format)
 {
-    int width = 0, height = 0;
-    uint32_t version = 0;
-    const uint32_t* pixels =
-        g_rsx_overlay_frame ? g_rsx_overlay_frame(&width, &height, &version) : NULL;
-    if (!pixels || width <= 0 || height <= 0) return;
+    if (!copy_host_frame()) return;
+    if (ui_active && draw_host_ui(commands, swapchain, swapchain_width, swapchain_height,
+                                  frame_x, frame_y, frame_width, frame_height, target_format)) return;
+    if (ui_active) {
+        // GPU initialization failure: request the existing CPU fallback.
+        if (!g_rsx_host_frame_copy || !g_rsx_host_frame_copy(&s_overlay.frame, NULL, 0)) return;
+        size_t bytes = (size_t)s_overlay.frame.pitch * s_overlay.frame.height;
+        if (s_overlay.pixel_capacity < bytes) {
+            void* p = realloc(s_overlay.pixels, bytes);
+            if (!p) return;
+            s_overlay.pixels = p; s_overlay.pixel_capacity = bytes;
+        }
+        if (!g_rsx_host_frame_copy(&s_overlay.frame, s_overlay.pixels, s_overlay.pixel_capacity)) return;
+    }
+    const int width = (int)s_overlay.frame.width;
+    const int height = (int)s_overlay.frame.height;
+    const uint32_t version = s_overlay.frame.version;
+    const uint8_t* pixels = s_overlay.pixels;
 
     if (s_overlay.texture &&
         (s_overlay.width != width || s_overlay.height != height)) {
@@ -2394,7 +2596,7 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
         s_overlay.uploaded = 0;
     }
     if (!s_overlay.uploaded || s_overlay.version != version) {
-        const Uint32 size = (Uint32)width * (Uint32)height * 4u;
+        const Uint32 size = s_overlay.frame.pitch * (Uint32)height;
         SDL_GPUTransferBufferCreateInfo transfer_info;
         SDL_zero(transfer_info);
         transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
@@ -2416,7 +2618,7 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
             SDL_GPUTextureTransferInfo upload;
             SDL_zero(upload);
             upload.transfer_buffer = transfer;
-            upload.pixels_per_row = (Uint32)width;
+            upload.pixels_per_row = s_overlay.frame.pitch / 4u;
             upload.rows_per_layer = (Uint32)height;
             SDL_GPUTextureRegion destination;
             SDL_zero(destination);
@@ -2437,10 +2639,14 @@ static void draw_overlay(SDL_GPUCommandBuffer* commands, SDL_GPUTexture* swapcha
      * frame is letterboxed inside it, and an overlay measured in window pixels
      * drifts outside the picture. 0.22 of the frame width is what the artwork
      * covers on the cabinet's own 1280-wide screen. */
-    float draw_w = (float)frame_width * 0.22f;
-    float draw_h = draw_w * (float)height / (float)width;
-    const float x = (float)frame_x + ((float)frame_width - draw_w) * 0.5f;
-    const float y = (float)frame_y + (float)frame_height * 0.04f;
+    const int full_frame = width == SDL_RSX_WIDTH && height == SDL_RSX_HEIGHT;
+    float draw_w = full_frame ? (float)frame_width : (float)frame_width * 0.22f;
+    float draw_h = full_frame ? (float)frame_height
+                              : draw_w * (float)height / (float)width;
+    const float x = full_frame ? (float)frame_x
+                               : (float)frame_x + ((float)frame_width - draw_w) * 0.5f;
+    const float y = full_frame ? (float)frame_y
+                               : (float)frame_y + (float)frame_height * 0.04f;
 
     /* Pixels -> normalised device coordinates (y grows downwards on screen). */
     const float rect[4] = {
@@ -2525,20 +2731,15 @@ static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
         *pitch = *x = *y = *width = *height = 0;
         return NULL;
     }
-    int title_width = 0, title_height = 0;
-    uint32_t version = 0;
-    const uint32_t* title = g_rsx_overlay_frame
-        ? g_rsx_overlay_frame(&title_width, &title_height, &version) : NULL;
-    (void)version;
-    if (title && title_width > 0 && title_height > 0 &&
-        title_width <= KMS_CPU_OVERLAY_MAX_WIDTH &&
-        title_height <= KMS_CPU_OVERLAY_MAX_HEIGHT) {
-        *width = (unsigned)title_width;
-        *height = (unsigned)title_height;
-        *pitch = *width * 4u;
+    const int have_title = copy_host_frame();
+    if (have_title && s_overlay.frame.width <= KMS_CPU_OVERLAY_MAX_WIDTH &&
+        s_overlay.frame.height <= KMS_CPU_OVERLAY_MAX_HEIGHT) {
+        *width = s_overlay.frame.width;
+        *height = s_overlay.frame.height;
+        *pitch = s_overlay.frame.pitch;
         *x = (SDL_RSX_WIDTH - *width) / 2u;
         *y = SDL_RSX_HEIGHT * 4u / 100u;
-        return title;
+        return (const uint32_t*)s_overlay.pixels;
     }
     if (s_sdl.perf_overlay && s_fps_overlay.cpu_version != 0) {
         *width = FPS_OVERLAY_WIDTH;
@@ -2550,6 +2751,13 @@ static const uint32_t* kms_current_cpu_overlay(unsigned* pitch, unsigned* x,
     }
     *pitch = *x = *y = *width = *height = 0;
     return NULL;
+}
+
+static int title_overlay_requires_gpu(void)
+{
+    return copy_host_frame() &&
+        (s_overlay.frame.width > KMS_CPU_OVERLAY_MAX_WIDTH ||
+         s_overlay.frame.height > KMS_CPU_OVERLAY_MAX_HEIGHT);
 }
 
 static void kms_snapshot_cpu_overlay(struct kms_slot* slot)
@@ -2929,15 +3137,26 @@ static int present_display_kms(SDL_GPUCommandBuffer* commands)
 }
 #endif
 
+#ifndef RSX_SDL_KMS_PRESENT
+/* The draw loop is shared with direct KMS and keeps the runtime branch even
+ * in windowed-only builds. The branch is always false there, but provide the
+ * companion predicate so MinGW does not depend on a KMS-only definition. */
+static int title_overlay_requires_gpu(void)
+{
+    return 0;
+}
+#endif
+
 static int present_display(SDL_GPUCommandBuffer* commands)
 {
 #ifdef RSX_SDL_KMS_PRESENT
     if (s_sdl.kms_present) return present_display_kms(commands);
 #endif
-    if (!s_sdl.display || !s_sdl.window) return -1;
+    if ((!s_sdl.display && !ui_active) || !s_sdl.window) return -1;
     Uint32 source_width, source_height;
     SDL_GPUTexture* source_texture = presentation_texture(
         &source_width, &source_height);
+    if (ui_active) { source_width = 1280; source_height = 720; }
     /* Keep the display render and its presentation blit in one command buffer.
      * Besides avoiding a needless submit boundary, this gives drivers an
      * explicit render-target-to-sampled-texture dependency.  V3DV on the Pi 5
@@ -2987,8 +3206,16 @@ static int present_display(SDL_GPUCommandBuffer* commands)
         blit.load_op = SDL_GPU_LOADOP_CLEAR;
         blit.clear_color.a = 1.0f;
         blit.filter = SDL_GPU_FILTER_LINEAR;
-        SDL_BlitGPUTexture(commands, &blit);
-        ++s_sdl.perf_blits;
+        if (ui_active) {
+            SDL_GPUColorTargetInfo clear = {0}; clear.texture = swapchain;
+            clear.load_op = SDL_GPU_LOADOP_CLEAR; clear.store_op = SDL_GPU_STOREOP_STORE;
+            clear.clear_color.a = 1;
+            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(commands, &clear, 1, NULL);
+            if (pass) SDL_EndGPURenderPass(pass);
+        } else {
+            SDL_BlitGPUTexture(commands, &blit);
+            ++s_sdl.perf_blits;
+        }
         draw_overlay(commands, swapchain, width, height,
                      blit.destination.x, blit.destination.y, draw_w, draw_h,
                      SDL_GetGPUSwapchainTextureFormat(s_sdl.device,
@@ -3014,6 +3241,39 @@ static int present_display(SDL_GPUCommandBuffer* commands)
                                            : submit_commands(commands);
     s_sdl.perf_fence_ns += SDL_GetTicksNS() - blit_end_ns;
     return result;
+}
+
+static int present_host_frame_only(void)
+{
+    if (!copy_host_frame() ||
+        s_overlay.frame.mode != HOST_FRAME_FULLSCREEN)
+        return -1;
+#ifdef RSX_SDL_KMS_PRESENT
+    if (s_sdl.kms_present) {
+        SDL_GPUCommandBuffer* commands =
+            SDL_AcquireGPUCommandBuffer(s_sdl.device);
+        if (!commands) return -1;
+        SDL_GPUColorTargetInfo target;
+        SDL_zero(target);
+        target.texture = s_sdl.display;
+        target.clear_color.a = 1.0f;
+        target.load_op = SDL_GPU_LOADOP_CLEAR;
+        target.store_op = SDL_GPU_STOREOP_STORE;
+        SDL_GPURenderPass* pass =
+            SDL_BeginGPURenderPass(commands, &target, 1, NULL);
+        if (!pass) {
+            SDL_CancelGPUCommandBuffer(commands);
+            return -1;
+        }
+        SDL_EndGPURenderPass(pass);
+        draw_overlay(commands, s_sdl.display,
+                     SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                     0, 0, SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
+                     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+        return present_display_kms(commands);
+    }
+#endif
+    return present_display(NULL);
 }
 
 static void update_window_title(void)
@@ -3297,7 +3557,9 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
                     continue;
                 shader_entry* shader = get_shader(
                     op, SDL_SHADERCROSS_SHADERSTAGE_VERTEX);
-                if (!shader || !shader->vertex_constant_count) continue;
+                if (!shader || !shader->vertex_constant_count ||
+                    shader->vertex_constants_uniform)
+                    continue;
                 const u64 bytes =
                     (u64)shader->vertex_constant_count * 4u * sizeof(float);
                 if (constant_bytes > UINT32_MAX ||
@@ -3346,22 +3608,8 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
                      dense < shader->vertex_constant_count; ++dense) {
                     const unsigned guest =
                         shader->vertex_constant_units[dense];
-                    float value[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                    const u64 source_offset = (u64)guest * sizeof(value);
-                    if (source_offset + sizeof(value) <=
-                        op->data.draw.vertex_constants.size)
-                        memcpy(value,
-                               op->data.draw.vertex_constants.data +
-                                   source_offset,
-                               sizeof(value));
-                    /* RSXB v2's VP epilogue constants are defined in clip
-                     * space. Canonicalize x/y at the consumer boundary so
-                     * captures from before the recorder fix remain valid. */
-                    if (guest == 512) {
-                        value[0] = 1.0f; value[1] = 1.0f; value[3] = 1.0f;
-                    } else if (guest == 513) {
-                        value[0] = 0.0f; value[1] = 0.0f; value[3] = 0.0f;
-                    }
+                    float value[4];
+                    copy_vertex_constant(op, guest, value);
                     memcpy(destination + dense * 4u, value, sizeof(value));
                 }
             }
@@ -3412,9 +3660,10 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
      * preserves asynchronous execution while making the transfer-to-graphics
      * dependency explicit. Other drivers retain the single-submit path. */
     const int upload_idle = getenv("TAIKO_GPU_UPLOAD_IDLE") != NULL;
-    const int upload_fence_wait =
-        getenv("TAIKO_GPU_UPLOAD_FENCE_WAIT") != NULL;
-    if ((getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT") || upload_idle ||
+    const char* separate_upload = getenv("TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT");
+    const char* upload_fence = getenv("TAIKO_GPU_UPLOAD_FENCE_WAIT");
+    const int upload_fence_wait = upload_fence && upload_fence[0] != '0';
+    if (((separate_upload && separate_upload[0] != '0') || upload_idle ||
          upload_fence_wait) &&
         (vertex_constants || vertices || fps_overlay_uploaded)) {
         if ((upload_fence_wait && !upload_idle
@@ -3530,7 +3779,8 @@ static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
         pending_clear = NULL;
     }
     if (s_sdl.kms_present) {
-        if (s_sdl.kms_zero_copy && !s_sdl.kms_cpu_overlay_safe) {
+        if (title_overlay_requires_gpu() ||
+            (s_sdl.kms_zero_copy && !s_sdl.kms_cpu_overlay_safe)) {
             draw_overlay(commands, s_sdl.display,
                          SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
                          0, 0, SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
@@ -3586,8 +3836,14 @@ done:
     free(vertex_constant_offsets);
     free(vertex_offsets);
     const Uint64 present_start_ns = perf_start;
-    if (present_display(commands) == 0)
+    if (present_display(commands) == 0) {
         ++s_sdl.fps_window_frames;
+        if (s_overlay.frame.mode == HOST_FRAME_FULLSCREEN) {
+            s_overlay.presented_version = s_overlay.frame.version;
+            s_sdl.host_last_present_ns = SDL_GetTicksNS();
+            s_sdl.host_present_requested = 0;
+        }
+    }
     perf_mark = SDL_GetTicksNS();
     s_sdl.perf_present_ns += perf_mark - perf_start;
     trace_frame_pacing(enqueue_ns, execute_start_ns, present_start_ns, perf_mark);
@@ -3814,9 +4070,16 @@ static SDL_Scancode evdev_scancode(unsigned code)
     case KEY_F10: return SDL_SCANCODE_F10;
     case KEY_UP: return SDL_SCANCODE_UP;
     case KEY_DOWN: return SDL_SCANCODE_DOWN;
-#ifdef RSX_SDL_REPLAY_STANDALONE
     case KEY_LEFT: return SDL_SCANCODE_LEFT;
     case KEY_RIGHT: return SDL_SCANCODE_RIGHT;
+    case KEY_PAGEUP: return SDL_SCANCODE_PAGEUP;
+    case KEY_PAGEDOWN: return SDL_SCANCODE_PAGEDOWN;
+    case KEY_HOME: return SDL_SCANCODE_HOME;
+    case KEY_END: return SDL_SCANCODE_END;
+    case KEY_Q: return SDL_SCANCODE_Q;
+    case KEY_E: return SDL_SCANCODE_E;
+    case KEY_R: return SDL_SCANCODE_R;
+#ifdef RSX_SDL_REPLAY_STANDALONE
     case KEY_Y: return SDL_SCANCODE_Y;
     case KEY_N: return SDL_SCANCODE_N;
     case KEY_ESC: return SDL_SCANCODE_ESCAPE;
@@ -3985,6 +4248,43 @@ static void evdev_handle_key(unsigned keyboard,
         __atomic_fetch_or(&s_sdl.evdev_hotkeys, EVDEV_HOTKEY_AUDIO_SHOW,
                           __ATOMIC_RELEASE);
         return;
+    }
+    if (down) {
+        unsigned browser_command = 0;
+        switch (scancode) {
+        case SDL_SCANCODE_LEFT:
+            browser_command = TAIKO_BROWSER_DIFFICULTY_PREVIOUS;
+            break;
+        case SDL_SCANCODE_RIGHT:
+            browser_command = TAIKO_BROWSER_DIFFICULTY_NEXT;
+            break;
+        case SDL_SCANCODE_PAGEUP:
+            browser_command = TAIKO_BROWSER_PREVIOUS_PAGE;
+            break;
+        case SDL_SCANCODE_PAGEDOWN:
+            browser_command = TAIKO_BROWSER_NEXT_PAGE;
+            break;
+        case SDL_SCANCODE_HOME:
+            browser_command = TAIKO_BROWSER_FIRST;
+            break;
+        case SDL_SCANCODE_END:
+            browser_command = TAIKO_BROWSER_LAST;
+            break;
+        case SDL_SCANCODE_Q:
+            browser_command = TAIKO_BROWSER_CATEGORY_PREVIOUS;
+            break;
+        case SDL_SCANCODE_E:
+            browser_command = TAIKO_BROWSER_CATEGORY_NEXT;
+            break;
+        case SDL_SCANCODE_R:
+            browser_command = TAIKO_BROWSER_RANDOM;
+            break;
+        default:
+            break;
+        }
+        if (browser_command &&
+            taiko_frontend_browser_command(browser_command))
+            return;
     }
 #endif
     const unsigned action = keyboard_action(scancode);
@@ -4195,6 +4495,26 @@ static void handle_event(const SDL_Event* event)
         } else s_sdl.stopping = 1;
         return;
     }
+    if (event->type == SDL_EVENT_WINDOW_EXPOSED ||
+        event->type == SDL_EVENT_WINDOW_RESTORED ||
+        event->type == SDL_EVENT_WINDOW_RESIZED ||
+        event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+        s_sdl.host_present_requested = 1;
+    }
+#ifndef RSX_SDL_REPLAY_STANDALONE
+    if (event->type == SDL_EVENT_TEXT_INPUT) {
+        if (taiko_frontend_browser_captures_text())
+            (void)taiko_frontend_browser_text(event->text.text);
+        return;
+    }
+    if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+        if (event->wheel.y > 0.0f)
+            (void)taiko_frontend_browser_command(TAIKO_BROWSER_PREVIOUS);
+        else if (event->wheel.y < 0.0f)
+            (void)taiko_frontend_browser_command(TAIKO_BROWSER_NEXT);
+        return;
+    }
+#endif
     if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
         /* Direct KMS has a dedicated evdev thread. SDL's Linux input backend
          * can still enqueue the same keyboard transitions even with the
@@ -4202,8 +4522,8 @@ static void handle_event(const SDL_Event* event)
          * event loop until tens or hundreds of milliseconds later under load.
          * Processing both paths creates a second, visibly delayed hit. */
         if (s_sdl.kms_present) return;
-        if (event->key.repeat) return;
 #ifdef RSX_SDL_REPLAY_STANDALONE
+        if (event->key.repeat) return;
         if (event->key.down && g_rsx_replay_key_hook) {
             g_rsx_replay_key_hook((int)event->key.scancode);
             return;
@@ -4217,6 +4537,87 @@ static void handle_event(const SDL_Event* event)
             return;
         }
 #ifndef RSX_SDL_REPLAY_STANDALONE
+        if (event->key.down) {
+            const int captures_text =
+                taiko_frontend_browser_captures_text();
+            unsigned browser_command = 0;
+            switch (event->key.scancode) {
+            case SDL_SCANCODE_1:
+            case SDL_SCANCODE_2:
+                if (!captures_text && !event->key.repeat)
+                    browser_command = event->key.scancode == SDL_SCANCODE_1
+                        ? TAIKO_BROWSER_PLAYER1_TOGGLE : TAIKO_BROWSER_PLAYER2_TOGGLE;
+                break;
+            case SDL_SCANCODE_B:
+                if (!captures_text && !event->key.repeat)
+                    browser_command = TAIKO_BROWSER_ACCOUNT_LOGIN;
+                break;
+            case SDL_SCANCODE_TAB:
+                browser_command = TAIKO_BROWSER_SEARCH_TOGGLE;
+                break;
+            case SDL_SCANCODE_ESCAPE:
+                browser_command = TAIKO_BROWSER_SEARCH_CLEAR;
+                break;
+            case SDL_SCANCODE_BACKSPACE:
+                if (captures_text)
+                    browser_command = TAIKO_BROWSER_SEARCH_BACKSPACE;
+                break;
+            case SDL_SCANCODE_UP:
+                browser_command = TAIKO_BROWSER_PREVIOUS;
+                break;
+            case SDL_SCANCODE_DOWN:
+                browser_command = TAIKO_BROWSER_NEXT;
+                break;
+            case SDL_SCANCODE_PAGEUP:
+                browser_command = TAIKO_BROWSER_PREVIOUS_PAGE;
+                break;
+            case SDL_SCANCODE_PAGEDOWN:
+                browser_command = TAIKO_BROWSER_NEXT_PAGE;
+                break;
+            case SDL_SCANCODE_HOME:
+                browser_command = TAIKO_BROWSER_FIRST;
+                break;
+            case SDL_SCANCODE_END:
+                browser_command = TAIKO_BROWSER_LAST;
+                break;
+            case SDL_SCANCODE_Q:
+            case SDL_SCANCODE_LEFTBRACKET:
+                if (!captures_text)
+                    browser_command = TAIKO_BROWSER_CATEGORY_PREVIOUS;
+                break;
+            case SDL_SCANCODE_E:
+            case SDL_SCANCODE_RIGHTBRACKET:
+                if (!captures_text)
+                    browser_command = TAIKO_BROWSER_CATEGORY_NEXT;
+                break;
+            case SDL_SCANCODE_LEFT:
+                browser_command = TAIKO_BROWSER_DIFFICULTY_PREVIOUS;
+                break;
+            case SDL_SCANCODE_RIGHT:
+                browser_command = TAIKO_BROWSER_DIFFICULTY_NEXT;
+                break;
+            case SDL_SCANCODE_RETURN:
+            case SDL_SCANCODE_KP_ENTER:
+                browser_command = TAIKO_BROWSER_PLAY;
+                break;
+            case SDL_SCANCODE_R:
+                if (!captures_text) browser_command = TAIKO_BROWSER_RANDOM;
+                break;
+            case SDL_SCANCODE_F:
+                if ((event->key.mod & SDL_KMOD_CTRL) && !captures_text)
+                    browser_command = TAIKO_BROWSER_SEARCH_TOGGLE;
+                break;
+            default:
+                break;
+            }
+            if (browser_command &&
+                taiko_frontend_browser_command(browser_command))
+                return;
+            if (captures_text) return;
+        } else if (taiko_frontend_browser_captures_text()) {
+            return;
+        }
+        if (event->key.repeat) return;
         if (event->key.down && event->key.scancode == SDL_SCANCODE_F9) {
             toggle_performance_overlay();
             return;
@@ -4246,6 +4647,21 @@ static void handle_event(const SDL_Event* event)
 #endif
         unsigned action = keyboard_action(event->key.scancode);
         const unsigned player = keyboard_player(event->key.scancode);
+        if (event->key.down && !event->key.repeat && (action & 15u) &&
+            getenv("TAIKO_DRUM_LATENCY_TRACE")) {
+            /* SDL event timestamps use SDL's epoch, not CLOCK_MONOTONIC.
+             * Convert the event's age before comparing with cellAudio. */
+            const Uint64 ticks = SDL_GetTicksNS();
+            const Uint64 received = sdl_host_monotonic_ns();
+            const Uint64 age = ticks >= event->key.timestamp
+                ? ticks - event->key.timestamp : 0;
+            fprintf(stderr,
+                "[drum-latency-input] event_ns=%llu received_ns=%llu "
+                "sdl_event_ns=%llu player=%u hits=%X\n",
+                (unsigned long long)(received >= age ? received - age : received),
+                (unsigned long long)received,
+                (unsigned long long)event->key.timestamp, player + 1, action & 15u);
+        }
         if (event->key.down)
             taiko_host_input_press(player, action, event->key.timestamp);
         else
@@ -4495,19 +4911,24 @@ int rsx_sdl_gpu_backend_main_init(unsigned width, unsigned height,
     /* Driving KMS ourselves means there is no compositor to give us a window,
      * and no swapchain: frames go from the display target to a scanout buffer.
      * See rsx_kms_present.h for why the Pi needs this. */
-    s_sdl.kms_present = getenv("TAIKO_KMS_PRESENT") != NULL;
+    const char* kms_present = getenv("TAIKO_KMS_PRESENT");
+    const char* kms_zero_copy = getenv("TAIKO_KMS_ZERO_COPY");
+    s_sdl.kms_present = kms_present && kms_present[0] != '0';
     s_sdl.kms_zero_copy = s_sdl.kms_present &&
-        getenv("TAIKO_KMS_ZERO_COPY") != NULL;
+        kms_zero_copy && kms_zero_copy[0] != '0';
 #endif
-    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
-    if (getenv("TAIKO_FULLSCREEN")) window_flags |= SDL_WINDOW_FULLSCREEN;
+    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    const char* fullscreen = getenv("TAIKO_FULLSCREEN");
+    if (fullscreen && fullscreen[0] != '0') window_flags |= SDL_WINDOW_FULLSCREEN;
     if (!s_sdl.kms_present) {
         s_sdl.window = SDL_CreateWindow(s_sdl.base_title,
                                         SDL_RSX_WIDTH, SDL_RSX_HEIGHT,
                                         window_flags);
         if (!s_sdl.window) goto fail;
+        (void)SDL_StartTextInput(s_sdl.window);
     }
-    if (getenv("TAIKO_HIDE_CURSOR")) SDL_HideCursor();
+    const char* hide_cursor = getenv("TAIKO_HIDE_CURSOR");
+    if (hide_cursor && hide_cursor[0] != '0') SDL_HideCursor();
     const char* requested_driver = getenv("TAIKO_GPU_DRIVER");
     if (requested_driver && !requested_driver[0]) requested_driver = NULL;
     const SDL_GPUShaderFormat shader_formats =
@@ -4807,6 +5228,26 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
      * event wait, or presentation would fall to one batch per timeout. */
     if (rsx_sdl_gpu_backend_has_pending_batches()) timeout_ms = 0;
 
+    /* A full-screen host frame has no RSX producer to wake or present it.
+     * Poll before sleeping. GPU host UI follows the display; the CPU fallback
+     * retains its 60 Hz ceiling. Guest frame timing is independent. */
+    if (copy_host_frame() &&
+        s_overlay.frame.mode == HOST_FRAME_FULLSCREEN &&
+        (s_sdl.host_present_requested || (ui_active && ui_info.animated) ||
+         s_overlay.presented_version != s_overlay.frame.version)) {
+        const Uint64 now = SDL_GetTicksNS();
+        const Uint64 interval = ui_active ? host_ui_interval() : 1000000000ull / 60ull;
+        if (!s_sdl.host_last_present_ns ||
+            now - s_sdl.host_last_present_ns >= interval) {
+            timeout_ms = 0;
+        } else {
+            const int remaining_ms = (int)((interval -
+                (now - s_sdl.host_last_present_ns) + 999999ull) / 1000000ull);
+            if (timeout_ms < 0 || remaining_ms < timeout_ms)
+                timeout_ms = remaining_ms;
+        }
+    }
+
     /* This thread owns the window, so it is the one Windows watches: five
      * seconds without pumping and the desktop replaces the window with a grey
      * "Not Responding" ghost while the game keeps rendering behind it. Report
@@ -4823,6 +5264,21 @@ int rsx_sdl_gpu_backend_main_iterate(int timeout_ms)
     evdev_poll_hotkeys();
     const Uint64 events_done_ns = SDL_GetTicksNS();
     const unsigned executed = drain_batches();
+    if (!executed && copy_host_frame() &&
+        s_overlay.frame.mode == HOST_FRAME_FULLSCREEN &&
+        (s_sdl.host_present_requested || (ui_active && ui_info.animated) ||
+         s_overlay.presented_version != s_overlay.frame.version)) {
+        const Uint64 now = SDL_GetTicksNS();
+        const Uint64 interval = ui_active ? host_ui_interval() : 1000000000ull / 60ull;
+        if (!s_sdl.host_last_present_ns ||
+            now - s_sdl.host_last_present_ns >= interval) {
+            if (present_host_frame_only() == 0) {
+                s_overlay.presented_version = s_overlay.frame.version;
+                s_sdl.host_last_present_ns = now;
+                s_sdl.host_present_requested = 0;
+            }
+        }
+    }
     const Uint64 end_ns = SDL_GetTicksNS();
 
     if (end_ns - iterate_start_ns > 250000000ull) {
@@ -4862,12 +5318,10 @@ int rsx_sdl_gpu_backend_submit_batch(const rsx_render_batch* batch)
     return consumer_submit(&s_sdl, batch);
 }
 
-int rsx_sdl_gpu_backend_save_display_bmp(const char* path)
+static int save_texture_bmp(const char* path, SDL_GPUTexture* source_texture,
+                             Uint32 source_width, Uint32 source_height)
 {
-    if (!path || !s_sdl.display) return -1;
-    Uint32 source_width, source_height;
-    SDL_GPUTexture* source_texture = presentation_texture(
-        &source_width, &source_height);
+    if (!path || !source_texture) return -1;
     const Uint32 pitch = source_width * 4u;
     const Uint32 bytes = pitch * source_height;
     SDL_GPUTransferBufferCreateInfo transfer_info;
@@ -4927,6 +5381,42 @@ fail:
     fprintf(stderr, "[SDL_GPU] display readback failed: %s\n", SDL_GetError());
     return -1;
 }
+
+int rsx_sdl_gpu_backend_save_display_bmp(const char* path)
+{
+    Uint32 width, height;
+    SDL_GPUTexture* texture = presentation_texture(&width, &height);
+    return save_texture_bmp(path, texture, width, height);
+}
+
+#ifdef RSX_SDL_REPLAY_STANDALONE
+int rsx_sdl_gpu_backend_save_host_ui_bmp(const char* path, unsigned width, unsigned height)
+{
+    if (!width || !height || width > 8192 || height > 8192) return -1;
+    SDL_GPUTextureCreateInfo info = {0};
+    info.type = SDL_GPU_TEXTURETYPE_2D; info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    info.width = width; info.height = height; info.layer_count_or_depth = 1;
+    info.num_levels = 1; info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    SDL_GPUTexture* target = SDL_CreateGPUTexture(s_sdl.device, &info);
+    if (!target) return -1;
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(s_sdl.device);
+    if (!cmd) { SDL_ReleaseGPUTexture(s_sdl.device, target); return -1; }
+    SDL_GPUColorTargetInfo clear = {0}; clear.texture = target;
+    clear.load_op = SDL_GPU_LOADOP_CLEAR; clear.store_op = SDL_GPU_STOREOP_STORE;
+    clear.clear_color.a = 1;
+    SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &clear, 1, NULL);
+    if (!pass) { SDL_CancelGPUCommandBuffer(cmd); SDL_ReleaseGPUTexture(s_sdl.device, target); return -1; }
+    SDL_EndGPURenderPass(pass);
+    unsigned w = width, h = (unsigned)((uint64_t)width * 720 / 1280);
+    if (h > height) { h = height; w = (unsigned)((uint64_t)height * 1280 / 720); }
+    int ok = draw_host_ui(cmd, target, width, height, (width-w)/2, (height-h)/2, w, h, info.format);
+    if (submit_commands_and_wait(cmd) != 0) ok = 0;
+    int result = ok ? save_texture_bmp(path, target, width, height) : -1;
+    SDL_ReleaseGPUTexture(s_sdl.device, target);
+    return result;
+}
+#endif
 
 void rsx_sdl_gpu_backend_main_shutdown(void)
 {
@@ -4988,12 +5478,14 @@ void rsx_sdl_gpu_backend_main_shutdown(void)
             SDL_ReleaseGPUTexture(s_sdl.device, s_sdl.white_texture);
         if (s_sdl.default_sampler)
             SDL_ReleaseGPUSampler(s_sdl.device, s_sdl.default_sampler);
+        shutdown_host_ui();
         if (s_overlay.texture)
             SDL_ReleaseGPUTexture(s_sdl.device, s_overlay.texture);
         if (s_overlay.pipeline)
             SDL_ReleaseGPUGraphicsPipeline(s_sdl.device, s_overlay.pipeline);
         if (s_overlay.sampler)
             SDL_ReleaseGPUSampler(s_sdl.device, s_overlay.sampler);
+        free(s_overlay.pixels);
         SDL_zero(s_overlay);
         if (s_fps_overlay.texture)
             SDL_ReleaseGPUTexture(s_sdl.device, s_fps_overlay.texture);

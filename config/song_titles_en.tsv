@@ -1,0 +1,8 @@
+# Optional English display titles for the host Song Select browser.
+# Format: music_id<TAB>English title
+#
+# The left column is Green's stable musicid, not its numeric catalog index.
+# These names affect presentation, search, and alphabetical sorting only; the
+# original musicid still resolves against Green's live manager when launching.
+# Example:
+# ynzums<TAB>Horse and Deer

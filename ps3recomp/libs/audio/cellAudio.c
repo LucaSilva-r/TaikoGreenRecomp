@@ -402,6 +402,31 @@ static void audio_dump_shutdown(void)
     }
 }
 
+/* Isolated drum-hit experiment: music must be muted and hits separated by
+ * silence. This marks PCM arriving at the sink, not sound at the speaker.
+ * Sample offsets locate onsets inside the block; do not add them to the
+ * block-ready timestamp when reporting CPU-side latency. */
+static void audio_trace_drum_onset(uint64_t ready_ns, uint32_t queued)
+{
+    static uint32_t quiet_samples;
+    for (uint32_t frame = 0; frame < CELL_AUDIO_BLOCK_SAMPLES; ++frame) {
+        const float peak = fmaxf(fabsf(s_mix_buffer[frame * 2]),
+                                 fabsf(s_mix_buffer[frame * 2 + 1]));
+        if (peak < 0.001f) {
+            if (quiet_samples < CELL_AUDIO_SAMPLE_RATE) ++quiet_samples;
+        } else {
+            if (quiet_samples >= CELL_AUDIO_SAMPLE_RATE / 10u)
+                fprintf(stderr,
+                    "[drum-latency-pcm] ready_ns=%llu sample=%u peak=%g "
+                    "queued_frames=%u device_frames=%u null_clock=%d\n",
+                    (unsigned long long)ready_ns, frame, peak, queued,
+                    s_null_audio_clock ? 0 : audio_sink_device_buffer_frames(),
+                    s_null_audio_clock);
+            quiet_samples = 0;
+        }
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * Mixing
  * -----------------------------------------------------------------------*/
@@ -740,6 +765,21 @@ static void audio_trace_sink(uint64_t* interval_start, uint32_t* interval_blocks
     *interval_blocks = 0;
 }
 
+static void audio_pull_block(float* output)
+{
+    static uint64_t trace_start, total_blocks;
+    static uint32_t trace_blocks;
+    audio_mix_one_block();
+    const uint64_t ready_ns = ps3_host_monotonic_ns();
+    memcpy(output, s_mix_buffer, sizeof(s_mix_buffer));
+    ++total_blocks;
+    atomic_fetch_add_explicit(&s_blocks_since_arm, 1, memory_order_relaxed);
+    audio_notify_event_queues();
+    if (getenv("TAIKO_DRUM_LATENCY_TRACE"))
+        audio_trace_drum_onset(ready_ns, 0);
+    audio_trace_sink(&trace_start, &trace_blocks, total_blocks, 0);
+}
+
 static void audio_mix_thread_run(void)
 {
     ps3_host_apply_thread_affinity("TAIKO_CPU_AUDIO_AFFINITY", "audio mixer");
@@ -768,6 +808,12 @@ static void audio_mix_thread_run(void)
         }
 
         audio_mix_one_block();
+        static int drum_latency_trace = -1;
+        if (drum_latency_trace < 0)
+            drum_latency_trace = getenv("TAIKO_DRUM_LATENCY_TRACE") != NULL;
+        const uint64_t drum_ready_ns = drum_latency_trace ? ps3_host_monotonic_ns() : 0;
+        const uint32_t drum_queued = drum_latency_trace && !s_null_audio_clock
+            ? audio_sink_queued_frames() : 0;
         int submitted = s_null_audio_clock ||
             audio_sink_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
         if (!submitted) {
@@ -779,6 +825,7 @@ static void audio_mix_thread_run(void)
             s_null_audio_clock = 1;
             next_null_period = ps3_host_monotonic_ns();
         } else {
+            if (drum_latency_trace) audio_trace_drum_onset(drum_ready_ns, drum_queued);
             audio_dump_submitted(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
             audio_report_first_audible(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
         }
@@ -989,7 +1036,10 @@ s32 cellAudioInit(void)
                     ? "disabled" : "initialization failed");
     }
 
-    if (audio_start_mix_thread() < 0) {
+    const char* pull = getenv("TAIKO_AUDIO_PULL");
+    const int pull_started = !s_null_audio_clock && pull && pull[0] == '1' &&
+        audio_sink_start_pull(audio_pull_block);
+    if (!pull_started && audio_start_mix_thread() < 0) {
         printf("[cellAudio] WARNING: Could not start mixing thread\n");
     }
 

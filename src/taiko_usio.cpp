@@ -24,6 +24,7 @@
 #include <string>
 #include <ps3emu/host_platform.h>
 #include "taiko_host_input.h"
+#include "taiko_sync_test.h"
 
 #ifdef PS3RECOMP_INPUT_BACKEND_WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -946,6 +947,11 @@ void build_input_frames()
 #ifndef PS3RECOMP_INPUT_BACKEND_NULL
     taiko_host_input_snapshot input{};
     taiko_host_input_consume(&input);
+    if (const uint64_t peak = taiko_sync_test_consume(ps3_host_monotonic_ns())) {
+        input.active = 1;
+        input.rising[0] |= TAIKO_ACTION_HIT_CL;
+        input.hit_timestamp_ns[0][1] = peak;
+    }
     if (input.active) {
         for (unsigned player = 0; player < 2; ++player) {
             actions[player] = input.levels[player];
@@ -1008,6 +1014,18 @@ void build_input_frames()
                      actions[0], actions[1], rising[0], rising[1],
                      g_usio.coin_counter, g_usio.test_on ? 1u : 0u,
                          oldest_hit_ms);
+    }
+    static const bool drum_latency_trace =
+        std::getenv("TAIKO_DRUM_LATENCY_TRACE") != nullptr;
+    if (drum_latency_trace && ((rising[0] | rising[1]) & 15u)) {
+        const uint64_t now = ps3_host_monotonic_ns();
+        for (unsigned player = 0; player < 2; ++player)
+            for (unsigned hit = 0; hit < 4; ++hit)
+                if (rising[player] & kHitBits[hit])
+                    std::fprintf(stderr,
+                        "[drum-latency-usio] source_event_ns=%llu usio_ns=%llu player=%u hit=%u\n",
+                        static_cast<unsigned long long>(input.hit_timestamp_ns[player][hit]),
+                        static_cast<unsigned long long>(now), player + 1, hit);
     }
 #endif
 
@@ -1392,6 +1410,32 @@ void hle_bulk_transfer(ppu_context* ctx)
             g_usio.staged_zlp = false;
             g_usio.idle_in_pending = false;
             count = 0;
+        }
+    }
+    if (pipe == kPipeIn && count >= 7 &&
+        std::getenv("TAIKO_ENTRY_TRACE")) {
+        const uint8_t response_command = vm_read8(buffer + 6);
+        /* A no-card InListPassiveTarget poll is the very common 12-byte 4B
+         * response.  Keep the entry trace focused on an actual target and the
+         * following InDataExchange replies.  The active lifted caller is
+         * UsbConnectionCell::bulk_receive; its saved LR is still in this
+         * frame, and identifies the command/parser call site above it. */
+        if ((response_command == 0x4B && count > 12) ||
+            response_command == 0x41) {
+            const uint32_t submitter_return =
+                static_cast<uint32_t>(vm_read64(ctx->gpr[1] + 0xC0));
+            std::fprintf(stderr,
+                         "[entry-usio] response=%02X count=%d buffer=%08X "
+                         "callback-opd=%08X argument=%08X hle-lr=%08X "
+                         "submitter-return=%08X data=",
+                         response_command, count, buffer, callback_opd,
+                         argument, static_cast<uint32_t>(ctx->lr),
+                         submitter_return);
+            for (int32_t i = 0; i < count; ++i) {
+                std::fprintf(stderr, "%02X", vm_read8(buffer +
+                                                       static_cast<uint32_t>(i)));
+            }
+            std::fputc('\n', stderr);
         }
     }
     callback(callback_opd, 0, count, argument);

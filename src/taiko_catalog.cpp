@@ -1,0 +1,333 @@
+/* Host-side view of Green's installed stock catalog.
+ *
+ * musicinfo.xml is the authoritative metadata/order, but it also contains
+ * challenge medleys and entries whose charts are not installed. A song is
+ * exposed only when at least one of its solo e/n/h/m/x chart files exists.
+ */
+#include "taiko_catalog.h"
+#include "taiko_catalog_tuning.h"
+
+#include <charconv>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <unordered_map>
+#include <string_view>
+#include <vector>
+#include <thread>
+#include <chrono>
+
+#include <mbedtls/sha256.h>
+
+void taiko_custom_scan(std::vector<TaikoCatalogSong>&) __attribute__((weak));
+bool taiko_custom_identity(const TaikoCatalogSong&, unsigned,
+                           taiko_plus::ContentIdentity&, std::string*) __attribute__((weak));
+
+namespace {
+
+std::once_flag g_once;
+std::vector<TaikoCatalogSong> g_songs;
+bool g_loaded = false;
+
+std::string read_file(const std::filesystem::path& path)
+{
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) return {};
+    stream.seekg(0, std::ios::end);
+    const std::streamoff length = stream.tellg();
+    if (length <= 0) return {};
+    stream.seekg(0, std::ios::beg);
+    std::string contents(static_cast<std::size_t>(length), '\0');
+    stream.read(contents.data(), length);
+    return stream ? contents : std::string{};
+}
+
+void replace_all(std::string& value, std::string_view from,
+                 std::string_view to)
+{
+    std::size_t position = 0;
+    while ((position = value.find(from, position)) != std::string::npos) {
+        value.replace(position, from.size(), to);
+        position += to.size();
+    }
+}
+
+std::string decode_xml(std::string value)
+{
+    replace_all(value, "&amp;", "&");
+    replace_all(value, "&lt;", "<");
+    replace_all(value, "&gt;", ">");
+    replace_all(value, "&quot;", "\"");
+    replace_all(value, "&apos;", "'");
+    return value;
+}
+
+std::string tag_value(std::string_view block, std::string_view tag)
+{
+    const std::string opening = "<" + std::string(tag) + ">";
+    const std::string closing = "</" + std::string(tag) + ">";
+    const std::size_t begin = block.find(opening);
+    if (begin == std::string_view::npos) return {};
+    const std::size_t value_begin = begin + opening.size();
+    const std::size_t end = block.find(closing, value_begin);
+    if (end == std::string_view::npos) return {};
+    return decode_xml(std::string(block.substr(value_begin, end - value_begin)));
+}
+
+uint32_t parse_uint(std::string_view value)
+{
+    uint32_t result = 0;
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(),
+                                        result);
+    return parsed.ec == std::errc{} ? result : 0;
+}
+
+uint8_t chart_mask(const std::filesystem::path& fumen_root,
+                   const std::string& music_id)
+{
+    static constexpr char suffixes[TAIKO_DIFFICULTY_COUNT] = {
+        'e', 'n', 'h', 'm', 'x'
+    };
+    uint8_t mask = 0;
+    const std::filesystem::path solo = fumen_root / music_id / "solo";
+    for (unsigned difficulty = 0; difficulty < TAIKO_DIFFICULTY_COUNT;
+         ++difficulty) {
+        const std::string filename = music_id + "_" + suffixes[difficulty] +
+                                     ".bin";
+        std::error_code error;
+        if (std::filesystem::is_regular_file(solo / filename, error))
+            mask |= static_cast<uint8_t>(1u << difficulty);
+    }
+    return mask;
+}
+
+std::unordered_map<std::string, std::string> load_title_overrides()
+{
+    const char* configured = std::getenv("TAIKO_SONG_TITLES");
+    const std::filesystem::path path = configured && configured[0]
+        ? configured : "config/song_titles_en.tsv";
+    std::ifstream stream(path);
+    std::unordered_map<std::string, std::string> overrides;
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        const std::size_t separator = line.find('\t');
+        if (separator == std::string::npos || separator == 0 ||
+            separator + 1 >= line.size())
+            continue;
+        overrides[line.substr(0, separator)] = line.substr(separator + 1);
+    }
+    if (!overrides.empty())
+        std::fprintf(stderr,
+                     "[taiko_catalog] loaded %zu English title overrides "
+                     "from %s\n", overrides.size(), path.string().c_str());
+    return overrides;
+}
+
+void load_once()
+{
+    g_songs.clear(); // A failed background attempt may be retried by call_once.
+    const char* configured_root = std::getenv("PS3_VFS_ROOT");
+    const std::filesystem::path root =
+        configured_root && configured_root[0] ? configured_root : "game/vfs";
+    std::filesystem::path metadata =
+        root / "data/config/S11100-1/musicinfo.xml";
+    std::string xml = read_file(metadata);
+    if (xml.empty()) {
+        metadata = root / "data/musicinfo.xml";
+        xml = read_file(metadata);
+    }
+    if (xml.empty()) {
+        std::fprintf(stderr,
+                     "[taiko_catalog] could not read Green musicinfo.xml "
+                     "under %s\n", root.string().c_str());
+    }
+
+    const std::filesystem::path fumen_root = root / "data/fumen";
+    const auto title_overrides = load_title_overrides();
+    const auto ratings = taiko_catalog_detail::parse_star_ratings(
+        read_file(fumen_root / "tuning.bin"));
+    std::size_t position = 0;
+    std::size_t metadata_count = 0;
+    while ((position = xml.find("<Data", position)) != std::string::npos) {
+        const std::size_t opening_end = xml.find('>', position);
+        const std::size_t closing = xml.find("</Data>", opening_end);
+        if (opening_end == std::string::npos || closing == std::string::npos)
+            break;
+        const std::string_view block(xml.data() + opening_end + 1,
+                                     closing - opening_end - 1);
+        position = closing + 7;
+        TaikoCatalogSong song;
+        song.music_id = tag_value(block, "musicid");
+        if (song.music_id.empty()) continue;
+        ++metadata_count;
+        song.difficulty_mask = chart_mask(fumen_root, song.music_id);
+        if (!song.difficulty_mask) continue;
+        const auto rating = ratings.find(song.music_id);
+        if (rating != ratings.end()) song.stars = rating->second;
+        song.original_title = tag_value(block, "musicname");
+        song.title = song.original_title;
+        song.genre = tag_value(block, "genrename");
+        song.unique_id = parse_uint(tag_value(block, "uniqueid"));
+        if (song.title.empty()) song.title = song.music_id;
+        const auto translated = title_overrides.find(song.music_id);
+        if (translated != title_overrides.end() && !translated->second.empty())
+            song.title = translated->second;
+        g_songs.emplace_back(std::move(song));
+    }
+
+    if (taiko_custom_scan) taiko_custom_scan(g_songs);
+    g_loaded = !g_songs.empty();
+    std::fprintf(stderr,
+                 "[taiko_catalog] loaded %zu playable songs from %zu metadata "
+                 "entries (%s)\n",
+                 g_songs.size(), metadata_count, metadata.string().c_str());
+}
+
+} // namespace
+
+bool taiko_hash_file_sha256(const std::string& path,
+                            taiko_plus::Sha256& hash,
+                            std::string* error)
+{
+    std::ifstream stream(std::filesystem::path(std::u8string(
+        reinterpret_cast<const char8_t*>(path.data()), path.size())), std::ios::binary);
+    if (!stream) {
+        hash = {};
+        if (error) *error = "cannot open " + path;
+        return false;
+    }
+    mbedtls_sha256_context context;
+    mbedtls_sha256_init(&context);
+    int result = mbedtls_sha256_starts(&context, 0);
+    std::array<unsigned char, 64 * 1024> buffer{};
+    while (result == 0 && stream) {
+        stream.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+        const std::streamsize count = stream.gcount();
+        if (count > 0)
+            result = mbedtls_sha256_update(
+                &context, buffer.data(), static_cast<std::size_t>(count));
+    }
+    if (result == 0 && !stream.eof()) result = -1;
+    if (result == 0)
+        result = mbedtls_sha256_finish(&context, hash.bytes.data());
+    mbedtls_sha256_free(&context);
+    if (result != 0) {
+        hash = {};
+        if (error) *error = "cannot hash " + path;
+        return false;
+    }
+    return true;
+}
+
+bool taiko_catalog_load()
+{
+    std::call_once(g_once, load_once);
+    return g_loaded;
+}
+
+extern "C" void ps3_preload_host_catalog()
+{
+    const char* frontend = std::getenv("TAIKO_HOST_FRONTEND");
+    if (!frontend || !frontend[0] || std::string_view(frontend) == "0") return;
+    // Constructed after the catalog globals: joins before their destruction.
+    // call_once makes browser access wait for completion, never a partial list.
+    try {
+        static std::jthread worker([] {
+            const auto start = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "[taiko_catalog] preloading custom browser library\n");
+            try {
+                taiko_catalog_load();
+                const auto elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count();
+                std::fprintf(stderr, "[taiko_catalog] browser preload finished in %.2f s\n", elapsed);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "[taiko_catalog] browser preload failed: %s\n", e.what());
+            }
+        });
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "[taiko_catalog] cannot start browser preload: %s\n", e.what());
+    }
+}
+
+std::size_t taiko_catalog_count()
+{
+    return taiko_catalog_load() ? g_songs.size() : 0;
+}
+
+const TaikoCatalogSong* taiko_catalog_song(std::size_t index)
+{
+    if (!taiko_catalog_load() || index >= g_songs.size()) return nullptr;
+    return &g_songs[index];
+}
+
+const char* taiko_catalog_difficulty_name(unsigned difficulty)
+{
+    static constexpr const char* names[TAIKO_DIFFICULTY_COUNT] = {
+        "EASY", "NORMAL", "HARD", "ONI", "URA"
+    };
+    return difficulty < TAIKO_DIFFICULTY_COUNT ? names[difficulty] : "?";
+}
+
+const char* taiko_catalog_genre_name(const std::string& genre)
+{
+    if (genre == "J-POP") return "J-POP";
+    if (genre == "アニメ") return "ANIME";
+    if (genre == "ボーカロイド") return "VOCALOID";
+    if (genre == "バラエティ") return "VARIETY";
+    if (genre == "クラシック") return "CLASSICAL";
+    if (genre == "ゲームミュージック") return "GAME MUSIC";
+    if (genre == "ナムコオリジナル") return "NAMCO ORIGINAL";
+    if (genre == "メドレー") return "MEDLEY";
+    if (genre == "童謡") return "CHILDREN'S SONGS";
+    return genre.c_str();
+}
+
+bool taiko_catalog_content_identity(std::size_t index, unsigned difficulty,
+                                    taiko_plus::ContentIdentity& identity,
+                                    std::string* error)
+{
+    const TaikoCatalogSong* song = taiko_catalog_song(index);
+    if (!song) {
+        if (error) *error = "catalog song is unavailable";
+        return false;
+    }
+    if (difficulty >= TAIKO_DIFFICULTY_COUNT ||
+        !(song->difficulty_mask & (1u << difficulty))) {
+        if (error) *error = "requested difficulty is unavailable";
+        return false;
+    }
+    if (!song->tja_path.empty() && taiko_custom_identity)
+        return taiko_custom_identity(*song, difficulty, identity, error);
+    static constexpr char suffixes[TAIKO_DIFFICULTY_COUNT] = {
+        'e', 'n', 'h', 'm', 'x'
+    };
+    const char* configured_root = std::getenv("PS3_VFS_ROOT");
+    const std::filesystem::path root = configured_root && configured_root[0]
+        ? configured_root : "game/vfs";
+    const std::filesystem::path chart =
+        root / "data/fumen" / song->music_id / "solo" /
+        (song->music_id + "_" + suffixes[difficulty] + ".bin");
+    std::string upper = song->music_id;
+    for (char& character : upper)
+        character = static_cast<char>(std::toupper(
+            static_cast<unsigned char>(character)));
+    const std::filesystem::path audio =
+        root / "data/sound/bgm/nub" / ("SONG_" + upper + ".nub");
+
+    taiko_plus::ContentIdentity next;
+    next.version = taiko_plus::kContractVersion;
+    next.game_revision = "S11100-1";
+    next.music_id = song->music_id;
+    next.unique_id = song->unique_id;
+    next.difficulty = static_cast<uint8_t>(difficulty);
+    if (!taiko_hash_file_sha256(chart.string(), next.chart_hash, error) ||
+        !taiko_hash_file_sha256(audio.string(), next.audio_hash, error))
+        return false;
+    identity = std::move(next);
+    return true;
+}

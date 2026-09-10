@@ -44,7 +44,8 @@ typedef struct ppu_thread_info {
     int          joinable;
     int          completion_initialized;
     uint32_t     stack_addr;   /* guest stack base */
-    uint32_t     stack_size;
+    uint32_t     stack_size;   /* logical guest-visible stack size */
+    uint32_t     stack_capacity; /* host-page-rounded backing allocation */
     uint64_t     entry_addr;   /* guest entry point */
     uint64_t     tls_addr;
 

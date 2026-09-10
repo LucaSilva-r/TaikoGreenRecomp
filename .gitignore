@@ -57,7 +57,8 @@ __pycache__/
 .idea/
 .DS_Store
 
-# Runtime online configuration; holds the pairing token.
+# Runtime configuration; may hold the pairing token and cabinet identity.
+taiko_config.cfg
 taiko_online.cfg
 
 # The overlay font (fonts/font.ttf) IS tracked: the pairing code has to be

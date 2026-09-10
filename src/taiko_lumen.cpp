@@ -8,6 +8,7 @@
  */
 
 #include "ppu_recomp.h"
+#include "taiko_animation_scale.h"
 
 #include <ps3emu/host_platform.h>
 
@@ -31,7 +32,7 @@ std::atomic<uint64_t> g_animation_previous_flip_ns{0};
 std::atomic<uint64_t> g_animation_flip_sequence{0};
 std::atomic<uint32_t> g_animation_don3d_calls{0};
 std::atomic<uint32_t> g_animation_lumen_calls{0};
-float g_animation_tick_accumulator = 0.0f;
+double g_animation_tick_accumulator = 0.0;
 uint64_t g_face_seek_flip[5] = {};
 uint64_t g_face_seek_last_ns[5] = {};
 bool g_face_seek_allow[5] = {};
@@ -62,6 +63,16 @@ constexpr uint64_t kFaceSyncMinimumNs[5] = {
 constexpr float kAnimationScaleMax = 4.0f;
 
 extern "C" int ps3_frame_boot_fast_is_done(void);
+
+unsigned animation_vblank_hz()
+{
+    static const unsigned hz = [] {
+        const char* value = std::getenv("TAIKO_VBLANK_HZ");
+        const unsigned parsed = value ? (unsigned)std::strtoul(value, nullptr, 10) : 0u;
+        return parsed ? parsed : 60u;
+    }();
+    return hz;
+}
 
 bool animation_timing_enabled()
 {
@@ -292,7 +303,12 @@ extern "C" void taiko_project_flip_command()
     if (previous && now > previous) {
         const uint64_t delta = now - previous;
         if (delta < kAnimationTimingGapNs) {
-            scale = static_cast<float>(delta) * 0.00000006f;
+            /* Snap to whole vblank periods first: the flip command's own
+             * scheduling jitter is a quarter of a frame at 240 Hz and made
+             * scrolling notes shimmer even with presentation vsync locked. */
+            scale = taiko_animation_snap_scale(delta, animation_vblank_hz());
+            if (scale <= 0.0f)
+                scale = static_cast<float>(delta) * 0.00000006f;
             if (scale > kAnimationScaleMax)
                 scale = kAnimationScaleMax;
         }
@@ -303,7 +319,7 @@ extern "C" void taiko_project_flip_command()
          * instead of fractionally throttling individual Sprite callbacks. */
         g_animation_tick_accumulator += scale;
         tick_quanta = static_cast<uint32_t>(g_animation_tick_accumulator);
-        g_animation_tick_accumulator -= static_cast<float>(tick_quanta);
+        g_animation_tick_accumulator -= static_cast<double>(tick_quanta);
     }
     g_animation_scale_bits.store(float_bits(scale),
                                  std::memory_order_release);
@@ -343,13 +359,22 @@ extern "C" void taiko_project_flip_command()
     }
 }
 
+extern "C" uint32_t taiko_animation_frame_ticks()
+{
+    /* Scene countdowns and delayed Enso callbacks share Lumen's authored
+     * clock. Do not estimate a lifetime from the FPS at timer creation:
+     * loading and presentation can change cadence while a wipe is running. */
+    if (!animation_timing_enabled())
+        return 1;
+    return g_animation_tick_quanta.load(std::memory_order_acquire);
+}
+
 extern "C" void taiko_lumen_scale_frame_delta(ppu_context* ctx)
 {
     if (!ctx || !animation_timing_enabled())
         return;
     g_animation_lumen_calls.fetch_add(1, std::memory_order_relaxed);
-    const uint32_t tick_quanta =
-        g_animation_tick_quanta.load(std::memory_order_acquire);
+    const uint32_t tick_quanta = taiko_animation_frame_ticks();
     ctx->fpr[1] = static_cast<double>(static_cast<float>(
         ctx->fpr[1] * static_cast<double>(tick_quanta)));
 }

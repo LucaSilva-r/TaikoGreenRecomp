@@ -1,0 +1,3 @@
+#pragma once
+inline constexpr char TAIKO_CHART_RECIPE[] = "@TAIKO_CHART_RECIPE@";
+inline constexpr char TAIKO_HP_VALUES[] = R"hp(@TAIKO_HP_VALUES@)hp";

@@ -5,6 +5,15 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <string.h>
+
+static atomic_uint pull_blocks;
+static void pull_silence(float* output)
+{
+    memset(output, 0, CELL_AUDIO_BLOCK_SAMPLES * 2u * sizeof(float));
+    atomic_fetch_add(&pull_blocks, 1);
+}
 
 int main(void)
 {
@@ -22,6 +31,22 @@ int main(void)
     }
 
     float block[CELL_AUDIO_BLOCK_SAMPLES * 2] = {0};
+    if (getenv("TAIKO_TEST_AUDIO_PULL")) {
+        if (!audio_sink_start_pull(pull_silence)) return 1;
+        ps3_host_sleep_ms(1000);
+        const unsigned before = atomic_load(&pull_blocks);
+        const unsigned queued = audio_sink_queued_frames();
+        const unsigned prebuffer = audio_sink_prebuffer_frames();
+        audio_sink_shutdown();
+        const unsigned stopped = atomic_load(&pull_blocks);
+        ps3_host_sleep_ms(30);
+        const unsigned after = atomic_load(&pull_blocks);
+        ps3_host_sdl_shutdown();
+        printf("SDL pull smoke: blocks=%u queued=%u prebuffer=%u stopped=%u after=%u\n",
+               before, queued, prebuffer, stopped, after);
+        return before >= 175 && before <= 200 && queued <= CELL_AUDIO_BLOCK_SAMPLES &&
+               prebuffer == 0 && stopped == after ? 0 : 1;
+    }
     volatile int running = 1;
     const uint64_t start = ps3_host_monotonic_ns();
     uint32_t maximum_queued = 0;

@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "taiko_config.h"
+
 int taiko_boot_fast_enabled(void);
 
 void cellGame_set_title_id(const char* title_id);
@@ -32,18 +34,25 @@ static void taiko_set_default_environment(const char* name, const char* value)
 __attribute__((constructor))
 static void taiko_init(void)
 {
+    taiko_config_load();
     /* Unbuffer first: the boot harness logs with printf, and a block-buffered
      * pipe eats the last 4 KB -- which is the part that says why it stopped. */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    /* The Wine launcher already supplies these, but the native executable is
-     * commonly launched directly.  Keep explicit =0 overrides available for
-     * silent/headless diagnosis. */
+    /* Keep direct executable launches useful even when no config has been
+     * installed. Explicit environment and taiko_config.cfg values win. */
+    taiko_set_default_environment("PS3_TOC_SET",
+                                  "0x1027c58,0x1037a88,0x1047a38");
+    taiko_set_default_environment("FLOW_NOSPILL", "1");
+    taiko_set_default_environment("TAIKO_DNS_LOOPBACK", "1");
+    taiko_set_default_environment("TAIKO_OFFLINE_COMPLETE", "1");
+    taiko_set_default_environment("TAIKO_PLUS_STANDALONE", "1");
+    taiko_set_default_environment("TAIKO_FS_YIELD", "0");
     taiko_set_default_environment("TAIKO_AUDIO_DECODE", "1");
     taiko_set_default_environment("TAIKO_AUDIO_SPU", "1");
 
-    /* boot_fast=0 in taiko_online.cfg pins the boot tick to the play rate. */
+    /* game.boot_fast=0 pins the boot tick to the play rate. */
     if (!taiko_boot_fast_enabled())
         taiko_set_default_environment("TAIKO_BOOT_VBLANK_HZ", "60");
 

@@ -11,7 +11,7 @@
 #         -DCMAKE_TOOLCHAIN_FILE=mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build
 #   wine build/taiko_boot.exe game/EBOOT.elf
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.22.1)
 project(taiko_boot CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -378,6 +378,20 @@ file(GLOB GEN_SOURCES    "src/gen/*.c" "src/gen/*.cpp")
 # on `rchcnt(SPU_RdInMbox) == 0`, so the SPU never answered the PPU.
 file(GLOB SPU_GEN_SOURCES "src/spu_gen/*/spu_recomp.c" "src/spu_gen/*.c")
 
+set(TAIKO_CONFIG_DEFAULT_C "${CMAKE_BINARY_DIR}/taiko_config_default.c")
+add_custom_command(
+    OUTPUT "${TAIKO_CONFIG_DEFAULT_C}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+            --input "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
+            --out "${TAIKO_CONFIG_DEFAULT_C}"
+            --name taiko_config_default
+    DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+    COMMENT "Embedding default Taiko configuration"
+    VERBATIM)
+
 set(TAIKO_BOOT_SOURCES
     "${PS3RECOMP_DIR}/runtime/ppu/tests/boot_main.cpp"   # generic boot harness
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_loader.cpp"        # vm + ELF loader + run
@@ -386,10 +400,15 @@ set(TAIKO_BOOT_SOURCES
     "${PS3RECOMP_DIR}/runtime/ppu/ppu_fs.cpp"            # cellFs VFS
     "${PS3RECOMP_DIR}/runtime/host/frame_driver.cpp"     # shared vblank/FIFO clock
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_init.c"       # title id + unbuffered log
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_config.c"     # unified runtime/game configuration
+    "${TAIKO_CONFIG_DEFAULT_C}"                         # embedded default/schema
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"        # cellHttp NID aliases
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"        # host TLS + online redirect
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_decoder.cpp" # shared NUB/RIFF decode and bounded PCM cache
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"    # in-process ATRAC3plus -> game/SPU PCM ring
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sync_test.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_offset.cpp" # persistent gameplay A/V latency calibration
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_audio.cpp" # Taiko+ cellAudio mix ownership
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_spu.c"  # raw lifted bnusCore mixer
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_sail.cpp"     # cellSail async callback shim
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_usio.cpp"     # virtual System 357 I/O board
@@ -397,7 +416,16 @@ set(TAIKO_BOOT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pairing.c"    # six-digit card pairing
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_overlay.c"    # on-screen pairing code
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_host_input.cpp" # portable title input latch
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"  # host view of installed stock songs
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_custom_songs.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_custom_titles.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_title_render.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_frontend.cpp" # host-owned Player Entry/login shell
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_plus_runtime.cpp" # Taiko+ lifecycle and semantic queues
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pc_mode.cpp"  # custom PC mode scene & handoff
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_entry_overlay.cpp" # non-destructive Player Entry DDP overlay
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_lumen.cpp"    # title-local Lumen state fixes
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_entry_trace.cpp" # Player Entry/Song Select reversing trace
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_vertex_job.cpp" # native SPURS vertex skinning
     ${SPU_GEN_SOURCES}
     ${GEN_SOURCES}
@@ -413,6 +441,12 @@ if(ANDROID)
 else()
     add_executable(taiko_boot ${TAIKO_BOOT_SOURCES})
 endif()
+
+add_custom_command(TARGET taiko_boot POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/taiko_config.example.cfg"
+            "$<TARGET_FILE_DIR:taiko_boot>/taiko_config.example.cfg"
+    VERBATIM)
 if(ANDROID)
     set_target_properties(taiko_boot PROPERTIES OUTPUT_NAME main)
 endif()
@@ -460,6 +494,7 @@ if(TAIKO_INPROCESS_ATRAC)
     # line for ~300 MB of generated lifted code and needlessly recompiles every
     # guest chunk whenever the decoder prefix changes.
     set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_audio_decoder.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_atrac.cpp"
         PROPERTIES
             COMPILE_DEFINITIONS TAIKO_HAVE_FFMPEG=1
@@ -500,6 +535,7 @@ set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_tls.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_net.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_pairing.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_catalog.cpp"
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_MBEDTLS_ROOT}/include")
 target_link_libraries(taiko_boot PRIVATE ${TAIKO_MBEDTLS_LIBS})
 if(WIN32)
@@ -531,6 +567,7 @@ if(NOT TAIKO_FREETYPE_LIB)
 endif()
 set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_overlay.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/taiko_title_render.c"
     PROPERTIES INCLUDE_DIRECTORIES "${TAIKO_FREETYPE_ROOT}/include/freetype2")
 target_link_libraries(taiko_boot PRIVATE "${TAIKO_FREETYPE_LIB}")
 
@@ -560,6 +597,27 @@ else()
     message(STATUS "Overlay font: ${TAIKO_OVERLAY_FONT_FILE} absent, "
                    "the overlay will load a font at runtime")
 endif()
+
+# The Player Entry modification is distributed as a source-copy/data patch,
+# never as a modified game archive. Embed the ~70 KiB patch so standalone users
+# need only provide their untouched supported Green dump.
+set(TAIKO_ENTRY_OVERLAY_PATCH
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/entry_pc_mode.tkovl")
+set(TAIKO_ENTRY_OVERLAY_PATCH_C
+    "${CMAKE_BINARY_DIR}/taiko_entry_overlay_patch.c")
+add_custom_command(
+    OUTPUT "${TAIKO_ENTRY_OVERLAY_PATCH_C}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+            --input "${TAIKO_ENTRY_OVERLAY_PATCH}"
+            --out "${TAIKO_ENTRY_OVERLAY_PATCH_C}"
+            --name taiko_entry_overlay_patch
+    DEPENDS
+            "${TAIKO_ENTRY_OVERLAY_PATCH}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.py"
+    COMMENT "Embedding Player Entry runtime patch"
+    VERBATIM)
+target_sources(taiko_boot PRIVATE "${TAIKO_ENTRY_OVERLAY_PATCH_C}")
 
 # Build the runtime from source rather than expecting a prebuilt .lib -- we are
 # cross-compiling, so there is nothing prebuilt to find.
@@ -711,6 +769,7 @@ endif()
 # Budget roughly 3 GB per job when raising this.
 set(TAIKO_COMPILE_JOBS 4 CACHE STRING "Concurrent compiles of the lifted chunks (~3 GB RAM each)")
 set_property(GLOBAL PROPERTY JOB_POOLS taiko_compile=${TAIKO_COMPILE_JOBS} taiko_link=1)
+include(cmake/custom-songs.cmake)
 set_target_properties(taiko_boot PROPERTIES
     JOB_POOL_COMPILE taiko_compile
     JOB_POOL_LINK    taiko_link)
@@ -738,6 +797,8 @@ if(BUILD_TESTING AND TAIKO_RSX_BACKEND STREQUAL "null" AND
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME entry_lumen_patch_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/entry_lumen_patch_tests.py")
     add_executable(ppu_thread_lifecycle_tests
         "tests/ppu_thread_lifecycle_tests.c")
     target_include_directories(ppu_thread_lifecycle_tests PRIVATE
@@ -753,9 +814,44 @@ if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     target_link_libraries(fair_mutex_tests PRIVATE Threads::Threads)
     add_test(NAME fair_mutex_tests COMMAND fair_mutex_tests)
+    add_executable(ppu_callback_stack_tests "tests/ppu_callback_stack_tests.cpp")
+    target_include_directories(ppu_callback_stack_tests PRIVATE
+        "${PS3RECOMP_DIR}/runtime/ppu")
+    target_link_libraries(ppu_callback_stack_tests PRIVATE Threads::Threads)
+    add_test(NAME ppu_callback_stack_tests COMMAND ppu_callback_stack_tests)
+    add_executable(cell_rtc_tests "tests/cell_rtc_tests.c"
+        "${PS3RECOMP_DIR}/libs/system/cellRtc.c")
+    target_include_directories(cell_rtc_tests PRIVATE "${PS3RECOMP_DIR}/include"
+        "${PS3RECOMP_DIR}/libs/system" "${PS3RECOMP_DIR}/runtime/ppu")
+    add_test(NAME cell_rtc_tests COMMAND cell_rtc_tests)
+endif()
+
+if(BUILD_TESTING AND NOT ANDROID)
+    add_executable(taiko_chart_tests tests/taiko_chart_tests.cpp)
+    target_include_directories(taiko_chart_tests PRIVATE src)
+    target_link_libraries(taiko_chart_tests PRIVATE taiko_charts)
+    add_test(NAME taiko_chart_tests COMMAND taiko_chart_tests)
+
+    add_executable(taiko_lazer_tests tests/taiko_lazer_tests.cpp)
+    target_include_directories(taiko_lazer_tests PRIVATE src)
+    target_link_libraries(taiko_lazer_tests PRIVATE taiko_charts Storage)
+    add_test(NAME taiko_lazer_tests COMMAND taiko_lazer_tests)
+
+    if(MINGW)
+        target_link_options(taiko_chart_tests PRIVATE -static -static-libgcc -static-libstdc++)
+        target_link_options(taiko_lazer_tests PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
 endif()
 
 if(BUILD_TESTING AND NOT WIN32)
+    add_executable(taiko_animation_timing_tests
+        "tests/taiko_animation_timing_tests.cpp" "src/taiko_lumen.cpp")
+    target_include_directories(taiko_animation_timing_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/recomp" "${PS3RECOMP_DIR}/include")
+    add_test(NAME taiko_animation_timing_tests COMMAND taiko_animation_timing_tests)
+    add_test(NAME taiko_animation_timing_disabled_tests
+        COMMAND taiko_animation_timing_tests disabled)
+
     add_executable(taiko_audio_header_tests
         "tests/taiko_audio_header_tests.c")
     target_include_directories(taiko_audio_header_tests PRIVATE
@@ -794,13 +890,200 @@ if(BUILD_TESTING AND NOT WIN32)
     target_include_directories(taiko_host_input_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_host_input_tests COMMAND taiko_host_input_tests)
+    add_executable(taiko_sync_detector_tests "tests/taiko_sync_detector_tests.cpp")
+    target_include_directories(taiko_sync_detector_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_sync_detector_tests COMMAND taiko_sync_detector_tests)
+    add_executable(taiko_audio_clock_tests "tests/taiko_audio_clock_tests.cpp")
+    target_include_directories(taiko_audio_clock_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_audio_clock_tests COMMAND taiko_audio_clock_tests)
 
     add_executable(taiko_audio_offset_tests
         "tests/taiko_audio_offset_tests.cpp"
-        "src/taiko_audio_offset.cpp")
+        "src/taiko_audio_offset.cpp"
+        "src/taiko_config.c"
+        "${TAIKO_CONFIG_DEFAULT_C}")
+    target_compile_definitions(taiko_audio_offset_tests PRIVATE
+        TAIKO_CONFIG_NO_CONSTRUCTOR=1)
     target_include_directories(taiko_audio_offset_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME taiko_audio_offset_tests COMMAND taiko_audio_offset_tests)
+
+    add_executable(taiko_config_tests
+        "tests/taiko_config_tests.c"
+        "src/taiko_config.c"
+        "${TAIKO_CONFIG_DEFAULT_C}")
+    target_compile_definitions(taiko_config_tests PRIVATE
+        TAIKO_CONFIG_NO_CONSTRUCTOR=1)
+    target_include_directories(taiko_config_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_config_tests COMMAND taiko_config_tests)
+    add_test(NAME taiko_config_create_tests COMMAND taiko_config_tests create)
+
+    add_executable(taiko_pc_mode_tests
+        "tests/taiko_pc_mode_tests.cpp"
+        "src/taiko_pc_mode.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_pc_mode_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/pc_mode_stubs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video")
+    target_link_libraries(taiko_pc_mode_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_pc_mode_tests COMMAND taiko_pc_mode_tests)
+
+    add_executable(taiko_plus_runtime_tests
+        "tests/taiko_plus_runtime_tests.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_plus_runtime_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(taiko_plus_runtime_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_plus_runtime_tests COMMAND taiko_plus_runtime_tests)
+
+    add_executable(taiko_card_lease_tests "tests/taiko_card_lease_tests.c")
+    target_link_libraries(taiko_card_lease_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_card_lease_tests COMMAND taiko_card_lease_tests)
+
+    add_executable(taiko_browser_tests
+        "tests/taiko_browser_tests.cpp"
+        "src/taiko_frontend.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_browser_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/pc_mode_stubs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video")
+    target_link_libraries(taiko_browser_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_browser_tests COMMAND taiko_browser_tests)
+
+    add_executable(taiko_catalog_identity_tests
+        "tests/taiko_catalog_identity_tests.cpp"
+        "src/taiko_catalog.cpp"
+        "src/taiko_plus_runtime.cpp")
+    target_include_directories(taiko_catalog_identity_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${TAIKO_MBEDTLS_ROOT}/include")
+    target_link_libraries(taiko_catalog_identity_tests PRIVATE
+        "${TAIKO_MBEDTLS_CRYPTO}" Threads::Threads)
+    add_test(NAME taiko_catalog_identity_tests
+        COMMAND taiko_catalog_identity_tests)
+
+    add_executable(taiko_host_audio_tests
+        "tests/taiko_host_audio_tests.cpp"
+        "src/taiko_host_audio.cpp"
+        "src/taiko_audio_decoder.cpp")
+    target_include_directories(taiko_host_audio_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/include"
+        "${PS3RECOMP_DIR}/libs/audio")
+    target_compile_definitions(taiko_host_audio_tests PRIVATE
+        TAIKO_HOST_AUDIO_TESTING=1)
+    target_link_libraries(taiko_host_audio_tests PRIVATE Threads::Threads)
+    if(TAIKO_INPROCESS_ATRAC)
+        if(TAIKO_FFMPEG_ROOT)
+            target_link_libraries(taiko_host_audio_tests PRIVATE
+                ${TAIKO_FFMPEG_LIBS})
+            if(MINGW)
+                target_link_libraries(taiko_host_audio_tests PRIVATE
+                    ole32 user32 atomic)
+            else()
+                target_link_libraries(taiko_host_audio_tests PRIVATE
+                    Threads::Threads m ${CMAKE_DL_LIBS})
+            endif()
+        else()
+            target_link_libraries(taiko_host_audio_tests PRIVATE
+                PkgConfig::TAIKO_FFMPEG)
+        endif()
+    endif()
+    add_test(NAME taiko_host_audio_tests COMMAND taiko_host_audio_tests)
+
+    add_executable(taiko_audio_decoder_tests
+        "tests/taiko_audio_decoder_tests.cpp"
+        "src/taiko_audio_decoder.cpp")
+    target_include_directories(taiko_audio_decoder_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(taiko_audio_decoder_tests PRIVATE Threads::Threads)
+    if(TAIKO_INPROCESS_ATRAC)
+        if(TAIKO_FFMPEG_ROOT)
+            target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                ${TAIKO_FFMPEG_LIBS})
+            if(MINGW)
+                target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                    ole32 user32 atomic)
+            else()
+                target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                    Threads::Threads m ${CMAKE_DL_LIBS})
+            endif()
+        else()
+            target_link_libraries(taiko_audio_decoder_tests PRIVATE
+                PkgConfig::TAIKO_FFMPEG)
+        endif()
+    endif()
+    add_test(NAME taiko_audio_decoder_tests COMMAND taiko_audio_decoder_tests)
+
+    add_executable(taiko_custom_songs_tests
+        "tests/taiko_custom_songs_tests.cpp"
+        "src/taiko_audio_decoder.cpp"
+        "src/taiko_catalog.cpp"
+        "src/taiko_custom_songs.cpp")
+    target_include_directories(taiko_custom_songs_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${TAIKO_MBEDTLS_ROOT}/include")
+    target_link_libraries(taiko_custom_songs_tests PRIVATE Threads::Threads "${TAIKO_MBEDTLS_CRYPTO}" taiko_charts)
+    if(TAIKO_INPROCESS_ATRAC)
+        if(TAIKO_FFMPEG_ROOT)
+            target_link_libraries(taiko_custom_songs_tests PRIVATE
+                ${TAIKO_FFMPEG_LIBS})
+            if(MINGW)
+                target_link_libraries(taiko_custom_songs_tests PRIVATE
+                    ole32 user32 atomic)
+            else()
+                target_link_libraries(taiko_custom_songs_tests PRIVATE
+                    Threads::Threads m ${CMAKE_DL_LIBS})
+            endif()
+        else()
+            target_link_libraries(taiko_custom_songs_tests PRIVATE
+                PkgConfig::TAIKO_FFMPEG)
+        endif()
+    endif()
+    add_test(NAME taiko_custom_songs_tests COMMAND taiko_custom_songs_tests)
+
+    add_executable(taiko_title_render_tests tests/taiko_title_render_tests.c
+        src/taiko_title_render.c)
+    target_include_directories(taiko_title_render_tests PRIVATE src
+        "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+    target_link_libraries(taiko_title_render_tests PRIVATE "${TAIKO_FREETYPE_LIB}")
+    if(TAIKO_OVERLAY_FONT_C)
+        target_sources(taiko_title_render_tests PRIVATE "${TAIKO_OVERLAY_FONT_C}")
+        target_compile_definitions(taiko_title_render_tests PRIVATE TAIKO_OVERLAY_FONT_EMBEDDED)
+    endif()
+    add_test(NAME taiko_title_render_tests COMMAND taiko_title_render_tests)
+
+
+    add_executable(taiko_animation_scale_tests "tests/taiko_animation_scale_tests.c")
+    target_include_directories(taiko_animation_scale_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME taiko_animation_scale_tests COMMAND taiko_animation_scale_tests)
+
+    add_executable(taiko_overlay_cache_tests "tests/taiko_overlay_cache_tests.c")
+    target_include_directories(taiko_overlay_cache_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video"
+        "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+    target_link_libraries(taiko_overlay_cache_tests PRIVATE
+        "${TAIKO_FREETYPE_LIB}" Threads::Threads)
+    add_test(NAME taiko_overlay_cache_tests COMMAND taiko_overlay_cache_tests)
+    set_tests_properties(taiko_overlay_cache_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    add_executable(taiko_host_frame_tests
+        "tests/taiko_host_frame_tests.cpp"
+        "src/taiko_overlay.c")
+    target_include_directories(taiko_host_frame_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${PS3RECOMP_DIR}/libs/video"
+        "${TAIKO_FREETYPE_ROOT}/include/freetype2")
+    target_link_libraries(taiko_host_frame_tests PRIVATE
+        "${TAIKO_FREETYPE_LIB}" Threads::Threads)
+    add_test(NAME taiko_host_frame_tests COMMAND taiko_host_frame_tests)
+    set_tests_properties(taiko_host_frame_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 if(BUILD_TESTING AND TAIKO_AUDIO_BACKEND STREQUAL "sdl3" AND
@@ -864,4 +1147,37 @@ if(TAIKO_RSX_BACKEND STREQUAL "sdl_gpu" AND NOT ANDROID)
     endif()
 endif()
 
+if(TARGET rsx_replay)
+    get_target_property(_preview_sources rsx_replay SOURCES)
+    list(REMOVE_ITEM _preview_sources "tools/rsx_replay.c")
+    add_executable(taiko_browser_gpu_preview "tools/taiko_browser_gpu_preview.c"
+        "src/taiko_overlay.c" ${_preview_sources})
+    foreach(_property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS LINK_LIBRARIES)
+        get_target_property(_value rsx_replay ${_property})
+        if(_value)
+            set_property(TARGET taiko_browser_gpu_preview PROPERTY ${_property} "${_value}")
+        endif()
+    endforeach()
+    target_link_libraries(taiko_browser_gpu_preview PRIVATE "${TAIKO_FREETYPE_LIB}" Threads::Threads)
+endif()
+
 message(STATUS "Taiko host backends: RSX=${TAIKO_RSX_BACKEND}, input=${TAIKO_INPUT_BACKEND}, audio=${TAIKO_AUDIO_BACKEND}")
+
+if(BUILD_TESTING)
+    add_executable(taiko_fumen_pool_tests tests/taiko_fumen_pool_tests.cpp src/taiko_fumen_pool.cpp)
+    target_include_directories(taiko_fumen_pool_tests PRIVATE tests/pc_mode_stubs src)
+    target_link_libraries(taiko_fumen_pool_tests PRIVATE Threads::Threads)
+    add_test(NAME taiko_fumen_pool_tests COMMAND taiko_fumen_pool_tests)
+endif()
+if(TARGET taiko_custom_songs_tests)
+    add_executable(taiko_nijiiro_tests tests/taiko_nijiiro_tests.cpp
+        src/taiko_audio_decoder.cpp src/taiko_catalog.cpp src/taiko_custom_songs.cpp)
+    foreach(property INCLUDE_DIRECTORIES LINK_LIBRARIES)
+        get_target_property(value taiko_custom_songs_tests ${property})
+        set_property(TARGET taiko_nijiiro_tests PROPERTY ${property} "${value}")
+    endforeach()
+    target_link_libraries(taiko_nijiiro_tests PRIVATE ZLIB::ZLIB)
+    add_test(NAME taiko_nijiiro_tests COMMAND taiko_nijiiro_tests)
+endif()
+target_sources(taiko_boot PRIVATE src/taiko_fumen_pool.cpp)
+include(cmake/nijiiro.cmake)

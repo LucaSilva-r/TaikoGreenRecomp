@@ -189,14 +189,14 @@ sudo -u taikos env \
     TAIKO_KMS_PRESENT=1 TAIKO_KMS_ATOMIC=1 \
     PS3_VFS_ROOT=/var/lib/taikos/recomp/vfs \
     PS3_TOC_SET=0x1027c58,0x1037a88,0x1047a38 FLOW_NOSPILL=1 \
-    TAIKO_DNS_LOOPBACK=1 TAIKO_ONLINE_CONFIG=/dev/null TAIKO_AUDIO_SPU=1 \
+    TAIKO_DNS_LOOPBACK=1 TAIKO_CONFIG=/dev/null TAIKO_AUDIO_SPU=1 \
     TAIKO_GPU_SEPARATE_UPLOAD_SUBMIT=1 \
     TAIKO_GPU_UPLOAD_FENCE_WAIT=1 \
     /usr/local/bin/taiko-recomp-session
 ```
 
 That command deliberately forces offline mode for the first graphical test.
-Omit `TAIKO_ONLINE_CONFIG=/dev/null` after installing an online configuration
+Omit `TAIKO_CONFIG=/dev/null` after installing a configuration
 as described below.
 
 The session defaults to `1920x1080@60`. Direct KMS selects the first connected
@@ -233,13 +233,13 @@ journalctl -u taikos.service -b --no-pager | tail -200
 
 The supplied unit runs as the unprivileged `taikos` account, owns tty1 through
 PAM, drives KMS directly, selects Vulkan and ALSA, and is offline when no
-`taiko_online.cfg` exists beside the executable. Membership in `input`,
+`taiko_config.cfg` exists beside the executable. Membership in `input`,
 `render`, and `video` is required for evdev and DRM access. To enable an
 existing online configuration, install it without exposing its contents:
 
 ```sh
-sudo install -o taikos -g taikos -m 0600 taiko_online.cfg \
-    /var/lib/taikos/recomp/taiko_online.cfg
+sudo install -o taikos -g taikos -m 0600 taiko_config.cfg \
+    /var/lib/taikos/recomp/taiko_config.cfg
 ```
 
 The unit waits for `network-online.target`; without that ordering, a cold boot
@@ -1124,8 +1124,8 @@ path only for future movie-decoder work.
   displays it; the screen briefly shows the value. Changes during gameplay slew at no more than one percent and
   settle a 5 ms step in about half a second instead of cutting/repeating a PCM
   interval. The value is saved under
-  `$XDG_CONFIG_HOME/taikorecomp/audio_offset_ms`. `TAIKO_AUDIO_OFFSET_MS`
-  remains a startup override for scripted tests. Use a Pi-specific value -- its
+  `[audio] offset_ms` in `taiko_config.cfg`. `TAIKO_AUDIO_OFFSET_MS` remains a
+  startup override for scripted tests. Use a Pi-specific value -- its
   buffer depths differ from the desktop's (37 ms visible bound against 48 ms).
 
 - **ALSA must be pinned to the HDMI card by name.** vc4 card numbering depends

@@ -45,6 +45,7 @@ either build directory can be deleted and recreated freely.
 scripts/setup_sdl_gpu_mingw.sh # once: pinned SDL3 + shadercross + DXC target bundle
 scripts/setup_sdl_gpu_linux.sh # once: the same bundle for the native build
 scripts/build_ffmpeg_mingw.sh # once: pinned minimal static ATRAC3plus decoder
+scripts/setup_nijiiro.sh     # once: native NUS3BANK IDSP/BNSF decoder sources
 
 # Windows (via mingw-w64 + Wine)
 cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release
@@ -69,11 +70,11 @@ Budget **~3 GB per job** and set it from available RAM, not core count:
 cmake -S . -B build -DTAIKO_COMPILE_JOBS=8 ...   # ~24 GB peak, needs 32 GB+
 ```
 
-The default stays at 4 so builds run unattended. **Agents must use 4 on this
-development host**: an eight-job lifted-code rebuild made the desktop
+The default stays at 4 so builds run unattended. **Agents may use at most 6 on
+this development host**: an eight-job lifted-code rebuild makes the desktop
 unresponsive even with ample nominal RAM. Configure native build directories
-with `-DTAIKO_COMPILE_JOBS=4`, and invoke cross-build scripts as
-`TAIKO_COMPILE_JOBS=4 ./scripts/build_rpi_arm64.sh`. Never start a second build
+with `-DTAIKO_COMPILE_JOBS=6`, and invoke cross-build scripts as
+`TAIKO_COMPILE_JOBS=6 ./scripts/build_rpi_arm64.sh`. Never start a second build
 while one is active. The limit is a cache variable — pass it at configure time,
 or reconfigure an existing build directory before expecting it to apply.
 
@@ -94,7 +95,14 @@ fix.
 ./run-taiko.sh               # logs to build/taiko.log (TAIKO_CONSOLE_LOG=1 for stdout)
 ```
 
-The script sets everything needed. Notable pieces:
+Normal runtime settings live in `taiko_config.cfg`, following the sectioned
+style of Zucchini's config. The executable embeds `taiko_config.example.cfg`,
+creates `taiko_config.cfg` when missing, and repairs version mismatches while
+preserving recognized values. The real file is gitignored because it can
+contain a pairing token. The loader checks beside
+the executable, beside an explicit EBOOT, then the working directory.
+`TAIKO_CONFIG` selects another file, and explicit environment values win for
+diagnostics. Notable pieces:
 
 - `TAIKO_GPU_DRIVER=vulkan` makes the Windows SDL_GPU build use Wine's Vulkan
   path directly. Native Windows leaves the variable unset so SDL can select
@@ -115,7 +123,7 @@ The script sets everything needed. Notable pieces:
   render loop keeps animating -- it looks exactly like a hang on the LOADING
   screen. Adding the mounts took one boot from 895 file opens to 1300+.
 - `TAIKO_DNS_LOOPBACK=1` — arcade network services resolve to 127.0.0.1.
-- **Boot fast-forward** (`boot_fast=1` in `taiko_online.cfg`, on by default).
+- **Boot fast-forward** (`[game] boot_fast=1` in `taiko_config.cfg`, on by default).
   The whole boot — arcade system checks, the chassis service sequence and the
   asset load — is paced by the guest's per-frame state machine, not by the
   network or by disk: measured round trips to the server are ~250 ms while the
@@ -429,11 +437,15 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   clean rainbow arch while preserving the life meter and scene beneath it.
 - **Gameplay chart/audio synchronization is repaired** (2026-08-25; live
   validated on x86-64 and the Pi). The song used to jump forward in discrete
-  steps and finish seconds before the chart. Three separate faults, all of them
-  permanent losses because **nothing ever resyncs audio to the chart** -- the
-  chart reads `sys_time_get_system_time`, the song runs on the device clock, and
-  there is no feedback path between them. Every lost block or slot is a
-  permanent forward offset.
+  steps and finish seconds before the chart. Three separate faults caused
+  persistent audio losses, described below. September 9 investigation corrected
+  the earlier claim that there is no timing feedback: guest timer `0025B6A8`
+  interpolates an external sound reference. Its separate elapsed-read/reset
+  calls could discard host preemption time (approximately 104 ms in a captured
+  failure). The narrowly guarded default correction preserves that interval;
+  `TAIKO_GUEST_CLOCK_ATOMIC=0` disables it for comparison. The user confirmed
+  sustained sync under load with the correction. Experimental decoder recovery
+  remains opt-in. See `docs/sync_test.md` for evidence and validation limits.
 
   Establish that first before diagnosing anything here: the guest reads only
   `sys_time_get_system_time` and `mftb`, never `cellGcmGetVBlankCount`,
@@ -571,6 +583,28 @@ old D3D12 backend and its switches (`F9` capture, `TEXDROP`, `RTT_DUMP`,
   short window: bnusCore buffers ahead, so the first checkpoint always shows a
   slow apparent rate that is really the constant prefill lead. Take
   segment-to-segment rates.
+- **High play-rate stutter is repaired** (2026-09-08; live validated at
+  `vblank_hz = 240` on a 240 Hz display). Gameplay dropped to 210-230 FPS and
+  notes visibly jumped while presentation itself was perfect: submit p50 4.17
+  ms, queue 0.08 ms, no `[SDL_GPU-STALL]`. Two independent causes, both of them
+  invisible at 60 Hz because they scale with the frame period:
+  - The recorder fingerprints each guest texture's source bytes once per batch.
+    That cost is per frame, not per second: gameplay hashed 14.2 MiB/frame and
+    spent 2.22 ms of the 4.17 ms budget on it, leaving the producer thread at
+    79% duty so any spike missed a vblank. Revalidation is now rate limited to
+    one check per texture per 16 ms -- the cadence the title actually authors
+    content at -- which cut hashing to 3.8 MiB and 0.65 ms/frame.
+    `TAIKO_RSX_TEXTURE_REVALIDATE_MS=0` restores per-batch fingerprinting; the
+    ceiling is one authored 60 Hz tick of staleness for a CPU-written texture.
+  - `taiko_project_flip_command` derived the animation scale from the raw
+    interval between guest flip commands. That carries about a millisecond of
+    thread scheduling jitter, which is a few percent of a 60 Hz frame but a
+    quarter of a 240 Hz one (measured `scale=0.202..0.298` against a nominal
+    0.250). The interval is now snapped to whole vblank periods --
+    `taiko_animation_snap_scale` in `src/taiko_animation_scale.h`, one period
+    normally and two for a genuinely dropped frame, raw ratio as the fallback
+    -- and the trace reads exactly 0.250/0.500.
+
 - **Don3D and Lumen animation timing is frame-rate independent**
   (2026-08-27; Pi live validated for Don3D/ordinary Lumen, desktop live
   validated for note faces). `TAIKO_ANIMATION_TIMING=1` measures elapsed guest
@@ -751,7 +785,7 @@ a lifter bump as its own project with a full re-lift and revalidation.
 Full details in **`docs/online_base.md`**. Summary: every arcade service is
 sent to one configured host and port over TLS.
 
-- Configure with `taiko_online.cfg` next to the executable, or the
+- Configure the `[network]` section of `taiko_config.cfg` next to the executable, or the
   `TAIKO_ONLINE_HOST` / `_PORT` / `_VERIFY` / `_CACERT` environment overrides.
   **No host configured means offline**, exactly as before, and the cellHttp
   transport hooks are not even installed.
@@ -807,7 +841,8 @@ sent to one configured host and port over TLS.
   no profile issued is rejected rather than silently wrong. The code is drawn
   on screen by `src/taiko_overlay.c` (FreeType, the game's own font, vendored
   by `scripts/build_freetype.sh`) on Zucchini's pill artwork, drawn through the
-  SDL_GPU backend's optional `g_rsx_overlay_frame` hook. That draw is an
+  SDL_GPU backend's optional copied `g_rsx_host_frame_copy` provider. That
+  draw is an
   alpha-blended quad, not `SDL_BlitGPUTexture` -- a blit cannot blend, so the
   pill's transparent ends would punch holes in the frame.
   The font is `fonts/font.ttf`, tracked, and CMake embeds the complete face via
@@ -1033,8 +1068,7 @@ keyboard: F3 decreases it by 5 ms, F4 increases it by 5 ms, holding Shift makes
 either step 1 ms, and F5 displays the current value without changing it. The range is 0--1000 ms and the
 default is zero. A temporary overlay shows
 the saved value. It is stored in
-`$XDG_CONFIG_HOME/taikorecomp/audio_offset_ms` (or
-`$HOME/.config/taikorecomp/audio_offset_ms`) and does not affect catalog
+`[audio] offset_ms` in `taiko_config.cfg` and does not affect catalog
 previews, jingles, voices, or VAG effects.
 
 Positive values advance audible music to compensate for host output latency.
@@ -1046,18 +1080,21 @@ value. Native Linux play testing found 60 ms comfortable on the current
 PipeWire/device setup, but no value is compiled into the executable or launcher
 because it is output-device specific. `TAIKO_AUDIO_OFFSET_MS` remains a startup
 override for scripted tests; if it is set on every launch it takes precedence
-over the saved file. Example:
+over the config value. Example:
 
 ```sh
 TAIKO_AUDIO_OFFSET_MS=60 ./run-taiko-linux.sh
 ```
 
-Preview cues need no title-specific NSH parser in the host. Green reads the
+On the native Song Select path, preview cues need no host NSH parser. Green reads the
 `.nsh` itself and passes its absolute PCM cue as `uiSample` to
 `cellAtracResetPlayPosition`; the shim must set the decode cursor to that sample,
 not zero. Live validation scrolled several uncached songs, played
 `SONG_MIKUGV` beyond its old corruption point, and confirmed that previews start
-at their intended cues.
+at their intended cues. The standalone Taiko+ browser bypasses that native
+loader, so `taiko_audio_decoder.cpp` now reads the NSH cue and song gain itself;
+`taiko_pc_mode.cpp` publishes native audio-group gain and mute settings to the
+host mixer from the PPU thread.
 
 Looping is carried by the standard RIFF `smpl` chunk, not by a separate host
 filename rule. The shim parses its start/end/play-count fields during SetData,
