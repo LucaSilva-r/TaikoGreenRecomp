@@ -126,3 +126,40 @@ Gameplay takes ownership of the character service without a visibility reset;
 returning initializes the browser settings again. Tests cover separate target
 identities, service readiness, loader retries, join/departure requests,
 participation visibility, P2 mirroring, and handoff cleanup.
+
+## Green category skin
+
+The top-level category screen now uses Green's original Song Select artwork:
+patterned green background, Japanese heading, folder tabs and bevel strips,
+navigation arrows, drum prompts, player badges, and the red/blue footer.
+The selected folder expands in the centre of a horizontal carousel. Nine
+categories are published around the selection with wraparound; existing rim,
+keyboard, wheel, search, login, and join commands keep their behavior.
+English folder labels and song counts remain host-rendered. Native character
+portraits sit above the bottom player nameplates. Song lists, custom subfolders,
+search results, and difficulty selection retain the previous layout for now.
+
+`src/taiko_menu_art.h` reads the unmodified
+`$PS3_VFS_ROOT/data/lumendata/packed/song_select/packeddata.ddp` (defaults to
+`game/vfs` when no root is configured). It parses the archive table and decodes
+only the selected NTP3 textures using the portable BC3 decoder or ARGB conversion.
+The asset IDs in `src/taiko_menu_layout.h` refer to Green's 788-entry packlist.
+Folder-edge textures lose their transparent alignment padding at load time;
+artwork is cached as owning RGBA payloads with a 16 MiB total limit and stable
+GPU IDs. Missing assets use the coloured host primitives and dynamic labels.
+No game artwork is embedded, modified, or copied into the repository.
+
+Inspect the source assets with Pillow and save a GPU preview:
+
+```sh
+python3 tools/lumen/inspect_song_select.py --output /tmp/green-song-select
+LD_LIBRARY_PATH=third_party/sdl-gpu-linux/dxc-v1.8.2502/lib \
+  TAIKO_UI_TRACE=1 build-linux/taiko_browser_gpu_preview \
+  1920 1080 /tmp/green-categories.bmp categories
+```
+
+The standalone preview has fixture counts and no guest character surfaces; live
+Don-chans are only present in the game. Validation includes the native executable
+build, GPU previews, malformed/truncated archive tests, both category wrap
+boundaries, opposite-corner portrait placement and handoff, and existing browser,
+text-cache, and host-frame tests.

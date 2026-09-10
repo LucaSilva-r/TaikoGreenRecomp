@@ -467,12 +467,13 @@ void show_current_song()
         g_browser_players.collapse();
         g_player_song_index = ~0u;
         publish_preview({});
-        const unsigned first_category = category_index >= TAIKO_OVERLAY_SONG_ROW_COUNT
-            ? category_index - TAIKO_OVERLAY_SONG_ROW_COUNT + 1 : 0;
         const unsigned category_rows = std::min<unsigned>(TAIKO_OVERLAY_SONG_ROW_COUNT,
-            kSongCategories.size() - first_category);
+            kSongCategories.size());
+        const unsigned centre = category_rows / 2;
+        const unsigned first_category = (category_index + kSongCategories.size() - centre)
+            % kSongCategories.size();
         for (unsigned row = 0; row < category_rows; ++row) {
-            const unsigned category = first_category + row;
+            const unsigned category = (first_category + row) % kSongCategories.size();
             unsigned category_song_count = 0;
             std::unordered_set<std::string> category_groups;
             for (std::size_t index = 0; index < count; ++index) {
@@ -491,7 +492,7 @@ void show_current_song()
         }
         taiko_overlay_show_song_browser(
             g_session_label, "", kSongCategories[category_index].label,
-            "CATEGORY FOLDER", rows[category_index - first_category].catalog_index,
+            "CATEGORY FOLDER", rows[centre].catalog_index,
             category_index, static_cast<unsigned>(kSongCategories.size()),
             static_cast<unsigned>(count), "CATEGORIES", category_index,
             static_cast<unsigned>(kSongCategories.size()), "", 0, "", 0,

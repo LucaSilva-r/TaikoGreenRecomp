@@ -1082,6 +1082,10 @@ if(BUILD_TESTING AND NOT WIN32)
     target_link_libraries(taiko_host_frame_tests PRIVATE
         "${TAIKO_FREETYPE_LIB}" Threads::Threads)
     add_test(NAME taiko_host_frame_tests COMMAND taiko_host_frame_tests)
+    foreach(_overlay_test taiko_overlay_cache_tests taiko_host_frame_tests)
+        target_sources(${_overlay_test} PRIVATE "${PS3RECOMP_DIR}/libs/video/rsx_render_batch.c")
+        target_include_directories(${_overlay_test} PRIVATE "${PS3RECOMP_DIR}/include")
+    endforeach()
     set_tests_properties(taiko_host_frame_tests PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

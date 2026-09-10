@@ -28,8 +28,32 @@ static void collect_ui(void* user, const HostUiDraw* draw)
     }
 }
 
+static void check_menu_archive_bounds(void)
+{
+    unsigned char header[6500]={0};
+    size_t table=0,base=0;uint32_t count=0;
+    memcpy(header,"LM_NUT_TYPE1",12);
+    // Empty skip block, one LM with a one-byte name, 788 NUT records.
+    header[43]=1;header[56]=1;header[57]='x';
+    size_t count_pos=58+5+16+5;
+    header[count_pos+2]=3;header[count_pos+3]=20;
+    assert(menu_archive_table(header,sizeof header,&table,&count,&base));
+    assert(count==788 && table==97 && base==6417);
+    for(size_t n=0;n<6417;++n)
+        assert(!menu_archive_table(header,n,&table,&count,&base));
+    header[16]=255; // Oversized skip section must never index outside the header.
+    assert(!menu_archive_table(header,sizeof header,&table,&count,&base));
+    unsigned char nut[112]={0};menu_art out={0};
+    memcpy(nut,"NTP3",4);nut[7]=1;nut[27]=16;nut[35]=2;
+    nut[37]=4;nut[39]=4;nut[96]=255; // Valid single 4x4 BC3 block.
+    assert(menu_decode_nut(nut,sizeof nut,&out));free(out.pixels);
+    for(size_t n=0;n<112;++n) assert(!menu_decode_nut(nut,n,&out));
+    nut[36]=255;assert(!menu_decode_nut(nut,sizeof nut,&out));
+}
+
 int main(void)
 {
+    check_menu_archive_bounds();
     assert(font_ready());
     const char* texts[] = {"Groove", "★ 10", "P1 OK   P2 <", "太鼓の達人", "jgy (TEST)", "   ", "", "\xe3\x81"};
     const uint32_t colours[] = {RGB_COLOUR(0x29, 0x3a, 0x4d), 0, 0xffffffffu};
@@ -197,6 +221,25 @@ int main(void)
     assert(visit_host_ui(1, NULL, NULL, &info) && !info.overlay);
     taiko_overlay_hide_host_screen();
     assert(!visit_host_ui(3, NULL, NULL, &info));
+    // Category portraits occupy opposite bottom corners, including handoff.
+    row.title="J-POP";row.kind=TAIKO_OVERLAY_ROW_CATEGORY;row.selected=1;
+    taiko_overlay_show_song_browser("P1 + P2","","J-POP","",0,
+        0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,&row,1);
+    native_count=0;
+    assert(visit_host_ui(1,collect_ui,NULL,&info));
+    portraits=0;
+    for(unsigned i=0;i<native_count;++i) if(native_draws[i].surface_address) {
+        assert(native_draws[i].y==342);
+        assert(native_draws[i].x==(native_draws[i].flip_x?855:-105));
+        ++portraits;
+    }
+    assert(portraits==2);
+    taiko_overlay_animate_browser(1);
+    native_count=0;assert(visit_host_ui(1,collect_ui,NULL,&info));
+    g_handoff_start=monotonic_milliseconds()-HANDOFF_MS/2;
+    native_count=0;assert(visit_host_ui(1,collect_ui,NULL,&info));
+    for(unsigned i=0;i<native_count;++i) if(native_draws[i].surface_address)
+        assert(native_draws[i].flip_x?native_draws[i].x>855:native_draws[i].x< -105);
     for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) release_text_bitmap(&g_text_cache[i]);
     assert(g_text_cache_bytes == 0);
     return 0;

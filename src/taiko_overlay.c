@@ -23,6 +23,7 @@
 #include FT_STROKER_H
 
 #include "taiko_pairing_pill.h"
+#include "taiko_menu_art.h"
 
 /* The artwork sets the layout: a red disc on the left for the countdown, a
  * yellow body for the code. Both texts are black, as on the cabinet. */
@@ -98,6 +99,7 @@ typedef struct song_row_storage {
     unsigned difficulty, stars;
     uint8_t cursors, ready;
     float from_y, from_x;
+    float from_card_x, from_card_w;
 } song_row_storage;
 static song_row_storage g_song_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
 static unsigned g_song_row_count;
@@ -633,6 +635,8 @@ static uint32_t genre_colour(const char* genre)
     return palette[hash % (sizeof(palette) / sizeof(palette[0]))];
 }
 
+static int green_categories(void);
+
 static void emit_portrait(unsigned slot, float slide, unsigned alpha)
 {
     if (!g_ui_emit || !(g_browser_joined & (1u << slot)) ||
@@ -642,6 +646,11 @@ static void emit_portrait(unsigned slot, float slide, unsigned alpha)
     portrait.x = 28 + 150 + slide;
     portrait.y = 100 + slot * 272 - 75;
     portrait.w = portrait.h = 450;
+    if (green_categories()) {
+        portrait.x = (slot ? 855 : -105) + slide;
+        portrait.y = 342;
+        portrait.w = portrait.h = 430;
+    }
     portrait.colour = (alpha << 24) | 0xffffffu;
     portrait.surface_address = g_portraits[slot].address;
     portrait.width = g_portraits[slot].width;
@@ -649,6 +658,9 @@ static void emit_portrait(unsigned slot, float slide, unsigned alpha)
     portrait.flip_x = slot == 1;
     g_ui_emit(g_ui_user, &portrait);
 }
+
+
+#include "taiko_menu_layout.h"
 
 static void render_host(void)
 {
@@ -706,6 +718,8 @@ static void render_host(void)
                      HOST_WIDTH / 2, 535);
         return;
     }
+
+    if (green_categories()) { render_green_categories(); return; }
 
     /* Persistent song details and an animated song/difficulty carousel. Only
      * the 180 ms input transitions redraw; settled screens retain their frame. */
@@ -966,9 +980,13 @@ static void render_handoff(void)
                 }
             }
         }
-        if (panel == 0 && g_browser_players_enabled) {
-            emit_portrait(0, (float)x, alpha);
-            emit_portrait(1, (float)x, alpha);
+        if (g_browser_players_enabled) {
+            if (green_categories() && panel < 2)
+                emit_portrait(panel, (float)(x-xs[panel]), alpha);
+            else if (!green_categories() && panel == 0) {
+                emit_portrait(0, (float)x, alpha);
+                emit_portrait(1, (float)x, alpha);
+            }
         }
         offset += widths[panel] * heights[panel];
     }
@@ -1244,6 +1262,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
     memcpy(previous, g_song_rows, sizeof previous);
     const unsigned previous_count = g_song_row_count;
     const float old_ease = song_ease();
+    int previous_selected=0, next_selected=0;
+    for(unsigned i=0;i<previous_count;++i) if(previous[i].selected) previous_selected=(int)i;
+    for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) if(rows[i].selected) next_selected=(int)i;
     int changed = previous_count != row_count;
     g_song_row_count = row_count < TAIKO_OVERLAY_SONG_ROW_COUNT
         ? row_count : TAIKO_OVERLAY_SONG_ROW_COUNT;
@@ -1263,6 +1284,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
         item->ready = rows ? rows[row].ready : 0;
         item->from_y = 111 + row * 59;
         item->from_x = row_target_x(item->kind, item->selected) + 36;
+        int relative=(int)row-next_selected;
+        item->from_card_x=menu_card_x(relative);
+        item->from_card_w=menu_card_w(relative);
         int found = -1;
         for (unsigned old = 0; old < previous_count; ++old) {
             const song_row_storage* prior = &previous[old];
@@ -1271,6 +1295,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
                 found = (int)old;
                 item->from_y = prior->from_y + (111 + old * 59 - prior->from_y) * old_ease;
                 item->from_x = prior->from_x + (row_target_x(prior->kind, prior->selected) - prior->from_x) * old_ease;
+                int prior_relative=(int)old-previous_selected;
+                item->from_card_x=prior->from_card_x+(menu_card_x(prior_relative)-prior->from_card_x)*old_ease;
+                item->from_card_w=prior->from_card_w+(menu_card_w(prior_relative)-prior->from_card_w)*old_ease;
                 changed |= old != row || prior->selected != item->selected ||
                            prior->cursors != item->cursors || prior->ready != item->ready;
                 break;
@@ -1285,6 +1312,8 @@ void taiko_overlay_show_song_browser(const char* player_name,
     } else {
         /* Repeated publications (including held input) must not restart easing. */
         for (unsigned row = 0; row < g_song_row_count; ++row) {
+            g_song_rows[row].from_card_x = previous[row].from_card_x;
+            g_song_rows[row].from_card_w = previous[row].from_card_w;
             g_song_rows[row].from_y = previous[row].from_y;
             g_song_rows[row].from_x = previous[row].from_x;
         }

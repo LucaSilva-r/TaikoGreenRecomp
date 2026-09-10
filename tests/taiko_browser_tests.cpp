@@ -186,6 +186,18 @@ int main() {
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();
     assert(browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES && !courses());
+    // The carousel stays centred while traversing both wrap boundaries.
+    for (unsigned step=0; step<24; ++step) {
+        assert(rows.size()==9 && rows[4].selected);
+        unsigned selected=0;
+        for(const auto& row:rows) selected+=row.selected!=0;
+        assert(selected==1 && current_song==step%12);
+        key(TAIKO_BROWSER_NEXT);
+    }
+    key(TAIKO_BROWSER_PREVIOUS);
+    assert(current_song==11 && rows[4].selected);
+    key(TAIKO_BROWSER_NEXT);
+    assert(current_song==0 && rows[4].selected);
     key(TAIKO_BROWSER_PLAY); // Category opens without launching or selecting a course.
     assert(browser_level == TAIKO_OVERLAY_BROWSER_SONGS && !courses());
     key(TAIKO_BROWSER_PLAY); // Keyboard opens and joins P1.
