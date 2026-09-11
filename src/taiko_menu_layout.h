@@ -5,7 +5,13 @@ static int green_categories(void)
 {
     if (g_mode != 5) return 0;
     if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES) return 1;
-    if (g_song_search_active || g_song_query[0] || !g_song_row_count) return 0;
+    if(g_song_search_active)return 1;
+    if(!strcmp(g_song_category,"SEARCH RESULTS")) {
+        for(unsigned i=0;i<g_song_row_count;++i)
+            if(g_song_rows[i].kind==TAIKO_OVERLAY_ROW_DIFFICULTY)return 0;
+        return 1;
+    }
+    if (g_song_query[0] || !g_song_row_count) return 0;
     if(g_song_shared_carousel)return 1;
     for (unsigned i=0;i<g_song_row_count;++i)
         if (g_song_rows[i].kind == TAIKO_OVERLAY_ROW_DIFFICULTY ||
@@ -894,9 +900,41 @@ static void menu_carousel_emit(void *user,const HostUiDraw *source) {
     menu_layout_emit(menu_layout_user,&draw);
 }
 
+/* Preserve the scene behind the search editor while its matches are published. */
+typedef struct menu_search_scene {
+    song_row_storage rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
+    unsigned count;
+    char title[256], category[128];
+    int level, shared, open, closing;
+    uint8_t mask;
+    double animation, opening;
+} menu_search_scene;
+static menu_search_scene g_search_backdrop;
+static void menu_search_capture(menu_search_scene* s)
+{
+    memcpy(s->rows,g_song_rows,sizeof s->rows);s->count=g_song_row_count;
+    snprintf(s->title,sizeof s->title,"%s",g_song_title);
+    snprintf(s->category,sizeof s->category,"%s",g_song_category);
+    s->level=g_song_browser_level;s->shared=g_song_shared_carousel;
+    s->open=g_folder_open;s->closing=g_folder_closing;s->mask=g_song_difficulty_mask;
+    s->animation=g_song_animation_start;s->opening=g_folder_open_start;
+}
+static void menu_search_restore(const menu_search_scene* s)
+{
+    memcpy(g_song_rows,s->rows,sizeof s->rows);g_song_row_count=s->count;
+    snprintf(g_song_title,sizeof g_song_title,"%s",s->title);
+    snprintf(g_song_category,sizeof g_song_category,"%s",s->category);
+    g_song_browser_level=s->level;g_song_shared_carousel=s->shared;
+    g_folder_open=s->open;g_folder_closing=s->closing;g_song_difficulty_mask=s->mask;
+    g_song_animation_start=s->animation;g_folder_open_start=s->opening;
+}
+static void menu_render_search(void);
+
 static void render_green_categories(void)
 {
     menu_load_art();
+    if(g_song_search_active) {menu_render_search();return;}
+    const int results=!strcmp(g_song_category,"SEARCH RESULTS");
     const int categories=g_song_browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES;
     const menu_folder_style* active=menu_style(categories?g_song_title:g_song_category);
     unsigned bg=menu_background(active);
@@ -922,7 +960,19 @@ static void render_green_categories(void)
     for(unsigned i=0;i<g_song_row_count;++i) if(g_song_rows[i].selected) selected=(int)i;
     float ease=song_ease();
     if(g_folder_closing && monotonic_milliseconds()-g_folder_close_start>=800) g_folder_closing=0;
-    if(g_folder_closing) menu_close_folder(active);
+    if(results) {
+        menu_open_shell(active,54,573,-96,1376);
+        draw_text_fit("SEARCH RESULTS",30,300,640,90);
+        if(!g_song_row_count)draw_text_at("No matching songs",26,640,330);
+        for(unsigned pass=0;pass<2;++pass)for(unsigned i=0;i<g_song_row_count;++i) {
+            int rel=(int)i-selected;
+            if((!rel)!=(pass==1))continue;
+            float x,w;
+            menu_card_pose(g_song_rows[i].from_card_x,g_song_rows[i].from_card_w,rel,ease,&x,&w);
+            menu_song_card(&g_song_rows[i],menu_style(g_song_rows[i].genre),x,w,!rel,255);
+        }
+    }
+    else if(g_folder_closing) menu_close_folder(active);
     else if (!categories && g_folder_open && (!g_song_shared_carousel ||
              monotonic_milliseconds()-g_folder_open_start<2500.0/3)) menu_open_folder(active);
     else if(g_song_shared_carousel) menu_shared_window(g_song_rows,g_song_row_count,selected,ease,0,0,0);
@@ -1011,4 +1061,52 @@ static void render_green_categories(void)
         }
         draw_text_at("ESC  CANCEL",16,640,460);
     }
+}
+
+static void menu_render_search(void)
+{
+    menu_search_scene current;menu_search_capture(&current);
+    char saved_query[sizeof g_song_query];memcpy(saved_query,g_song_query,sizeof saved_query);
+    g_song_query[0]=0;
+    menu_search_restore(&g_search_backdrop);
+    g_song_search_active=0;g_folder_closing=0;
+    g_song_animation_start=g_folder_open_start=monotonic_milliseconds()-2000;
+    render_green_categories();
+    menu_search_restore(&current);g_song_search_active=1;
+    memcpy(g_song_query,saved_query,sizeof saved_query);
+    fill_rect(0,0,1280,720,0xc8000000u);
+    fill_rounded_rect(220,90,1060,164,16,0xff000000u);
+    fill_rounded_rect(224,94,1056,160,13,0xffffffffu);
+    int outline=g_menu_text_outline;
+    g_menu_text_outline=0;g_menu_text_tint=0;
+    const char* visible=g_song_query;
+    while(*visible && text_width(visible,28)>740) {
+        ++visible;while((*visible&0xc0)==0x80)++visible;
+    }
+    char query[160];snprintf(query,sizeof query,"%s%s",g_song_query[0]?visible:"Search songs...",((uint64_t)monotonic_milliseconds()/500)%2?" |":"");
+    draw_text_left_fit(query,28,790,244,128);
+    g_menu_text_tint=0xffffff;g_menu_text_outline=2;
+    char count[80];snprintf(count,sizeof count,"%u matching song%s",g_song_match_total,g_song_match_total==1?"":"s");
+    draw_text_at(g_song_query[0]?count:"Type a title or artist",20,640,193);
+    if(g_song_query[0]) {
+        unsigned selected=0,ordinal=0,selected_ordinal=0;
+        for(unsigned i=0;i<g_song_row_count;++i)if(g_song_rows[i].kind==TAIKO_OVERLAY_ROW_SONG) {
+            if(g_song_rows[i].selected){selected=i;selected_ordinal=ordinal;}
+            ++ordinal;
+        }
+        ordinal=0;
+        for(unsigned i=0;i<g_song_row_count;++i) {
+            const song_row_storage* row=&g_song_rows[i];
+            if(row->kind!=TAIKO_OVERLAY_ROW_SONG)continue;
+            float x=602+((int)ordinal++-(int)selected_ordinal)*96;
+            if(x+76<0 || x>1280)continue;
+            const menu_folder_style* source=menu_style(row->genre);
+            if(i==selected)fill_rounded_rect(x-5,231,x+81,611,4,0xffffffffu);
+            menu_folder(x,236,76,370,source,0);
+            menu_spine(row->title,x+38,252,330,menu_outline(source));
+        }
+        if(!g_song_match_total)draw_text_at("No matching songs",26,640,360);
+    }
+    draw_text_at("ENTER  OPEN RESULTS     ESC  CLOSE",20,640,660);
+    g_menu_text_outline=outline;g_outline_radius=outline;
 }

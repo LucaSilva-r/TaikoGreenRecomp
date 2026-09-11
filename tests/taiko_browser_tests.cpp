@@ -18,6 +18,9 @@ static std::vector<TaikoCatalogSong> songs;
 static std::vector<taiko_overlay_song_row> rows;
 static unsigned current_song;
 static int browser_level;
+static int search_editing;
+static std::string search_category,search_query;
+static std::vector<std::string> row_sources;
 static uint8_t joined, ready;
 static bool standalone = true;
 static unsigned identity_requests, identity_selection;
@@ -99,9 +102,11 @@ bool taiko_catalog_content_identity(std::size_t selection, unsigned, taiko_plus:
     return false;
 }
 extern "C" void taiko_overlay_show_song_browser(const char*, const char*, const char*, const char*,
-    uint32_t, unsigned index, unsigned, unsigned, const char*, unsigned, unsigned,
-    const char*, uint8_t, const char*, int, int level, int,
+    uint32_t, unsigned index, unsigned, unsigned, const char* category, unsigned, unsigned,
+    const char*, uint8_t, const char* query, int editing, int level, int,
     const taiko_overlay_song_row* input, unsigned count) {
+    search_editing=editing;search_category=category?category:"";search_query=query?query:"";
+    row_sources.clear();for(unsigned i=0;i<count;++i)row_sources.emplace_back(input[i].genre?input[i].genre:"");
     rows.clear();
     if (count) rows.assign(input, input + count);
     current_song = index;
@@ -378,6 +383,29 @@ int main() {
         assert(rows.size() == 2); // One matching set and its exit row.
         key(TAIKO_BROWSER_SEARCH_CLEAR);
     }
+
+    // Global search from inside a category keeps source colours, opens a
+    // result collection on the first Enter, and restores the list on Escape.
+    const auto stock_title=songs[0].title,osu_title=songs[osu_begin].title;
+    songs[0].title=songs[osu_begin].title="Shared Song";
+    key(TAIKO_BROWSER_FIRST);key(TAIKO_BROWSER_PLAY);key(TAIKO_BROWSER_NEXT);
+    key(TAIKO_BROWSER_SEARCH_TOGGLE);
+    assert(search_editing && taiko_frontend_browser_captures_text());
+    assert(taiko_frontend_browser_text("Shared Song猫"));
+    assert(rows.empty());
+    key(TAIKO_BROWSER_SEARCH_BACKSPACE);
+    assert(search_query=="Shared Song" && rows.size()==3);
+    bool stock_source=false,osu_source=false;
+    for(const auto& source:row_sources) {stock_source|=source=="J-POP";osu_source|=source=="OSU! LAZER";}
+    assert(stock_source && osu_source);
+    const auto launches=identity_requests;
+    key(TAIKO_BROWSER_PLAY);
+    assert(!search_editing && !taiko_frontend_browser_captures_text());
+    assert(search_category=="SEARCH RESULTS" && !courses() && identity_requests==launches);
+    key(TAIKO_BROWSER_PLAY);assert(courses()==5);
+    key(TAIKO_BROWSER_SEARCH_CLEAR);key(TAIKO_BROWSER_SEARCH_CLEAR);
+    assert(search_category=="J-POP" && browser_level==TAIKO_OVERLAY_BROWSER_SONGS && search_query.empty());
+    songs[0].title=stock_title;songs[osu_begin].title=osu_title;
 
     standalone = false;
     taiko_frontend_standalone_session_begin();

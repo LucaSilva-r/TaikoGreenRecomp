@@ -1392,6 +1392,7 @@ void taiko_overlay_show_song_browser(const char* player_name,
                                      unsigned row_count)
 {
     pthread_mutex_lock(&g_lock);
+    if(search_active && !g_song_search_active)menu_search_capture(&g_search_backdrop);
     const float old_card_width=menu_selected_width();
     const int was_categories = g_mode == 5 && g_visible &&
         g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES;

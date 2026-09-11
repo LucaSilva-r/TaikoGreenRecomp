@@ -445,6 +445,25 @@ int main(void)
             assert(0);
         }
     }
+    // Empty searches and committed collections stay on the new renderer.
+    // Drawing the frozen backdrop must not overwrite the live result state.
+    taiko_overlay_show_song_browser("P1","","","",0,0,0,100,
+        "SEARCH RESULTS",0,0,"",0,"missing",1,TAIKO_OVERLAY_BROWSER_SONGS,0,NULL,0);
+    assert(green_categories() && g_song_search_active);
+    background(0xff000000);render_green_categories();
+    assert(g_song_row_count==0 && !strcmp(g_song_query,"missing") && g_song_search_active);
+    taiko_overlay_song_row search_rows[2]={0};
+    search_rows[0].title="Dream";search_rows[0].genre="J-POP";search_rows[0].selected=1;search_rows[0].course_mask=8;
+    search_rows[1].title="Dreaming";search_rows[1].genre="OSU! LAZER";search_rows[1].course_mask=8;
+    taiko_overlay_show_song_browser("P1","","Dream","J-POP",0,1,2,100,
+        "SEARCH RESULTS",0,0,"ONI",8,"dream",1,TAIKO_OVERLAY_BROWSER_SONGS,0,search_rows,2);
+    background(0xff000000);render_green_categories();
+    assert(g_song_row_count==2 && !strcmp(g_song_rows[1].genre,"OSU! LAZER"));
+    assert(!strcmp(g_song_category,"SEARCH RESULTS") && !strcmp(g_song_query,"dream"));
+    taiko_overlay_show_song_browser("P1","","Dream","J-POP",0,1,2,100,
+        "SEARCH RESULTS",0,0,"ONI",8,"dream",0,TAIKO_OVERLAY_BROWSER_SONGS,0,search_rows,2);
+    assert(green_categories() && !g_song_search_active);
+    background(0xff000000);render_green_categories();
     taiko_preview_clock_ms=-1;
     for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) release_text_bitmap(&g_text_cache[i]);
     assert(g_text_cache_bytes == 0);

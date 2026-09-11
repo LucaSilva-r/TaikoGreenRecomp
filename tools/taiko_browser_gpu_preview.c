@@ -239,6 +239,34 @@ static int neighbours_preview(int argc,char** argv)
     }
     return rsx_sdl_gpu_backend_save_host_ui_bmp(argv[3],atoi(argv[1]),atoi(argv[2]));
 }
+static int search_preview(int argc,char** argv)
+{
+    neighbour_category=1;neighbour_position=5;neighbour_open=2;
+    taiko_overlay_set_browser_players(1,1,0,NULL);neighbours_publish();
+    Uint64 start=SDL_GetTicks();unsigned stage=0;
+    while(SDL_GetTicks()-start<4000) {
+        unsigned elapsed=SDL_GetTicks()-start;
+        unsigned next=elapsed<600?0:elapsed<1200?1:elapsed<2200?2:3;
+        if(next!=stage) {
+            stage=next;
+            static const char* titles[]={"Dream", "Dreamers", "Dream Parade", "Dreaming", "夢の続き", "Dream Song", "Return"};
+            static const char* genres[]={"J-POP","J-POP","ANIME","OSU! LAZER","VOCALOID","CUSTOM TJA","CUSTOM TJA"};
+            taiko_overlay_song_row rows[7]={0};
+            for(unsigned i=0;i<7;++i) {
+                rows[i].title=titles[i];rows[i].genre=genres[i];rows[i].kind=i==6?TAIKO_OVERLAY_ROW_EXIT:TAIKO_OVERLAY_ROW_SONG;
+                rows[i].catalog_index=i;rows[i].selected=i==2;rows[i].browser_position=i;rows[i].browser_total=7;
+                rows[i].course_mask=15;for(unsigned d=0;d<4;++d)rows[i].course_stars[d]=d+3;
+            }
+            int empty=!strcmp(argv[4],"search-empty");
+            int editing=strcmp(argv[4],"search-results") || stage<3;
+            taiko_overlay_show_song_browser("P1","","Dream Parade","ANIME",0,3,empty?0:6,881,"SEARCH RESULTS",0,0,"ONI",15,
+                stage==1?"":empty?"nothing matches":"dream",editing,TAIKO_OVERLAY_BROWSER_SONGS,0,empty?NULL:rows,empty?0:7);
+        }
+        if(rsx_sdl_gpu_backend_main_iterate(16))break;
+    }
+    return rsx_sdl_gpu_backend_save_host_ui_bmp(argv[3],atoi(argv[1]),atoi(argv[2]));
+}
+
 int main(int argc, char** argv)
 {
     if (ps3_host_sdl_init(PS3_HOST_SDL_VIDEO | PS3_HOST_SDL_GAMEPAD) != 0 ||
@@ -246,6 +274,12 @@ int main(int argc, char** argv)
     SDL_Window* window = SDL_GetKeyboardFocus();
     if (!window) { int count; SDL_Window** windows=SDL_GetWindows(&count); if(count)window=windows[0]; SDL_free(windows); }
     if (window && argc > 2) SDL_SetWindowSize(window, atoi(argv[1]),atoi(argv[2]));
+    if(argc>4 && !strncmp(argv[4],"search",6)) {
+        int result=search_preview(argc,argv);
+        unsigned errors=rsx_sdl_gpu_backend_error_count();
+        rsx_sdl_gpu_backend_main_shutdown();ps3_host_sdl_shutdown();
+        return result || errors;
+    }
     if(argc>4 && (!strcmp(argv[4],"opening") || !strcmp(argv[4],"opening-frame") || !strcmp(argv[4],"opening-frames"))) {
         int result=opening_preview(argc,argv);
         unsigned errors=rsx_sdl_gpu_backend_error_count();

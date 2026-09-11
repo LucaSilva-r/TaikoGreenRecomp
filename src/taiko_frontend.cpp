@@ -160,6 +160,8 @@ unsigned g_osu_variant = 0;
 enum class SongBrowserLevel { Categories, Songs };
 SongBrowserLevel g_song_browser_level = SongBrowserLevel::Categories;
 bool g_song_global_search = false;
+SongBrowserLevel g_search_return_level=SongBrowserLevel::Categories;
+unsigned g_search_return_position=0, g_search_return_selection=0;
 std::atomic<uint32_t> g_random_state{0x6D2B79F5u};
 std::atomic<uint64_t> g_preview_generation{0};
 std::mutex g_preview_lock;
@@ -644,7 +646,7 @@ void show_current_song()
         match_position = current.song_position;
         if (!selection_is_exit) selection = current.catalog_index;
 
-        const unsigned window_rows = !g_song_global_search && query.empty() && !custom_folder_browser()
+        const unsigned window_rows = !custom_folder_browser()
             ? TAIKO_OVERLAY_SONG_ROW_COUNT : TAIKO_OVERLAY_LIST_ROW_COUNT;
         row_count = std::min<unsigned>(window_rows, entry_total);
         unsigned first = g_song_browser_position > row_count / 2
@@ -1052,6 +1054,14 @@ void request_song_launch(unsigned player = 2)
     show_current_song();
 }
 
+void close_global_search_locked()
+{
+    g_song_global_search=false;g_song_query.clear();
+    g_song_browser_level=g_search_return_level;
+    rebuild_song_matches_locked(g_search_return_selection);
+    if(!g_song_entries.empty())g_song_browser_position=std::min<unsigned>(g_search_return_position,g_song_entries.size()-1);
+}
+
 void activate_browser_selection(unsigned player = 2)
 {
     bool launch_song = false;
@@ -1072,8 +1082,8 @@ void activate_browser_selection(unsigned player = 2)
             rebuild_song_matches_locked(~0u);
         } else if (!g_song_entries.empty() &&
                    g_song_entries[g_song_browser_position].exit_category) {
-            leave_song_folder_locked();
-            rebuild_song_matches_locked(~0u);
+            if(g_song_global_search)close_global_search_locked();
+            else {leave_song_folder_locked();rebuild_song_matches_locked(~0u);}
             g_song_global_search = false;
             g_song_query.clear();
             g_song_search_active.store(false, std::memory_order_release);
@@ -1440,22 +1450,19 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
     }
     case TAIKO_BROWSER_SEARCH_TOGGLE: {
         g_browser_players.collapse();
-        bool start_global_search = false;
+        const bool editing=g_song_search_active.load(std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lock(g_song_browser_lock);
-            if (g_song_browser_level == SongBrowserLevel::Categories) {
-                g_song_browser_level = SongBrowserLevel::Songs;
-                g_song_global_search = true;
-                g_song_query.clear();
-                rebuild_song_matches_locked(
-                    g_song_selection.load(std::memory_order_acquire));
-                start_global_search = true;
+            if(!g_song_global_search) {
+                g_search_return_level=g_song_browser_level;
+                g_search_return_position=g_song_browser_position;
+                g_search_return_selection=g_song_selection.load(std::memory_order_acquire);
             }
+            g_song_browser_level = SongBrowserLevel::Songs;
+            g_song_global_search = true;
+            if(!editing) rebuild_song_matches_locked(g_song_selection.load(std::memory_order_acquire));
         }
-        g_song_search_active.store(
-            start_global_search ||
-                !g_song_search_active.load(std::memory_order_relaxed),
-            std::memory_order_release);
+        g_song_search_active.store(!editing,std::memory_order_release);
         show_current_song();
         break;
     }
@@ -1472,9 +1479,11 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
             std::lock_guard<std::mutex> lock(g_song_browser_lock);
             if (g_song_browser_level == SongBrowserLevel::Categories)
                 return 0;
-            if (g_song_search_active.load(std::memory_order_relaxed) ||
+            if(g_song_global_search)close_global_search_locked();
+            else if (g_song_search_active.load(std::memory_order_relaxed) ||
                 !g_song_query.empty()) {
                 g_song_query.clear();
+                g_song_global_search=false;
                 rebuild_song_matches_locked(selected);
             } else {
                 leave_song_folder_locked();

@@ -24,6 +24,19 @@ choose the same chart.
   selection and readiness. Changing one player's chart preserves the other's
   ready state. Joining another player clears readiness for both.
 
+Tab or Ctrl+F opens a search field over the dimmed current scene. Search is
+always global, including when opened from inside a category. Matching songs
+appear as horizontal spines while typing; their colours identify their source
+(J-pop blue, osu!lazer pink, and so on). The first Enter closes the editor and
+opens a green **SEARCH RESULTS** collection. Browsing and opening a song then
+use the normal controls. Escape or the collection's Return card restores the
+category and position where search began. Empty results stay on the new screen
+and cannot launch a song. Backspace removes a complete UTF-8 character; long
+queries scroll inside the field to keep their end visible.
+
+Preview modes `search`, `search-results`, and `search-empty` exercise the
+editor, committed collection, and empty-state layout through SDL_GPU.
+
 The left panel retains song details and join/ready status. Difficulty selection
 lives entirely in the library. The header and all installed stock difficulties
 remain visible together, even at the beginning/end of a category. Row movement
