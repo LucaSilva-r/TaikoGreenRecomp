@@ -404,6 +404,28 @@ static int render_green_difficulty(void)
      * guest's current course, so a published cursor counts as present. */
     unsigned present=g_browser_joined;
     for(unsigned c=0;c<columns;++c) present|=rows[column_row[c]].cursors;
+    /* Resolve both animated positions before drawing either player. A shared
+     * logical selection is merged only once both cursors reach the column. */
+    float cursor_x[2]={0,0},cursor_y[2]={0,0};
+    int cursor_settled[2]={0,0};
+    for(unsigned p=0;p<2;++p) {
+        if(!(present&(1u<<p)))continue;
+        const int item=g_difficulty_menu.item[p];
+        float target_x,target_y;
+        if(item<0) {
+            unsigned tab=(unsigned)(item+3)<3?(unsigned)(item+3):0;
+            target_x=menu_tab_x[tab]+40;target_y=MENU_TAB_TOP+6-131;
+        } else {
+            unsigned c=0;
+            while(c<columns && !(rows[column_row[c]].cursors&(1u<<p)))++c;
+            if(c>=columns || !visible[c] || drops[c]>1)continue;
+            target_x=centres[c];target_y=6;
+        }
+        cursor_x[p]=menu_cursor_position(p,0,target_x);
+        cursor_y[p]=menu_cursor_position(p,1,target_y);
+        cursor_settled[p]=fabsf(cursor_x[p]-target_x)<0.01f &&
+                          fabsf(cursor_y[p]-target_y)<0.01f;
+    }
     for(unsigned p=0;p<2;++p) {
         if(!(present&(1u<<p))) continue;
         if((g_browser_ready&(1u<<p)) &&
@@ -413,7 +435,7 @@ static int render_green_difficulty(void)
         int shared_course=0;
         if(item<0) {
             const unsigned t=(unsigned)(item+3)<3?(unsigned)(item+3):0;
-            tip_x=menu_cursor_position(p,0,menu_tab_x[t]+40);
+            tip_x=cursor_x[p];
             balloon_y=MENU_TAB_TOP+6-131;
             menu_image(p?146:133,tip_x-40,MENU_TAB_TOP,MENU_TAB_W,MENU_TAB_H,0);
         } else {
@@ -426,8 +448,9 @@ static int render_green_difficulty(void)
                 menu_fit_text(rows[column_row[c]].title,18,115,edge,500+p*40,0xffffff,2,0);
                 continue;
             }
-            tip_x=menu_cursor_position(p,0,centres[c]);
-            shared_course=(rows[column_row[c]].cursors&3)==3 && !(g_browser_ready&3) &&
+            tip_x=cursor_x[p];
+            shared_course=cursor_settled[0] && cursor_settled[1] &&
+                (rows[column_row[c]].cursors&3)==3 && !(g_browser_ready&3) &&
                 g_difficulty_menu.item[0]>=0 && g_difficulty_menu.item[1]>=0;
             /* The coloured stroke extends under the course icon and below
              * the last star, ending just above the drum. The sprite's stroke
@@ -440,7 +463,7 @@ static int render_green_difficulty(void)
             /* Its point rests on the wood frame's top, overlapping the icon. */
             balloon_y=6;
         }
-        balloon_y=menu_cursor_position(p,1,balloon_y);
+        balloon_y=cursor_y[p];
         /* One-player selection uses the coloured border alone. */
         if((present&3)!=3)continue;
         const unsigned saved_alpha=g_menu_alpha;
