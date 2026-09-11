@@ -7,6 +7,7 @@
  * and transparent outlined bitmaps while browser rows animate.
  */
 #include "taiko_overlay.h"
+#include "taiko_title_render.h"
 #include "rsx_host_ui.h"
 
 #include <limits.h>
@@ -46,7 +47,7 @@ static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
     (0xFF000000u | ((uint32_t)(blue) << 16) | \
      ((uint32_t)(green) << 8) | (uint32_t)(red))
 enum { TEXT_OUTLINE_RADIUS = 3 };
-static int g_outline_radius = TEXT_OUTLINE_RADIUS;
+static _Thread_local int g_outline_radius = TEXT_OUTLINE_RADIUS;
 static int g_menu_text_outline = TEXT_OUTLINE_RADIUS;
 static unsigned g_text_opacity=255;
 static HostUiEmit g_ui_emit;
@@ -58,12 +59,12 @@ extern HostUiVisit g_rsx_host_ui_visit __attribute__((weak));
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t g_frame_pixels[OVERLAY_MAX_WIDTH * OVERLAY_MAX_HEIGHT];
-static uint32_t* g_pixels = g_frame_pixels;
+static _Thread_local uint32_t* g_pixels = g_frame_pixels;
 static uint32_t g_version;
 static int      g_visible;
 static int      g_mode;             /* 1 pairing, 2 status, 3--5 host screens */
-static int      g_width = PILL_WIDTH;
-static int      g_height = PILL_HEIGHT;
+static _Thread_local int      g_width = PILL_WIDTH;
+static _Thread_local int      g_height = PILL_HEIGHT;
 static int      g_host_selection;
 static char     g_code[16];
 static char     g_status[32];
@@ -140,9 +141,9 @@ static const double HANDOFF_MS = 320.0;
 static long     g_deadline;
 static int      g_drawn_remaining = -1;
 
-static FT_Library g_library;
-static FT_Face    g_face;
-static int        g_font_state;    /* 0 untried, 1 ready, -1 unavailable */
+static _Thread_local FT_Library g_library;
+static _Thread_local FT_Face    g_face;
+static _Thread_local int        g_font_state;    /* 0 untried, 1 ready, -1 unavailable */
 
 /* Published to the RSX backend. Weak symbols keep null/alternate renderer
  * builds independent of this title extension. */
@@ -167,6 +168,12 @@ static long monotonic_seconds(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long)ts.tv_sec;
+}
+
+static double text_profile_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec*1000.0+ts.tv_nsec/1000000.0;
 }
 
 static double monotonic_milliseconds(void)
@@ -297,6 +304,7 @@ static void draw_pill(void)
 
 /* The outline is the glyph's own coverage grown into a disc, which is what
  * keeps the border even around the font's rounded strokes. */
+static _Thread_local int g_cached_outline_pass;
 static void draw_glyph(const FT_Bitmap* bitmap, int origin_x, int origin_y,
                        int outline)
 {
@@ -311,10 +319,39 @@ static void draw_glyph(const FT_Bitmap* bitmap, int origin_x, int origin_y,
                 put_pixel(px, py, COLOR_TEXT, coverage);
                 continue;
             }
-            for (int dy = -g_outline_radius; dy <= g_outline_radius; dy++)
-                for (int dx = -g_outline_radius; dx <= g_outline_radius; dx++)
-                    if (dx * dx + dy * dy <= g_outline_radius * g_outline_radius)
-                        put_pixel(px + dx, py + dy, COLOR_TEXT_OUTLINE, coverage);
+            if(g_cached_outline_pass && coverage==255 && row>0 && column>0 &&
+               row+1<bitmap->rows && column+1<bitmap->width &&
+               bitmap->buffer[(row-1)*bitmap->pitch+column]==255 &&
+               bitmap->buffer[(row+1)*bitmap->pitch+column]==255 &&
+               bitmap->buffer[row*bitmap->pitch+column-1]==255 &&
+               bitmap->buffer[row*bitmap->pitch+column+1]==255) {
+                if(px>=0 && py>=0 && px<g_width && py<g_height)
+                    g_pixels[(size_t)py*g_width+px]=COLOR_TEXT_OUTLINE;
+                continue;
+            }
+            // All outline samples have one colour. Accumulate alpha directly
+            // instead of repeating three straight-alpha colour divisions per
+            // overlapping sample. Once opaque, further samples do nothing.
+            for (int dy = -g_outline_radius; dy <= g_outline_radius; ++dy) {
+                int yy=py+dy;
+                if(yy<0 || yy>=g_height)continue;
+                int span=g_outline_radius;
+                while(span*span+dy*dy>g_outline_radius*g_outline_radius)--span;
+                int lo=px-span,hi=px+span;
+                if(lo<0)lo=0;
+                if(hi>=g_width)hi=g_width-1;
+                for(int xx=lo;xx<=hi;++xx) {
+                    uint32_t *dst=&g_pixels[(size_t)yy*g_width+xx];
+                    if(!g_cached_outline_pass) {
+                        put_pixel(xx,yy,COLOR_TEXT_OUTLINE,coverage);
+                        continue;
+                    }
+                    unsigned alpha=*dst>>24;
+                    if(alpha==255)continue;
+                    alpha=coverage+(alpha*(255-coverage)+127)/255;
+                    *dst=(alpha<<24)|(COLOR_TEXT_OUTLINE&0xffffffu);
+                }
+            }
         }
     }
 }
@@ -405,9 +442,9 @@ typedef struct text_cache_entry {
     uint64_t used;
     uint32_t* bitmap;
 } text_cache_entry;
-static text_cache_entry g_text_cache[TEXT_CACHE_COUNT];
-static size_t g_text_cache_bytes;
-static uint64_t g_text_cache_clock, g_text_texture_id;
+static _Thread_local text_cache_entry g_text_cache[TEXT_CACHE_COUNT];
+static _Thread_local size_t g_text_cache_bytes;
+static _Thread_local uint64_t g_text_cache_clock, g_text_texture_id;
 
 static void release_text_bitmap(text_cache_entry* entry)
 {
@@ -461,6 +498,7 @@ static text_cache_entry* get_text(const char* text, int pixels)
 static int rasterize_text(text_cache_entry* entry)
 {
     if (entry->rasterized) return 1;
+    double profile_start=text_profile_ms();
     if (FT_Set_Pixel_Sizes(g_face, 0, (FT_UInt)entry->pixels) != 0) return 0;
     int left = 0, right = 0, top = 0, bottom = 0, pen = 0;
     const unsigned char* cursor = (const unsigned char*)entry->text;
@@ -503,14 +541,17 @@ static int rasterize_text(text_cache_entry* entry)
     g_pixels = entry->bitmap;
     g_width = entry->width;
     g_height = entry->height;
+    g_cached_outline_pass=1;
     draw_text_uncached(entry->text, entry->pixels,
                        entry->advance / 2 - entry->left,
                        -entry->top - entry->baseline_shift);
+    g_cached_outline_pass=0;
     g_pixels = frame;
     g_width = frame_width;
     g_height = frame_height;
-    entry->texture_id = ++g_text_texture_id;
+    if(!entry->texture_id)entry->texture_id = ++g_text_texture_id;
     entry->rasterized = 1;
+    if(getenv("TAIKO_TEXT_PROFILE")) fprintf(stderr,"[TEXT] horizontal px=%d ms=%.3f text=%s\n",entry->pixels,text_profile_ms()-profile_start,entry->text);
     return 1;
 }
 
@@ -520,19 +561,103 @@ static int text_width(const char* text, int pixels)
     return entry ? entry->advance : text_width_uncached(text, pixels);
 }
 
+/* CPU-only worker owns its FreeType face and raster state. The renderer
+ * only submits keys and reads completed immutable buffers; it never waits for
+ * glyph generation. Jobs are bounded and newly visible labels take priority. */
+enum { ASYNC_TEXT_SLOTS=96 };
+typedef struct AsyncText {
+    int state, spine;
+    unsigned rgb, scale;
+    double used, ready;
+    text_cache_entry result;
+} AsyncText;
+static AsyncText g_async_text[ASYNC_TEXT_SLOTS];
+static pthread_mutex_t g_async_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_async_cond=PTHREAD_COND_INITIALIZER;
+static pthread_once_t g_async_once=PTHREAD_ONCE_INIT;
+static int g_async_available;
+static uint64_t g_async_texture_id=UINT64_C(0x4900000000000000);
+static void *text_worker(void *unused) {
+    (void)unused;
+    font_ready();
+    for(;;) {
+        pthread_mutex_lock(&g_async_lock);
+        int selected=-1;
+        for(int i=0;i<ASYNC_TEXT_SLOTS;++i)
+            if(g_async_text[i].state==1 && (selected<0 || g_async_text[i].used>g_async_text[selected].used))selected=i;
+        if(selected<0) {pthread_cond_wait(&g_async_cond,&g_async_lock);pthread_mutex_unlock(&g_async_lock);continue;}
+        AsyncText *job=&g_async_text[selected];job->state=2;
+        text_cache_entry result=job->result;
+        int spine=job->spine;unsigned scale=job->scale,rgb=job->rgb;
+        pthread_mutex_unlock(&g_async_lock);
+        if(spine) {
+            result.width=56*scale;result.height=400*scale;
+            result.bitmap=calloc((size_t)result.width*result.height,4);
+            result.rasterized=result.bitmap && taiko_title_render_spine_scaled_argb(result.text,result.bitmap,rgb,scale);
+            if(result.rasterized)for(int i=0;i<result.width*result.height;++i) {
+                uint32_t c=result.bitmap[i];result.bitmap[i]=(c&0xff00ff00u)|((c>>16)&255)|((c&255)<<16);
+            }
+        } else {
+            g_outline_radius=result.outline;
+            rasterize_text(&result);
+            // Ownership transfers to the job cache, not the worker's cache.
+            g_text_cache_bytes=0;
+        }
+        pthread_mutex_lock(&g_async_lock);
+        job->result=result;job->ready=text_profile_ms();job->state=3;
+        pthread_mutex_unlock(&g_async_lock);
+        wake_renderer();
+    }
+    return NULL;
+}
+static void start_text_worker(void) {
+    pthread_t thread;
+    if(!pthread_create(&thread,NULL,text_worker,NULL)) {
+        pthread_detach(thread);g_async_available=1;
+    }
+}
+static text_cache_entry *async_text(const text_cache_entry *key,int spine,unsigned scale,unsigned rgb,float *fade) {
+    pthread_once(&g_async_once,start_text_worker);
+    if(!g_async_available)return NULL;
+    double now=text_profile_ms();
+    pthread_mutex_lock(&g_async_lock);
+    int slot=-1;
+    for(int i=0;i<ASYNC_TEXT_SLOTS;++i) {
+        AsyncText *job=&g_async_text[i];
+        if(job->state && job->spine==spine && job->scale==scale && job->rgb==rgb &&
+           job->result.pixels==key->pixels && job->result.outline==key->outline && !strcmp(job->result.text,key->text)) {
+            job->used=now;
+            text_cache_entry *result=job->state==3 && job->result.rasterized?&job->result:NULL;
+            *fade=(float)((now-job->ready)/80.0);if(*fade>1)*fade=1;if(*fade<0)*fade=0;
+            pthread_mutex_unlock(&g_async_lock);return result;
+        }
+        if(!job->state || (job->state!=2 && now-job->used>1000 && (slot<0 || job->used<g_async_text[slot].used)))slot=i;
+    }
+    if(slot>=0) {
+        AsyncText *job=&g_async_text[slot];free(job->result.bitmap);memset(job,0,sizeof(*job));
+        job->result=*key;job->result.bitmap=NULL;job->result.rasterized=0;
+        job->result.texture_id=++g_async_texture_id;
+        job->spine=spine;job->scale=scale;job->rgb=rgb;job->used=now;job->state=1;
+        pthread_cond_signal(&g_async_cond);
+    }
+    pthread_mutex_unlock(&g_async_lock);return NULL;
+}
+
 static void draw_text_at(const char* text, int pixels, float centre_x, float centre_y)
 {
     if (g_ui_emit) {
         const int native_pixels = (int)ceilf(pixels * g_ui_scale);
         g_outline_radius = (int)ceilf(g_menu_text_outline * g_ui_scale);
         text_cache_entry* native = get_text(text, native_pixels);
-        if (native && rasterize_text(native)) {
+        float fade=1;
+        if(native)native=async_text(native,0,0,0,&fade);
+        if (native) {
             HostUiDraw draw = {0};
             draw.x = centre_x + (native->left - native->advance / 2) / g_ui_scale;
             draw.y = centre_y + (native->top + native->baseline_shift) / g_ui_scale;
             draw.w = native->width / g_ui_scale;
             draw.h = native->height / g_ui_scale;
-            draw.colour = (g_text_opacity<<24)|0xffffffu;
+            draw.colour = ((unsigned)(g_text_opacity*fade)<<24)|0xffffffu;
             draw.texture_id = native->texture_id;
             draw.pixels = native->bitmap;
             draw.width = native->width;
@@ -1571,6 +1696,9 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
     if (g_mode == 5 && g_browser_players_enabled &&
         ((g_portraits[0].address && (g_browser_joined & 1)) ||
          (g_portraits[1].address && (g_browser_joined & 2)))) info->animated = 1;
+    pthread_mutex_lock(&g_async_lock);
+    for(int i=0;i<ASYNC_TEXT_SLOTS;++i)if(g_async_text[i].state && text_profile_ms()-g_async_text[i].used<200 && (g_async_text[i].state!=3 || text_profile_ms()-g_async_text[i].ready<100))info->animated=1;
+    pthread_mutex_unlock(&g_async_lock);
     info->overlay = g_handoff < 0;
     if ((g_mode == 4 || (g_mode == 5 && g_browser_login_phase == 1)) && g_code[0]) info->animated = 1;
     if (emit) {

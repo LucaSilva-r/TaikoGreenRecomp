@@ -30,6 +30,24 @@ static void collect_ui(void* user, const HostUiDraw* draw)
     }
 }
 
+static int settled_ui(float scale, HostUiInfo *info) {
+    double deadline=text_profile_ms()+5000;
+    for(;;) {
+        native_count=native_texts=native_height=0;
+        int ok=visit_host_ui(scale,collect_ui,NULL,info);
+        int pending=0;
+        pthread_mutex_lock(&g_async_lock);
+        for(int i=0;i<ASYNC_TEXT_SLOTS;++i) {
+            AsyncText *job=&g_async_text[i];
+            if(job->state==1 || job->state==2 || (job->state==3 && text_profile_ms()-job->ready<100))pending=1;
+        }
+        pthread_mutex_unlock(&g_async_lock);
+        if(!pending)return ok;
+        assert(text_profile_ms()<deadline);
+        struct timespec delay={0,1000000};nanosleep(&delay,NULL);
+    }
+}
+
 static void check_menu_archive_bounds(void)
 {
     unsigned char header[6500]={0};
@@ -109,15 +127,20 @@ int main(void)
     assert(!memcmp(reference, g_pixels, sizeof reference));
     taiko_overlay_show_entry_menu(0);
     HostUiInfo info;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_count && native_texts);
+    // Dynamic text IDs must never alias fixed menu artwork (0x40..0x48).
+    pthread_mutex_lock(&g_async_lock);
+    for(int i=0;i<ASYNC_TEXT_SLOTS;++i)if(g_async_text[i].state)
+        assert((g_async_text[i].result.texture_id>>56)==0x49);
+    pthread_mutex_unlock(&g_async_lock);
     unsigned first_count = native_count, first_height = native_height;
     uint64_t first_ids[512]; memcpy(first_ids, native_ids, sizeof first_ids);
     native_count = native_texts = native_height = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_count == first_count && !memcmp(first_ids, native_ids, first_count*sizeof(uint64_t)));
     native_count = native_texts = native_height = 0;
-    assert(visit_host_ui(3, collect_ui, NULL, &info));
+    assert(settled_ui(3, &info));
     assert(native_count == first_count && native_height > first_height * 2);
     taiko_overlay_song_row row = {0};
     row.title = "One song"; row.genre = "J-POP"; row.selected = 1;
@@ -128,7 +151,7 @@ int main(void)
     // Even if the first poll is after the deadline, present the final position.
     assert(visit_host_ui(1, NULL, NULL, &info) && info.animated);
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(visit_host_ui(1, NULL, NULL, &info) && !info.animated);
     // Folder-only levels have zero direct songs but must draw their rows.
     row.title = "Folder A"; row.kind = TAIKO_OVERLAY_ROW_CATEGORY;
@@ -136,7 +159,7 @@ int main(void)
         0, 0, 1, "CUSTOM TJA", 9, 10, "", 0, "", 0, 1, 1, &row, 1);
     g_song_animation_start = monotonic_milliseconds() - 600;
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     first_count = native_count;
     memcpy(first_ids, native_ids, first_count * sizeof(uint64_t));
     row.title = "Folder B";
@@ -144,7 +167,7 @@ int main(void)
         0, 0, 1, "CUSTOM TJA", 9, 10, "", 0, "", 0, 1, 1, &row, 1);
     g_song_animation_start = monotonic_milliseconds() - 600;
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_count != first_count ||
            memcmp(first_ids, native_ids, first_count * sizeof(uint64_t)));
     // Incoming panels are opaque as a screen, with a black backing. Polling
@@ -153,13 +176,13 @@ int main(void)
     assert(visit_host_ui(1, NULL, NULL, &info) && info.animated && !info.overlay);
     assert(!g_handoff_snapshot);
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_count == 4 && native_draws[0].colour == 0xff000000u);
     assert(native_draws[1].x == -96 && native_draws[2].x == 666);
     uint64_t panel_id = native_draws[1].texture_id;
     g_handoff_start = monotonic_milliseconds() - HANDOFF_MS / 2;
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_draws[1].texture_id == panel_id); // No animated texture churn.
     assert(native_draws[1].x >= -49 && native_draws[1].x <= -47);
     assert((native_draws[1].colour >> 24) >= 127 && (native_draws[1].colour >> 24) <= 129);
@@ -169,7 +192,7 @@ int main(void)
     taiko_overlay_animate_browser(1);
     assert(visit_host_ui(1, NULL, NULL, &info) && info.animated && info.overlay);
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_count == 3 && native_draws[0].x == 0);
     g_handoff_start = monotonic_milliseconds() - HANDOFF_MS / 2;
     HostFrameInfo cpu;
@@ -189,12 +212,12 @@ int main(void)
     taiko_overlay_set_browser_portrait(1, 0xc1200000, 600, 600);
     taiko_overlay_set_browser_players(1, 0, 0, NULL);
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     for (unsigned i = 0; i < native_count; ++i) assert(!native_draws[i].surface_address);
     taiko_overlay_set_browser_players(1, 2, 0, NULL);
     assert(taiko_overlay_browser_joined() == 2);
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info) && info.animated);
+    assert(settled_ui(1, &info) && info.animated);
     unsigned portraits = 0;
     for (unsigned i = 0; i < native_count; ++i) {
         if (!native_draws[i].surface_address) continue;
@@ -205,13 +228,13 @@ int main(void)
     taiko_overlay_set_browser_players(1, 3, 0, NULL);
     taiko_overlay_animate_browser(1);
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_count == 5); // Three panels plus two native surfaces.
     assert(native_draws[1].surface_address == 0xc1000000 && !native_draws[1].flip_x);
     assert(native_draws[2].surface_address == 0xc1200000 && native_draws[2].flip_x);
     g_handoff_start = monotonic_milliseconds() - HANDOFF_MS / 2;
     native_count = 0;
-    assert(visit_host_ui(1, collect_ui, NULL, &info));
+    assert(settled_ui(1, &info));
     assert(native_draws[1].x == 178 + native_draws[0].x);
     assert(native_draws[1].colour == native_draws[0].colour);
     assert(native_draws[2].colour == native_draws[0].colour);

@@ -303,3 +303,17 @@ the output argument as a filename prefix. `back-start-frames`,
 `back-middle-frames` and `back-end-frames` do the same for closing. The singular
 `*-frame N` variants save only frame N; all frame numbers use 60 Hz timestamps.
 These modes freeze the preview clock and render the production GPU draw path.
+
+### Character render resolution
+
+The SDL GPU backend renders the 600x600 character attachment chain at the
+window's integer resolution scale (1x at 720p, 2x at 1080p, capped at 3x).
+Guest coordinates, UVs and filter offsets are retained; attachment storage,
+viewports and scissors scale together. The host browser samples the enlarged
+surface directly. Resizing preserves colour attachments until the next guest
+update. Capture seeds remain in guest dimensions.
+
+`TAIKO_CHARACTER_RENDER_SCALE=1`, `2` or `3` overrides automatic selection.
+Higher settings increase character GPU fill and attachment memory usage.
+An offline costume capture was compared at 600x600 and 1200x1200; live resize
+and performance on lower-powered devices still require validation.

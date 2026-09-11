@@ -220,10 +220,23 @@ static void menu_spine(const char* text, float x, float y, float height, uint32_
 {
     unsigned scale=(unsigned)ceilf(height / 400 * (g_ui_emit ? g_ui_scale : 1));
     if(scale<1)scale=1; if(scale>4)scale=4;
+    if(g_ui_emit) {
+        text_cache_entry key={0};
+        snprintf(key.text,sizeof key.text,"%s",text);
+        float fade=1;
+        text_cache_entry *ready=async_text(&key,1,scale,outline,&fade);
+        if(!ready)return;
+        menu_art art={0};art.width=ready->width;art.height=ready->height;art.pixels=ready->bitmap;
+        unsigned alpha=g_menu_alpha;g_menu_alpha=(unsigned)(alpha*fade);
+        float width=height*56/400;
+        menu_bitmap(&art,ready->texture_id,x-width/2,y,width,height,0);
+        g_menu_alpha=alpha;return;
+    }
     unsigned slot;
     for (slot=0; slot<16; ++slot)
         if (g_menu_spines[slot].art.pixels && !strcmp(text,g_menu_spines[slot].title) && g_menu_spines[slot].outline==outline && g_menu_spines[slot].art.width==56*(int)scale) break;
     if (slot==16) {
+        double profile_start=text_profile_ms();
         slot=g_menu_spine_next++%16;
         menu_art* art=&g_menu_spines[slot].art;
         free(art->pixels);
@@ -238,6 +251,7 @@ static void menu_spine(const char* text, float x, float y, float height, uint32_
             uint32_t c=art->pixels[i];
             art->pixels[i]=(c&0xff00ff00u)|((c>>16)&255)|((c&255)<<16);
         }
+        if(getenv("TAIKO_TEXT_PROFILE")) fprintf(stderr,"[TEXT] spine scale=%u ms=%.3f text=%s\n",scale,text_profile_ms()-profile_start,text);
         snprintf(g_menu_spines[slot].title,sizeof g_menu_spines[slot].title,"%s",text);
         g_menu_spines[slot].outline=outline;
         g_menu_spines[slot].id=UINT64_C(0x4200000000000000)+ ++g_menu_spine_generation;

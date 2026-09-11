@@ -1455,23 +1455,42 @@ static void buf_to_argb(const Buf *b, uint32_t *out, int ow, int oh) {
 /* Dilate the completed fill, rather than offsetting intersecting font
  * contours. Horizontal runs of the disk keep this bounded at large sizes. */
 static void browser_outline(Buf *dst, const Buf *fill, TitleProfile *p) {
-    int r=(int)(p->stroke_radius+0.5f);
-    for(int y=0;y<fill->h;++y) for(int x=0;x<fill->w;++x) {
-        unsigned a=fill->px[((size_t)y*fill->w+x)*4+3];
+    int r=(int)(p->stroke_radius+0.5f),w=fill->w,h=fill->h;
+    int spans[129];
+    if(r>64)r=64;
+    for(int dy=-r;dy<=r;++dy) {
+        int span=r;
+        while(span*span+dy*dy>r*r)--span;
+        spans[dy+r]=span;
+    }
+    /* Only boundary pixels can extend the outline outside the glyph. Solid
+     * interior pixels already belong to the result, so never stamp their disks.
+     * Keep antialiased boundary coverage and the exact circular footprint. */
+    for(int y=0;y<h;++y)for(int x=0;x<w;++x) {
+        size_t index=((size_t)y*w+x)*4;
+        unsigned a=fill->px[index+3];
         if(!a)continue;
+        if(a==255 && x>0 && y>0 && x+1<w && y+1<h &&
+           fill->px[index-4+3]==255 && fill->px[index+4+3]==255 &&
+           fill->px[index-w*4+3]==255 && fill->px[index+w*4+3]==255) {
+            dst->px[index+3]=255;
+            continue;
+        }
         for(int dy=-r;dy<=r;++dy) {
-            int yy=y+dy;if(yy<0 || yy>=dst->h)continue;
-            int span=0;while((span+1)*(span+1)+dy*dy<=r*r)++span;
-            int lo=x-span,hi=x+span;
-            if(lo<0)lo=0;if(hi>=dst->w)hi=dst->w-1;
+            int yy=y+dy;if(yy<0 || yy>=h)continue;
+            int lo=x-spans[dy+r],hi=x+spans[dy+r];
+            if(lo<0)lo=0;
+            if(hi>=w)hi=w-1;
             for(int xx=lo;xx<=hi;++xx) {
-                uint8_t *d=dst->px+((size_t)yy*dst->w+xx)*4;
-                if(d[3]<a) {
-                    d[0]=div255(p->out_r*a);d[1]=div255(p->out_g*a);
-                    d[2]=div255(p->out_b*a);d[3]=a;
-                }
+                uint8_t *d=dst->px+((size_t)yy*w+xx)*4;
+                if(d[3]<a)d[3]=a;
             }
         }
+    }
+    for(int i=0;i<w*h;++i) {
+        uint8_t *d=dst->px+(size_t)i*4;
+        d[0]=div255(p->out_r*d[3]);d[1]=div255(p->out_g*d[3]);
+        d[2]=div255(p->out_b*d[3]);
     }
 }
 

@@ -205,6 +205,7 @@ typedef struct pace_sample {
 typedef struct gpu_surface {
     rsx_surface_ref ref;
     SDL_GPUTexture* texture;
+    unsigned scale;
 } gpu_surface;
 
 typedef struct gamepad_slot {
@@ -491,6 +492,15 @@ static int same_surface(const rsx_surface_ref* a, const rsx_surface_ref* b)
            a->is_display == b->is_display;
 }
 
+/* Keep guest coordinates and UVs unchanged; only the character attachment
+ * storage and raster viewport grow. Integer steps avoid reallocating on every
+ * resize event. 720p retains native resolution, 1080p uses 2x, 4K uses 3x. */
+static unsigned s_character_scale = 1;
+static unsigned surface_scale(const rsx_surface_ref *ref) {
+    return !ref->is_display && ref->width == 600 && ref->height == 600
+        ? s_character_scale : 1;
+}
+
 static SDL_GPUTexture* create_surface_texture(const rsx_surface_ref* ref)
 {
     SDL_GPUTextureFormat format = portable_format(ref->format);
@@ -512,6 +522,8 @@ static SDL_GPUTexture* create_surface_texture(const rsx_surface_ref* ref)
     info.usage = usage;
     info.width = ref->width ? ref->width : SDL_RSX_WIDTH;
     info.height = ref->height ? ref->height : SDL_RSX_HEIGHT;
+    info.width *= surface_scale(ref);
+    info.height *= surface_scale(ref);
     info.layer_count_or_depth = 1;
     info.num_levels = 1;
     info.sample_count = SDL_GPU_SAMPLECOUNT_1;
@@ -546,6 +558,7 @@ static SDL_GPUTexture* get_surface(const rsx_surface_ref* ref)
     }
     gpu_surface* entry = &s_sdl.surfaces[s_sdl.surface_count++];
     entry->ref = *ref;
+    entry->scale = surface_scale(ref);
     entry->texture = create_surface_texture(ref);
     if (entry->texture && ref->is_display)
         s_sdl.display = entry->texture;
@@ -2130,6 +2143,9 @@ static void execute_draw(SDL_GPUCommandBuffer* commands,
         (float)(op->viewport[3] ? op->viewport[3] : op->color[0].height),
         0.0f, 1.0f
     };
+    unsigned raster_scale = surface_scale(&op->color[0]);
+    viewport.x *= raster_scale; viewport.y *= raster_scale;
+    viewport.w *= raster_scale; viewport.h *= raster_scale;
     SDL_SetGPUViewport(pass, &viewport);
     SDL_Rect scissor = {
         (int)op->scissor[0], (int)op->scissor[1],
@@ -2166,6 +2182,8 @@ static void execute_draw(SDL_GPUCommandBuffer* commands,
             }
         }
     }
+    scissor.x *= raster_scale; scissor.y *= raster_scale;
+    scissor.w *= raster_scale; scissor.h *= raster_scale;
     SDL_SetGPUScissor(pass, &scissor);
     SDL_FColor blend = {
         ((op->data.draw.pipeline.blend_color >> 16) & 255u) / 255.0f,
@@ -2197,8 +2215,8 @@ static SDL_GPUTexture* presentation_texture(Uint32* source_width,
             surface->ref.format == RSX_FORMAT_RGBA8 &&
             (surface->ref.raw_offset == (u32)offset ||
              surface->ref.resolved_offset == (u32)offset)) {
-            *source_width = surface->ref.width;
-            *source_height = surface->ref.height;
+            *source_width = surface->ref.width*surface->scale;
+            *source_height = surface->ref.height*surface->scale;
             return surface->texture;
         }
     }
@@ -3390,13 +3408,24 @@ static void upload_surface_init(const rsx_surface_init* init)
     SDL_GPUTransferBufferCreateInfo transfer_info;
     SDL_zero(transfer_info);
     transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transfer_info.size = (u32)blob->size;
+    unsigned scale=surface_scale(&init->surface);
+    transfer_info.size = scale>1 ? init->surface.width*init->surface.height*scale*scale*block_size : (u32)blob->size;
     SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(
         s_sdl.device, &transfer_info);
     if (!transfer) { ++s_sdl.errors; return; }
     void* mapped = SDL_MapGPUTransferBuffer(s_sdl.device, transfer, false);
     if (!mapped) { SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer); ++s_sdl.errors; return; }
-    memcpy(mapped, blob->data, (size_t)blob->size);
+    if(scale==1)memcpy(mapped, blob->data, (size_t)blob->size);
+    else {
+        unsigned pitch=init->surface.pitch?init->surface.pitch:init->surface.width*block_size;
+        for(unsigned y=0;y<init->surface.height*scale;++y)
+            for(unsigned x=0;x<init->surface.width*scale;++x) {
+                size_t offset=(size_t)(y/scale)*pitch+(x/scale)*block_size;
+                unsigned char *dst=(unsigned char*)mapped+((size_t)y*init->surface.width*scale+x)*block_size;
+                if(offset+block_size<=blob->size)memcpy(dst,(const unsigned char*)blob->data+offset,block_size);
+                else memset(dst,0,block_size);
+            }
+    }
     SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
     SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
     SDL_GPUCopyPass* copy = commands ? SDL_BeginGPUCopyPass(commands) : NULL;
@@ -3411,12 +3440,13 @@ static void upload_surface_init(const rsx_surface_init* init)
     source.transfer_buffer = transfer;
     source.pixels_per_row = init->surface.pitch
         ? init->surface.pitch / block_size : init->surface.width;
-    source.rows_per_layer = init->surface.height;
+    if(scale>1)source.pixels_per_row=init->surface.width*scale;
+    source.rows_per_layer = init->surface.height*scale;
     SDL_GPUTextureRegion destination;
     SDL_zero(destination);
     destination.texture = texture;
-    destination.w = init->surface.width;
-    destination.h = init->surface.height;
+    destination.w = init->surface.width*scale;
+    destination.h = init->surface.height*scale;
     destination.d = 1;
     SDL_UploadToGPUTexture(copy, &source, &destination, false);
     SDL_EndGPUCopyPass(copy);
@@ -3424,9 +3454,53 @@ static void upload_surface_init(const rsx_surface_init* init)
     SDL_ReleaseGPUTransferBuffer(s_sdl.device, transfer);
 }
 
+static void update_character_resolution(void) {
+    int w=1280,h=720;
+    if(s_sdl.window) SDL_GetWindowSizeInPixels(s_sdl.window,&w,&h);
+    unsigned scale=(unsigned)((w+1279)/1280);
+    unsigned sy=(unsigned)((h+719)/720);
+    if(sy<scale)scale=sy;
+    if(scale<1)scale=1;
+    if(scale>3)scale=3;
+    const char *setting=getenv("TAIKO_CHARACTER_RENDER_SCALE");
+    if(setting && *setting) {
+        int requested=atoi(setting);
+        if(requested>=1 && requested<=3)scale=(unsigned)requested;
+    }
+    if(scale==s_character_scale)return;
+    s_character_scale=scale;
+    for(unsigned i=0;i<s_sdl.surface_count;++i) {
+        gpu_surface *entry=&s_sdl.surfaces[i];
+        unsigned target=surface_scale(&entry->ref);
+        if(target==entry->scale)continue;
+        SDL_GPUTexture *replacement=create_surface_texture(&entry->ref);
+        if(!replacement)continue;
+        /* Preserve colour content if a resize arrives between guest updates. */
+        if(!entry->ref.is_depth) {
+            SDL_GPUCommandBuffer *cmd=SDL_AcquireGPUCommandBuffer(s_sdl.device);
+            if(cmd) {
+                SDL_GPUBlitInfo blit;SDL_zero(blit);
+                blit.source.texture=entry->texture;
+                blit.source.w=entry->ref.width*entry->scale;
+                blit.source.h=entry->ref.height*entry->scale;
+                blit.destination.texture=replacement;
+                blit.destination.w=entry->ref.width*target;
+                blit.destination.h=entry->ref.height*target;
+                blit.load_op=SDL_GPU_LOADOP_DONT_CARE;
+                blit.filter=SDL_GPU_FILTER_LINEAR;
+                SDL_BlitGPUTexture(cmd,&blit);submit_commands(cmd);
+            }
+        }
+        SDL_ReleaseGPUTexture(s_sdl.device,entry->texture);
+        entry->texture=replacement;entry->scale=target;
+    }
+    fprintf(stderr,"[SDL_GPU] character render resolution %ux%u\n",600*scale,600*scale);
+}
+
 static void execute_batch(const rsx_render_batch* batch, Uint64 enqueue_ns,
                           input_trace_frame input_trace)
 {
+    update_character_resolution();
     Uint64 perf_start = SDL_GetTicksNS();
     const Uint64 execute_start_ns = perf_start;
     if (input_trace.sequence)
@@ -4738,7 +4812,7 @@ static int snapshot_one_surface(const gpu_surface* surface,
     SDL_GPUTransferBufferCreateInfo transfer_info;
     SDL_zero(transfer_info);
     transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
-    transfer_info.size = (u32)size;
+    transfer_info.size = (u32)(size*surface->scale*surface->scale);
     SDL_GPUTransferBuffer* transfer = SDL_CreateGPUTransferBuffer(
         s_sdl.device, &transfer_info);
     SDL_GPUCommandBuffer* commands = SDL_AcquireGPUCommandBuffer(s_sdl.device);
@@ -4752,14 +4826,14 @@ static int snapshot_one_surface(const gpu_surface* surface,
     SDL_GPUTextureRegion source;
     SDL_zero(source);
     source.texture = surface->texture;
-    source.w = surface->ref.width;
-    source.h = surface->ref.height;
+    source.w = surface->ref.width*surface->scale;
+    source.h = surface->ref.height*surface->scale;
     source.d = 1;
     SDL_GPUTextureTransferInfo download;
     SDL_zero(download);
     download.transfer_buffer = transfer;
-    download.pixels_per_row = surface->ref.width;
-    download.rows_per_layer = surface->ref.height;
+    download.pixels_per_row = surface->ref.width*surface->scale;
+    download.rows_per_layer = surface->ref.height*surface->scale;
     SDL_DownloadFromGPUTexture(copy, &source, &download);
     SDL_EndGPUCopyPass(copy);
     SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
@@ -4777,6 +4851,16 @@ static int snapshot_one_surface(const gpu_surface* surface,
         init->surface.pitch = surface->ref.width * block_size;
         rsx_owned_blob* blob = surface->ref.is_depth
             ? &init->depth_stencil_data : &init->color_data;
+        if(surface->scale>1) {
+            /* Capture format stays in guest pixels. Compact in-place after
+             * download; depth seeds are likewise sampled at pixel centres. */
+            unsigned scale=surface->scale;
+            for(unsigned y=0;y<surface->ref.height;++y)
+                for(unsigned x=0;x<surface->ref.width;++x)
+                    memmove((unsigned char*)mapped+((size_t)y*surface->ref.width+x)*block_size,
+                            (unsigned char*)mapped+((size_t)(y*scale+scale/2)*surface->ref.width*scale+x*scale+scale/2)*block_size,
+                            block_size);
+        }
         result = rsx_owned_blob_copy(blob, mapped, size);
     }
     if (mapped) SDL_UnmapGPUTransferBuffer(s_sdl.device, transfer);
