@@ -110,6 +110,80 @@ list; the summary never assigns arbitrary osu charts to Easy/Normal/Hard slots.
 Stock launch mapping still uses Green's five courses. Local TJA and installed
 osu!lazer songs are described in [custom songs](custom_songs.md).
 
+## Choose Difficulty
+
+Opening a song replaces the card list with Green's own Choose Difficulty
+screen (`src/taiko_menu_difficulty.h`), composed from the title's Song Select
+sprites at their authored pixel size. Geometry is measured from a 1280x720
+capture of the original screen; the sprites used are listed in that file's
+header comment.
+
+The heading uses the original Japanese sprite (192). English course and tab
+labels replace only their baked label bands; icons, borders, rating dots and
+drums remain original artwork.
+
+The entry holds the selected card for 500 ms before widening for 233 ms,
+raising for 300 ms and revealing the difficulty controls over 100 ms. Exit
+retains an owned copy of the outgoing course rows so their 200 ms fade can
+finish after the frontend returns to the song list, then lowers and narrows
+the panel. The surrounding carousel transition still needs refinement.
+
+Layout: the Back/Options/Sounds tabs sit at x 245/315/385, the course columns
+start at x 553 and close their pitch up rather than run into the title spine,
+and the block is the rows the frontend already publishes, in order. Everything
+below was taken off a reference capture by measuring in its own pixels and
+dividing by its column pitch, which is 100 logical by construction:
+
+- Stars are the 40x40 sprite at native size, centred on the ten authored dots
+  and filling from the bottom. Drawn smaller they read as dots, not stars.
+- Player highlight strokes span y 151..513, extending beneath the course
+  icon and below the final star to the top of the drum.
+- A column balloon's point rests on the wood frame's top and overlaps the
+  course icon; a tab balloon's sits 6px into the tab. Both sprites are native
+  size, and both are clipped by the top of the screen exactly as the original
+  is.
+- Course labels use a 24px pitch for short names, fitting longer names into
+  128px. Glyphs use 0.90 horizontal and 0.80 vertical scaling with a half-opacity
+  1px stroke beneath the normal glyphs for intermediate weight. The English Oni label reads “Extreme”.
+- Two ghosted crown places sit above each column. The sprite is the silver
+  crown, not the black one: its white body disappears into the panel and
+  leaves the outline the reference shows, where a filled crown reads as a
+  solid blob.
+
+When both players point at the same course, sprite 135 supplies the split
+red/cyan outline and sprites 142/149 supply the angled player markers.
+
+Readiness is tracked by the frontend; its temporary text badge is hidden.
+
+Selection is one bounded list per player: Back, Options, Sounds, then the
+installed courses. Back closes the song. Options and Sounds open panes that
+overlap the player panels, built from the authored 115/113/112 caps and the
+114/116 row sprites. **The five game options and the drum sound are recorded
+per player but not yet applied to gameplay.**
+
+The panel grows out of, and shrinks back into, the selected song card. Both
+timelines are read frame by frame off the reference capture at 30 Hz and are
+linear: entering widens over 7 frames, raises over 9, then fades the contents
+in over 3; leaving fades the contents out over 6, lowers over 7, and narrows
+over 8. `menu_difficulty_timeline` owns them and the close outlives the rows it
+was drawn from, so it runs off its own flag rather than `g_song_rows`.
+
+Preview modes `difficulty`, `difficulty-options`, `difficulty-sounds` and
+`difficulty-tab` render the screen, both panes and a tab cursor;
+`difficulty-enter-frames` and `difficulty-leave-frames` write a numbered BMP
+per 30 Hz frame of each timeline off a fixed clock, which is how they were
+matched against the capture.
+
+Not reproduced from the original screen: the neighbouring song cards slide away
+before the panel grows (ours drop out at once), the top-three ranking board that
+appears while a course is selected (no score data), and the both-drums hint
+banner.
+
+`ASYNC_TEXT_SLOTS` had to grow from 96 to 256 for this screen. Slots are only
+recycled after a second unused, so a screen with more live labels than slots
+silently never rasterizes the surplus: per-glyph vertical labels plus an open
+options pane overran 96 and drew blank rows.
+
 Preview modes `courses`, `courses-one`, `courses-five`, and `courses-osu` cover
 four standard courses, one course, five courses, and an eight-chart osu set.
 Pass the mode after the output BMP path in the preview command above. These
@@ -348,3 +422,27 @@ update. Capture seeds remain in guest dimensions.
 Higher settings increase character GPU fill and attachment memory usage.
 An offline costume capture was compared at 600x600 and 1200x1200; live resize
 and performance on lower-powered devices still require validation.
+
+Difficulty side emblems follow each player’s highlighted course with one upward stretch and side squeeze
+on a course change, keeping the bottom edge fixed. Confirmation flashes the emblem at unchanged size, fades the
+player marker, and reveals the course name. `difficulty-confirm` in the GPU
+preview cycles P1 confirmation every eight seconds for visual review.
+
+Difficulty select displays at most four columns with a fixed 100px pitch.
+Navigating beyond the viewport lowers the outgoing column (150ms), slides
+remaining columns (200ms), and raises the incoming column (150ms). Inputs
+continue updating selections while a transition finishes. Stock player cursors
+retain their courses; an off-screen cursor gets a small edge marker and label.
+The last player to navigate controls the shared viewport. Osu retains its
+intentional shared chart selection and clears both confirmations when it
+changes, since charts in a set may use different audio. Absolute row positions
+keep the viewport stable across the streamed osu chart window.
+`difficulty-carousel` previews the fifth-course transition with P2 on Easy.
+
+Player cursor movement interpolates over 110ms between columns and side tabs,
+retargeting from its displayed position on rapid input. Solo play shows only
+the selection border. `difficulty-cursors` and `difficulty-solo` exercise both
+layouts in the preview. Carousel phases use smoothstep easing.
+
+Difficulty navigation stops at Back and the last chart instead of wrapping.
+Side-tab labels are top-aligned below their icons with a 4px outline.

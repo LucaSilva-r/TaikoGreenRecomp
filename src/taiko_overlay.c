@@ -87,6 +87,7 @@ static unsigned g_song_category_total;
 static uint8_t  g_song_difficulty_mask;
 static int g_browser_players_enabled;
 static uint8_t g_browser_joined, g_browser_ready;
+static double g_browser_confirm_start[2];
 static uint8_t g_browser_difficulties[2];
 static char g_browser_account_names[2][128];
 static int g_browser_login_phase;
@@ -115,6 +116,15 @@ typedef struct song_row_storage {
 static song_row_storage g_song_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
 static unsigned g_song_row_count;
 static int g_song_shared_carousel;
+static taiko_overlay_difficulty_state g_difficulty_menu={{3,3}};
+static double g_difficulty_pane_start[2];
+/* Choose Difficulty enters and leaves on its own timeline; see
+ * menu_difficulty_timeline. The close outlives the rows it was drawn from,
+ * which is why it needs its own flag rather than reading g_song_rows. */
+static int g_difficulty_open, g_difficulty_closing;
+static double g_difficulty_start, g_difficulty_close_start;
+static song_row_storage g_difficulty_close_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
+static unsigned g_difficulty_close_count;
 static double g_song_animation_start, g_song_last_render;
 static int g_song_animating;
 static int g_gpu_animation_pending;
@@ -569,7 +579,11 @@ static int text_width(const char* text, int pixels)
 /* CPU-only worker owns its FreeType face and raster state. The renderer
  * only submits keys and reads completed immutable buffers; it never waits for
  * glyph generation. Jobs are bounded and newly visible labels take priority. */
-enum { ASYNC_TEXT_SLOTS=96 };
+/* One slot per distinct text/size/outline on screen. Slots are only recycled
+ * after a second unused, so a screen with more live labels than slots simply
+ * never rasterizes the surplus: Choose Difficulty (per-glyph vertical labels
+ * plus an open options pane) overran 96 and drew blank rows. */
+enum { ASYNC_TEXT_SLOTS=256 };
 typedef struct AsyncText {
     int state, spine;
     unsigned rgb, scale;
@@ -1359,12 +1373,24 @@ void taiko_overlay_set_browser_portrait(unsigned player, uint32_t address,
     pthread_mutex_unlock(&g_lock);
 }
 
+void taiko_overlay_set_difficulty_menu(const taiko_overlay_difficulty_state* state)
+{
+    if(!state)return;
+    pthread_mutex_lock(&g_lock);
+    for(unsigned p=0;p<2;++p)if(state->pane[p]!=g_difficulty_menu.pane[p])g_difficulty_pane_start[p]=monotonic_milliseconds();
+    g_difficulty_menu=*state;
+    pthread_mutex_unlock(&g_lock);
+}
+
 void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,
                                       const uint8_t difficulties[2])
 {
     pthread_mutex_lock(&g_lock);
     g_browser_players_enabled = enabled;
     g_browser_joined = joined;
+    for(unsigned p=0;p<2;++p)
+        if((ready & (1u<<p)) && !(g_browser_ready & (1u<<p)))
+            g_browser_confirm_start[p]=monotonic_milliseconds();
     g_browser_ready = ready;
     for (unsigned i = 0; i < 2; ++i)
         g_browser_difficulties[i] = difficulties ? difficulties[i] : 0;
@@ -1401,6 +1427,21 @@ void taiko_overlay_show_song_browser(const char* player_name,
     for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i)
         if(rows[i].selected)incoming_selected=i;
     const int shared=rows && row_count && rows[0].carousel_group!=0;
+    int difficulty_now=0;
+    for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i)
+        if(rows[i].kind==TAIKO_OVERLAY_ROW_DIFFICULTY) difficulty_now=1;
+    if(difficulty_now) {
+        if(!g_difficulty_open) g_difficulty_start=monotonic_milliseconds();
+        g_difficulty_closing=0;
+    } else if(g_difficulty_open && g_visible && g_mode==5 && !search_active &&
+              browser_level!=TAIKO_OVERLAY_BROWSER_CATEGORIES) {
+        memcpy(g_difficulty_close_rows,g_song_rows,sizeof g_song_rows);
+        g_difficulty_close_count=g_song_row_count;
+        g_difficulty_close_start=monotonic_milliseconds();
+        g_difficulty_closing=1;
+    } else if(!g_difficulty_open && (g_mode!=5 || !g_visible || search_active ||
+              browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES)) g_difficulty_closing=0;
+    g_difficulty_open=difficulty_now;
     int opening_folder = was_categories && browser_level != TAIKO_OVERLAY_BROWSER_CATEGORIES &&
         !search_active && (!query || !*query) && rows && row_count;
     if(shared) opening_folder=opening_folder &&
@@ -1718,6 +1759,7 @@ static int visit_host_ui(float scale, HostUiEmit emit, void* user, HostUiInfo* i
     info->version = g_version;
     info->animated = g_mode == 5 && (g_gpu_animation_pending || g_handoff);
     if (green_categories() && g_browser_players_enabled) info->animated = 1;
+    if (menu_difficulty_busy()) info->animated = 1;
     if (g_mode == 5 && g_browser_players_enabled &&
         ((g_portraits[0].address && (g_browser_joined & 1)) ||
          (g_portraits[1].address && (g_browser_joined & 2)))) info->animated = 1;

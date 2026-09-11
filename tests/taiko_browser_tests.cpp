@@ -113,6 +113,8 @@ extern "C" void taiko_overlay_show_song_browser(const char*, const char*, const 
     browser_level = level;
     assert(count <= TAIKO_OVERLAY_SONG_ROW_COUNT);
 }
+static taiko_overlay_difficulty_state difficulty_menu;
+extern "C" void taiko_overlay_set_difficulty_menu(const taiko_overlay_difficulty_state* state) {difficulty_menu=*state;}
 extern "C" void taiko_overlay_set_browser_players(int, uint8_t j, uint8_t r, const uint8_t*) { joined = j; ready = r; }
 extern "C" void taiko_overlay_set_browser_account(unsigned, const char*, int) {}
 extern "C" void taiko_overlay_show_song_select(const char*) {}
@@ -242,8 +244,36 @@ int main() {
     assert(current_song == 11);
     key(TAIKO_BROWSER_PLAY);
     assert(courses() == 1 && cursor(0) == 2 && cursor(1) == 2);
+    // Left reaches Sounds; right stops at the last installed course.
     drum(0, TAIKO_ACTION_HIT_SL);
     drum(1, TAIKO_ACTION_HIT_SR);
+    assert(cursor(0) == 99 && cursor(1) == 2 && current_song == 11 &&
+           difficulty_menu.item[0] == -1 && difficulty_menu.item[1] == 2);
+    drum(1, TAIKO_ACTION_HIT_SL); // Sounds
+    drum(1, TAIKO_ACTION_HIT_SL); // Options
+    drum(1, TAIKO_ACTION_HIT_SL); // Back
+    drum(1, TAIKO_ACTION_HIT_SL); // Stop at Back
+    assert(difficulty_menu.item[1] == -3);
+    drum(0, TAIKO_ACTION_HIT_CR); // Sounds opens the drum sound pane.
+    assert(difficulty_menu.pane[0] == 2);
+    drum(0, TAIKO_ACTION_HIT_SR); // Its single row cycles the value.
+    assert(difficulty_menu.values[0][5] == 1);
+    drum(0, TAIKO_ACTION_HIT_CL); // Cancel closes the pane, not the song.
+    assert(difficulty_menu.pane[0] == 0 && courses() == 1);
+    drum(1, TAIKO_ACTION_HIT_SR); // Back -> Options along the tab strip.
+    assert(difficulty_menu.item[1] == -2 && !difficulty_menu.pane[1]);
+    drum(1, TAIKO_ACTION_HIT_CR);
+    assert(difficulty_menu.pane[1] == 1);
+    drum(1, TAIKO_ACTION_HIT_SR); // The row cursor moves within the five settings.
+    assert(difficulty_menu.option_row[1] == 1);
+    drum(1, TAIKO_ACTION_HIT_CL);
+    drum(1, TAIKO_ACTION_HIT_SL); // Options -> Back, then stop at the edge.
+    drum(1, TAIKO_ACTION_HIT_SL);
+    assert(difficulty_menu.item[1] == -3);
+    drum(1, TAIKO_ACTION_HIT_SR); // Options
+    drum(1, TAIKO_ACTION_HIT_SR); // Sounds
+    drum(1, TAIKO_ACTION_HIT_SR); // Course
+    drum(0, TAIKO_ACTION_HIT_SR);
     assert(cursor(0) == 2 && cursor(1) == 2 && current_song == 11);
     key(TAIKO_BROWSER_SEARCH_TOGGLE);
     assert(!courses());
@@ -365,6 +395,10 @@ int main() {
         if (row.kind == TAIKO_OVERLAY_ROW_DIFFICULTY && row.selected)
             reached_tail = row.catalog_index >= osu_begin + 10;
     assert(reached_tail);
+    for(const auto& row:rows) if(row.kind==TAIKO_OVERLAY_ROW_DIFFICULTY) {
+        assert(row.browser_total==12);
+        assert(row.browser_position==row.catalog_index-osu_begin);
+    }
     assert(preview_requests == preview_before && preview_id == original_preview);
     key(TAIKO_BROWSER_PLAY);
     assert(identity_selection == osu_begin + 10);

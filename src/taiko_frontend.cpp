@@ -538,6 +538,14 @@ unsigned publish_carousel_rows_locked(
 void show_current_song()
 {
     std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
+    taiko_overlay_difficulty_state menu{};
+    menu.focus=g_browser_players.focus;
+    for(unsigned p=0;p<2;++p) {
+        menu.item[p]=g_browser_players.item[p];menu.pane[p]=g_browser_players.pane[p];
+        menu.option_row[p]=g_browser_players.option_row[p];
+        for(unsigned o=0;o<6;++o)menu.values[p][o]=g_browser_players.options[p][o];
+    }
+    taiko_overlay_set_difficulty_menu(&menu);
     taiko_overlay_set_browser_players(taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active(),
         g_browser_players.joined, g_browser_players.ready, g_browser_players.difficulty.data());
     const std::size_t count = taiko_catalog_count();
@@ -741,7 +749,13 @@ void show_current_song()
             row.difficulty = 3;
             row.stars = chart->stars[3];
             row.selected = d == g_osu_variant;
-            row.cursors = row.selected ? g_browser_players.joined : 0;
+            // A player parked on a side tab has no chart cursor.
+            row.cursors = 0;
+            row.browser_position=d;row.browser_total=charts.size();
+            for (unsigned p = 0; p < 2; ++p)
+                if ((g_browser_players.joined & (1u << p)) &&
+                    g_browser_players.item[p] >= 0 && d==g_osu_variant)
+                    row.cursors |= 1u << p;
             row.ready = g_browser_players.ready & row.cursors;
         }
         song = taiko_catalog_song(charts[g_osu_variant]);
@@ -849,6 +863,12 @@ void change_song_difficulty(int direction, unsigned player = 2);
 void move_song_selection(int delta, unsigned player = 2)
 {
     if (g_browser_players.expanded) {
+        unsigned p=player<2?player:g_browser_players.focus;
+        if(g_browser_players.pane[p]==1) {
+            // Five game options; the drum sound lives in its own pane.
+            g_browser_players.option_row[p]=(g_browser_players.option_row[p]+(delta<0?4:1))%5;
+            browser_sfx(TaikoPlusSfx::Move);show_current_song();return;
+        }
         change_song_difficulty(delta < 0 ? -1 : 1, player);
         return;
     }
@@ -940,9 +960,23 @@ void select_random_song()
     show_current_song();
 }
 
+void change_browser_option(unsigned player,int direction)
+{
+    unsigned option=g_browser_players.pane[player]==2?5:g_browser_players.option_row[player];
+    if(option>=6)return;
+    static const unsigned counts[]={2,4,2,2,3,4};
+    auto& value=g_browser_players.options[player][option];
+    value=(int(value)+direction+counts[option])%counts[option];
+    g_browser_players.ready&=~(1u<<player);
+}
+
 void change_song_difficulty(int direction, unsigned player)
 {
     if (!g_browser_players.expanded) return;
+    if(player>1)player=g_browser_players.focus;
+    if(g_browser_players.pane[player]) {
+        change_browser_option(player,direction);browser_sfx(TaikoPlusSfx::Move);show_current_song();return;
+    }
     unsigned selection = 0;
     {
         std::lock_guard<std::mutex> lock(g_song_browser_lock);
@@ -954,19 +988,41 @@ void change_song_difficulty(int direction, unsigned player)
     }
     const TaikoCatalogSong* song = taiko_catalog_song(selection);
     if (!song) return;
+    g_browser_players.join(player);
+    g_browser_players.focus=player;
+    int item=g_browser_players.item[player];
+    if(item<0) {
+        if(direction<0 && item==-3) return;
+        item+=direction;
+        if(item==0) {while(item<5 && !(song->difficulty_mask&(1u<<item)))++item;g_osu_variant=0;}
+        g_browser_players.item[player]=item;
+        if(item>=0)g_browser_players.difficulty[player]=item;
+        g_browser_players.ready&=~(1u<<player);
+        browser_sfx(TaikoPlusSfx::Move);show_current_song();return;
+    }
     if (!song->osu_group.empty()) {
         const auto size = g_osu_groups.at(song->osu_group).size();
-        g_osu_variant = (int64_t(g_osu_variant) + direction + size) % size;
+        if(direction>0 && g_osu_variant+1==size)return;
+        if(direction<0 && !g_osu_variant)g_browser_players.item[player]=-1;
+        else g_osu_variant = (int64_t(g_osu_variant) + direction + size) % size;
         if (player < 2) g_browser_players.join(player);
         g_browser_players.ready = 0;
     } else if (taiko_pc_mode_is_standalone() && taiko_pc_mode_is_active()) {
         if (player > 1) player = g_browser_players.focus;
-        g_browser_players.change_difficulty(player, direction, song->difficulty_mask);
+        int next=int(g_browser_players.difficulty[player])+direction;
+        while(next>=0 && next<5 && !(song->difficulty_mask&(1u<<next)))next+=direction;
+        if(next>=5)return;
+        if(next<0)g_browser_players.item[player]=-1;
+        else {g_browser_players.change_difficulty(player,direction,song->difficulty_mask);g_browser_players.item[player]=next;}
+        g_browser_players.ready&=~(1u<<player);
         g_song_difficulty.store(g_browser_players.difficulty[player], std::memory_order_release);
     } else {
         const unsigned current = g_song_difficulty.load(std::memory_order_relaxed);
-        g_song_difficulty.store(cycle_difficulty(*song, current, direction),
-                                std::memory_order_release);
+        int next=int(current)+direction;
+        while(next>=0 && next<5 && !(song->difficulty_mask&(1u<<next)))next+=direction;
+        if(next>=5)return;
+        if(next<0)g_browser_players.item[player]=-1;
+        else g_song_difficulty.store(next,std::memory_order_release);
     }
     browser_sfx(TaikoPlusSfx::Difficulty);
     show_current_song();
@@ -1064,6 +1120,20 @@ void close_global_search_locked()
 
 void activate_browser_selection(unsigned player = 2)
 {
+    if(g_browser_players.expanded) {
+        unsigned p=player<2?player:g_browser_players.focus;
+        if(g_browser_players.pane[p]) {
+            if(g_browser_players.pane[p]==2)g_browser_players.pane[p]=0;
+            else change_browser_option(p,1);
+            browser_sfx(TaikoPlusSfx::Confirm);show_current_song();return;
+        }
+        if(g_browser_players.item[p]<0) {
+            int item=g_browser_players.item[p];
+            if(item==-3)g_browser_players.collapse();
+            else {g_browser_players.pane[p]=item==-2?1:2;g_browser_players.option_row[p]=0;}
+            browser_sfx(TaikoPlusSfx::Confirm);show_current_song();return;
+        }
+    }
     bool launch_song = false;
     bool leaving_song_list = false;
     {
@@ -1149,7 +1219,8 @@ void handle_rising(unsigned player, uint32_t rising)
 
         if (rising & TAIKO_ACTION_HIT_CL) {
             if (g_browser_players.expanded) {
-                g_browser_players.collapse();
+                if(g_browser_players.pane[player])g_browser_players.pane[player]=0;
+                else g_browser_players.collapse();
                 browser_sfx(TaikoPlusSfx::Cancel);
             } else taiko_frontend_browser_command(TAIKO_BROWSER_SEARCH_CLEAR);
         } else if (rising & (TAIKO_ACTION_HIT_CR | TAIKO_ACTION_ENTER))
@@ -1467,6 +1538,10 @@ extern "C" int taiko_frontend_browser_command(unsigned command)
         break;
     }
     case TAIKO_BROWSER_SEARCH_CLEAR: {
+        if(g_browser_players.expanded && g_browser_players.pane[g_browser_players.focus]) {
+            g_browser_players.pane[g_browser_players.focus]=0;
+            browser_sfx(TaikoPlusSfx::Cancel);show_current_song();break;
+        }
         if (g_browser_players.expanded) {
             g_browser_players.collapse();
             browser_sfx(TaikoPlusSfx::Cancel);

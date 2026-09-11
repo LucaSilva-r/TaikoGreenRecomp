@@ -9,15 +9,20 @@ namespace taiko_plus {
 // Value-only browser state. The frontend serializes access with its action lock.
 struct BrowserPlayers {
     bool expanded = false;
-    void collapse() { expanded = false; ready = 0; }
-    void open(uint8_t available) { expanded = available != 0; ready = 0; normalize(available); }
+    void collapse() { expanded = false; ready = 0; pane = {}; }
+    void open(uint8_t available) { expanded = available != 0; ready = 0; normalize(available); item={int8_t(difficulty[0]),int8_t(difficulty[1])};pane={}; }
     uint8_t cursors(unsigned course) const {
         if (!expanded) return 0;
         uint8_t result = 0;
         for (unsigned p = 0; p < 2; ++p)
-            if ((joined & (1u << p)) && difficulty[p] == course) result |= 1u << p;
+            if ((joined & (1u << p)) && item[p]>=0 && difficulty[p] == course) result |= 1u << p;
         return result;
     }
+    // -3 Back, -2 Options, -1 Sounds; nonnegative values are real courses.
+    std::array<int8_t,2> item{3,3};
+    std::array<uint8_t,2> pane{}, option_row{};
+    // Classic score, speed, stealth, invert, random, drum sound.
+    std::array<std::array<uint8_t,6>,2> options{};
     uint8_t joined = 0;
     uint8_t ready = 0;
     unsigned focus = 0;

@@ -68,6 +68,13 @@ void taiko_overlay_set_browser_portrait(unsigned player, uint32_t address,
                                         uint32_t width, uint32_t height);
 uint8_t taiko_overlay_browser_joined(void);
 int taiko_overlay_browser_visible(void);
+typedef struct taiko_overlay_difficulty_state {
+    int8_t item[2];
+    uint8_t pane[2], option_row[2], values[2][6];
+    uint8_t focus;
+} taiko_overlay_difficulty_state;
+void taiko_overlay_set_difficulty_menu(const taiko_overlay_difficulty_state* state);
+
 void taiko_overlay_set_browser_players(int enabled, uint8_t joined, uint8_t ready,
                                       const uint8_t difficulties[2]);
 void taiko_overlay_show_song_browser(const char* player_name,

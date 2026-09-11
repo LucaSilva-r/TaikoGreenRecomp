@@ -1,11 +1,23 @@
 #include "taiko_title_render.h"
 
+/* An expanded song publishes one row per installed course. */
+static int menu_difficulty_rows(void)
+{
+    for (unsigned i=0;i<g_song_row_count;++i)
+        if (g_song_rows[i].kind == TAIKO_OVERLAY_ROW_DIFFICULTY) return 1;
+    return 0;
+}
+
 /* Category-screen composition in Green's logical 1280x720 coordinates. */
 static int green_categories(void)
 {
     if (g_mode != 5) return 0;
     if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES) return 1;
     if(g_song_search_active)return 1;
+    /* Choose Difficulty shares this path so portraits, easing and the
+     * animation flags stay on the Green composition. Its close outlives the
+     * rows, so the shrinking panel keeps the path too. */
+    if(menu_difficulty_rows() || g_difficulty_closing)return 1;
     if(!strcmp(g_song_category,"SEARCH RESULTS")) {
         for(unsigned i=0;i<g_song_row_count;++i)
             if(g_song_rows[i].kind==TAIKO_OVERLAY_ROW_DIFFICULTY)return 0;
@@ -223,6 +235,9 @@ static void menu_yellow_frame(float x,float y,float w,float h)
                 unsigned sy=yy<16?yy:yy>=445?source->height-(461-yy):source->height/2;
                 for(unsigned xx=0;xx<a->width;++xx) {
                     unsigned sx=part==0?xx:part==1?source->width/2:source->width-16+xx;
+                    /* This atlas panel faces the opposite way: mirror its
+                     * bevel so the lit edge is on the left in both menus. */
+                    sx=source->width-1-sx;
                     a->pixels[yy*a->width+xx]=source->pixels[sy*source->width+sx];
                 }
             }
@@ -930,10 +945,46 @@ static void menu_search_restore(const menu_search_scene* s)
 }
 static void menu_render_search(void);
 
+/* Player panels, nameplates and the drum prompt: shared by every Green
+ * composition so the bottom of the screen never drifts between them. */
+static void menu_bottom_bar(void)
+{
+    char label[96];
+    fill_rect(0,606,1280,720,RGB_COLOUR(255,71,42));
+    fill_rect(640,606,1280,720,RGB_COLOUR(100,190,192));
+    /* Asset 394 has 18 transparent rows, then an eight-pixel divider.
+     * Fallback panel colours must start BELOW that divider, not behind the
+     * transparent padding (which exposed red/blue stripes above the line). */
+    menu_image(394,0,580,1280,152,0);
+    for(unsigned p=0;p<2;++p) {
+        int joined=(g_browser_joined&(1u<<p))!=0;
+        emit_portrait(p,0,255);
+        float left=p?966:26;
+        if(joined) {
+            menu_nameplate(p,left,(g_browser_authenticated&(1u<<p))?g_browser_account_names[p]:"GUEST");
+            snprintf(label,sizeof label,"%u  LEAVE PLAYER",p+1);
+            draw_text_at(label,14,left+144,708);
+        } else {
+            draw_text_fit("HIT THE DRUM TO JOIN",22,288,left+144,664);
+        }
+    }
+    menu_shadow(412,583,456,38,19,2);
+    fill_rounded_rect(412,583,868,621,19,0xff000000);
+    menu_control_drums();
+    draw_text_at("Choose",21,551,602);
+    draw_text_at("Confirm",21,773,602);
+    draw_text_at("B  BANAPASSPORT LOGIN",18,640,646);
+    draw_text_at(g_browser_save_status[0]?g_browser_save_status:"FREE PLAY",22,640,687);
+}
+
+#include "taiko_menu_difficulty.h"
+
 static void render_green_categories(void)
 {
     menu_load_art();
     if(g_song_search_active) {menu_render_search();return;}
+    if((menu_difficulty_rows() || g_difficulty_closing) &&
+       render_green_difficulty()) return;
     const int results=!strcmp(g_song_category,"SEARCH RESULTS");
     const int categories=g_song_browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES;
     const menu_folder_style* active=menu_style(categories?g_song_title:g_song_category);
@@ -1025,31 +1076,7 @@ static void render_green_categories(void)
     }
     if(!g_folder_closing) menu_navigation_arrows();
     g_ui_emit=menu_layout_emit;g_ui_user=menu_layout_user;
-    fill_rect(0,606,1280,720,RGB_COLOUR(255,71,42));
-    fill_rect(640,606,1280,720,RGB_COLOUR(100,190,192));
-    /* Asset 394 has 18 transparent rows, then an eight-pixel divider.
-     * Fallback panel colours must start BELOW that divider, not behind the
-     * transparent padding (which exposed red/blue stripes above the line). */
-    menu_image(394,0,580,1280,152,0);
-    for(unsigned p=0;p<2;++p) {
-        int joined=(g_browser_joined&(1u<<p))!=0;
-        emit_portrait(p,0,255);
-        float left=p?966:26;
-        if(joined) {
-            menu_nameplate(p,left,(g_browser_authenticated&(1u<<p))?g_browser_account_names[p]:"GUEST");
-            snprintf(label,sizeof label,"%u  LEAVE PLAYER",p+1);
-            draw_text_at(label,14,left+144,708);
-        } else {
-            draw_text_fit("HIT THE DRUM TO JOIN",22,288,left+144,664);
-        }
-    }
-    menu_shadow(412,583,456,38,19,2);
-    fill_rounded_rect(412,583,868,621,19,0xff000000);
-    menu_control_drums();
-    draw_text_at("Choose",21,551,602);
-    draw_text_at("Confirm",21,773,602);
-    draw_text_at("B  BANAPASSPORT LOGIN",18,640,646);
-    draw_text_at(g_browser_save_status[0]?g_browser_save_status:"FREE PLAY",22,640,687);
+    menu_bottom_bar();
     if(g_browser_login_phase) {
         fill_rounded_rect(388,204,892,490,16,0xff000000);
         fill_rounded_rect(394,210,886,484,12,RGB_COLOUR(255,235,157));

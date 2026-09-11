@@ -91,6 +91,32 @@ static void menu_load_indicator(const char* root)
     fclose(f);
 }
 
+/* Green's authored labels are Japanese. The host draws English text in their
+ * place, so the baked glyph band is cleared to the flat colour behind it.
+ * Icons, borders and the rating dots are deliberately left untouched. */
+static void menu_blank_label(unsigned id, menu_art* a)
+{
+    static const struct { unsigned id, x0, y0, x1, y1; uint32_t colour; } bands[] = {
+        /* Course columns: the label sits above the ten rating dots. */
+        {154,26,68,77,214,0xffffffffu},{182,26,68,77,214,0xffffffffu},
+        {185,26,68,77,214,0xffffffffu},{188,26,68,77,214,0xffffffffu},
+        {190,26,68,77,214,0xffffffffu},
+        /* Side tabs: the icon above and the rounded foot below stay. */
+        {150,17,64,64,278,0xff3fe2b2u},{152,17,64,64,278,0xff9f9effu},
+        {153,17,64,64,278,0xff58b2eeu},
+        /* Pane headers. */
+        {115,42,34,421,92,0xff3fe2b2u},{89,60,30,404,96,0xff9f9effu},
+    };
+    for (unsigned i=0;i<sizeof bands/sizeof bands[0];++i) {
+        if (bands[i].id!=id) continue;
+        if (a->width<bands[i].x1 || a->height<bands[i].y1) return;
+        for (unsigned y=bands[i].y0;y<bands[i].y1;++y)
+            for (unsigned x=bands[i].x0;x<bands[i].x1;++x)
+                a->pixels[y*a->width+x]=bands[i].colour;
+        return;
+    }
+}
+
 static void menu_load_art(void)
 {
     if (g_menu_art_loaded) return;
@@ -116,7 +142,10 @@ static void menu_load_art(void)
         591,592,596,597,616,617,
         771,772,773,774,775,776,777,778,779,780,781,783,
         505,507,509,511,513,515,517,519,521,523,525,527,421,354,259,260,261,262,326,
-        787,87,195,196,396,422};
+        787,87,195,196,396,422,
+        /* Choose Difficulty: course columns, side tabs, cursors and panes. */
+        154,182,185,188,190,150,152,153,131,133,135,144,146,140,142,148,149,155,158,159,192,
+        112,113,115,114,116,89,220,221,222,224,225,227,228};
     unsigned loaded = 0;
     size_t retained = 0;
     for (unsigned i = 0; i < sizeof ids / sizeof ids[0]; ++i) {
@@ -156,13 +185,18 @@ static void menu_load_art(void)
                 a->width=80;a->height=20;
             }
         }
-        if (retained+bytes > 32u*1024u*1024u) {
+        if (g_menu_art[id].pixels) menu_blank_label(id,&g_menu_art[id]);
+        /* The twelve 640x720 folder backgrounds alone are 22 MiB; the budget
+         * has to clear them plus the Choose Difficulty sprites or the tail of
+         * the list is silently dropped. */
+        if (retained+bytes > 48u*1024u*1024u) {
             free(g_menu_art[id].pixels);memset(&g_menu_art[id],0,sizeof g_menu_art[id]);
             --loaded;
         } else retained+=bytes;
         free(nut);
     }
     fclose(f);
-    fprintf(stderr, "[taiko_skin] loaded %u Green Song Select textures\n", loaded);
+    fprintf(stderr, "[taiko_skin] loaded %u Green Song Select textures (%zu KiB)\n",
+            loaded, retained/1024);
 }
 #endif

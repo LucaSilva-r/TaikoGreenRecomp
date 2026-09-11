@@ -30,6 +30,59 @@ static void opening_publish(int inside)
     }
     taiko_overlay_show_song_browser("P1","",inside?"Return":"J-POP",inside?"J-POP":"CATEGORY FOLDER",84,0,84,881,inside?"J-POP":"CATEGORIES",0,12,"",0,"",0,inside?TAIKO_OVERLAY_BROWSER_SONGS:TAIKO_OVERLAY_BROWSER_CATEGORIES,inside,rows,TAIKO_OVERLAY_SONG_ROW_COUNT);
 }
+
+/* Deterministic capture of the Choose Difficulty enter/leave timelines. */
+static void difficulty_publish(int expanded)
+{
+    static const char* names[]={"Return","Another song","太鼓の達人 / Groove","Music","Next song"};
+    static const char* courses[]={"EASY","NORMAL","HARD"};
+    taiko_overlay_song_row rows[TAIKO_OVERLAY_SONG_ROW_COUNT]={0};
+    unsigned count=0;
+    for(unsigned i=0;i<5;++i) {
+        if(i==3 && expanded) for(unsigned d=0;d<3;++d) {
+            rows[count].title=courses[d];rows[count].genre="";
+            rows[count].kind=TAIKO_OVERLAY_ROW_DIFFICULTY;
+            rows[count].difficulty=d;rows[count].stars=d+2;
+            rows[count].cursors=d==0;rows[count].selected=d==0;
+            ++count;
+        }
+        rows[count].title=names[i];rows[count].genre="VOCALOID";
+        rows[count].kind=i?TAIKO_OVERLAY_ROW_SONG:TAIKO_OVERLAY_ROW_EXIT;
+        rows[count].catalog_index=i;rows[count].selected=i==2;
+        rows[count].browser_position=i;rows[count].browser_total=5;
+        rows[count].course_mask=7;
+        for(unsigned d=0;d<3;++d)rows[count].course_stars[d]=d+2;
+        ++count;
+    }
+    taiko_overlay_show_song_browser("P1","preview",names[2],"VOCALOID",123,2,5,881,
+        "VOCALOID",2,12,"EASY",7,"",0,TAIKO_OVERLAY_BROWSER_SONGS,0,rows,count);
+}
+
+static int difficulty_preview(int argc,char** argv)
+{
+    const int leave=strstr(argv[4],"leave")!=NULL;
+    const unsigned count=argc>5?(unsigned)strtoul(argv[5],NULL,10):24;
+    taiko_overlay_set_browser_players(1,1,0,NULL);
+    taiko_preview_clock_ms=10000;difficulty_publish(0);
+    taiko_preview_clock_ms=11000;difficulty_publish(1);
+    char file[4096];
+    /* Text and textures are prepared asynchronously; settle once so the
+     * captured timeline shows geometry rather than a cold cache. */
+    for(unsigned warm=0;warm<12;++warm) {
+        taiko_preview_clock_ms=12500;
+        if(rsx_sdl_gpu_backend_save_host_ui_bmp("/dev/null",atoi(argv[1]),atoi(argv[2]))) return 1;
+    }
+    double base=11000;
+    if(leave) { taiko_preview_clock_ms=13000;difficulty_publish(0);base=13000; }
+    for(unsigned i=0;i<count;++i) {
+        taiko_preview_clock_ms=base+i*(1000.0/30);
+        int n=snprintf(file,sizeof file,"%s-%03u.bmp",argv[3],i);
+        if(n<0 || (size_t)n>=sizeof file ||
+           rsx_sdl_gpu_backend_save_host_ui_bmp(file,atoi(argv[1]),atoi(argv[2]))) return 1;
+    }
+    return 0;
+}
+
 static int opening_preview(int argc,char** argv)
 {
     int sequence=!strcmp(argv[4],"opening-frames");
@@ -274,6 +327,12 @@ int main(int argc, char** argv)
     SDL_Window* window = SDL_GetKeyboardFocus();
     if (!window) { int count; SDL_Window** windows=SDL_GetWindows(&count); if(count)window=windows[0]; SDL_free(windows); }
     if (window && argc > 2) SDL_SetWindowSize(window, atoi(argv[1]),atoi(argv[2]));
+    if(argc>4 && (!strcmp(argv[4],"difficulty-enter-frames") ||
+                  !strcmp(argv[4],"difficulty-leave-frames"))) {
+        int result=difficulty_preview(argc,argv);
+        rsx_sdl_gpu_backend_main_shutdown(); ps3_host_sdl_shutdown();
+        return result;
+    }
     if(argc>4 && !strncmp(argv[4],"search",6)) {
         int result=search_preview(argc,argv);
         unsigned errors=rsx_sdl_gpu_backend_error_count();
@@ -306,6 +365,19 @@ int main(int argc, char** argv)
     for(unsigned i=3;i<8;++i){rows[i].kind=TAIKO_OVERLAY_ROW_DIFFICULTY;rows[i].difficulty=i-3;rows[i].stars=i+1;}
     rows[2].selected=1; rows[5].cursors=2;rows[6].cursors=1;rows[6].ready=1;
     rows[5].selected=rows[6].selected=1;
+    /* Choose Difficulty: the default rows already carry one course each, so a
+     * mode only has to open a pane on top of them. */
+    if (argc > 4 && !strncmp(argv[4], "difficulty", 10)) {
+        taiko_overlay_difficulty_state menu = {{3,3},{0,0},{1,0},{{0,1,0,0,2,1},{0}}};
+        if (strstr(argv[4], "-options")) menu.pane[0] = 1;
+        if (strstr(argv[4], "-sounds")) menu.pane[0] = 2;
+        if (strstr(argv[4], "-tab")) menu.item[0] = -2;
+        if(strstr(argv[4],"-shared")) {
+            menu.item[0]=menu.item[1]=2;
+            rows[5].cursors=3;rows[6].cursors=0;
+        }
+        taiko_overlay_set_difficulty_menu(&menu);
+    }
     const int songs = argc > 4 && (!strcmp(argv[4], "songs") || !strcmp(argv[4], "return") || !strncmp(argv[4], "courses", 7));
     const int returning = songs && !strcmp(argv[4], "return");
     const int categories = argc > 4 && (!strcmp(argv[4], "categories") || !strcmp(argv[4], "anime"));
@@ -319,6 +391,31 @@ int main(int argc, char** argv)
     while(SDL_GetTicks()-start<(argc>5 ? strtoul(argv[5],NULL,10) : 4000)){
         unsigned step=(unsigned)((SDL_GetTicks()-start)/200);
         if(step!=last){
+            if(argc>4 && (!strcmp(argv[4],"difficulty-cursors") || !strcmp(argv[4],"difficulty-solo"))) {
+                static const int sequence[]={-3,-2,-1,0,1,2,3,2,1,0,-1,-2};
+                const int item=sequence[(step/5)%12];
+                const int solo=!strcmp(argv[4],"difficulty-solo");
+                for(unsigned d=0;d<5;++d)rows[d+3].cursors=((int)d==item?1:0)|(!solo && d==2?2:0);
+                taiko_overlay_difficulty_state state={{0,2}};
+                state.item[0]=item;
+                taiko_overlay_set_difficulty_menu(&state);
+                taiko_overlay_set_browser_players(1,solo?1:3,0,NULL);
+            }
+            if(argc>4 && !strcmp(argv[4],"difficulty-carousel")) {
+                const unsigned chosen=(step/6)%8;
+                const unsigned course=chosen<5?chosen:8-chosen;
+                for(unsigned d=0;d<5;++d)rows[d+3].cursors=(d==course?1:0)|(d==0?2:0);
+                taiko_overlay_difficulty_state state={{3,0}};
+                state.item[0]=course;state.focus=0;
+                taiko_overlay_set_difficulty_menu(&state);
+                taiko_overlay_set_browser_players(1,3,0,NULL);
+            }
+            if(argc>4 && !strcmp(argv[4],"difficulty-confirm")) {
+                uint8_t courses[2]={step%40<8?1:2,3};
+                taiko_overlay_set_browser_players(1,3,step%40>=15?1:0,courses);
+                rows[4].cursors=step%40<8?1:0;
+                rows[5].cursors=step%40<8?0:1;rows[6].cursors=2;
+            }
             last=step; if(!categories && !songs) { rows[5].selected=step%2; rows[6].selected=!(step%2); }
             if(categories) {
                 /* Move the same centred window as the production frontend. */
@@ -354,14 +451,20 @@ int main(int argc, char** argv)
                     }
                 }
                 taiko_overlay_show_song_browser("P1 + P2","preview",returning?"Return":"1 Dream","ANIME",123,1,85,881,"ANIME",1,12,"ONI",7,"",0,1,returning,rows,9);
-            } else taiko_overlay_show_song_browser("P1 + P2","preview","太鼓の達人 / Groove","VOCALOID",123,12,47,881,"VOCALOID",2,9,"ONI",31,"",0,1,0,rows,9);
+            } else {
+                if(argc>4 && !strncmp(argv[4],"difficulty",10)) {
+                    rows[5].selected=0;rows[6].selected=1;
+                }
+                taiko_overlay_show_song_browser("P1 + P2","preview","太鼓の達人 / Groove","VOCALOID",123,12,47,881,"VOCALOID",2,9,"ONI",31,"",0,1,0,rows,9);
+            }
         }
         if(rsx_sdl_gpu_backend_main_iterate(16))break;
     }
     unsigned errors=rsx_sdl_gpu_backend_error_count();
     if (argc > 3) {
         /* Optional final argument: enter/leave captures the handoff midpoint. */
-        if (argc > 4 && !categories && !songs) taiko_overlay_animate_browser(!strcmp(argv[4], "leave"));
+        if (argc > 4 && !categories && !songs && strncmp(argv[4], "difficulty", 10))
+            taiko_overlay_animate_browser(!strcmp(argv[4], "leave"));
         for (unsigned i = 0; i < 2; ++i) {
             if (i && argc > 4) SDL_Delay(160);
             if (rsx_sdl_gpu_backend_save_host_ui_bmp(argv[3], atoi(argv[1]), atoi(argv[2])) != 0) ++errors;
