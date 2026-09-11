@@ -348,6 +348,8 @@ int main() {
     key(TAIKO_BROWSER_PLAY);
     assert(rows.size() == TAIKO_OVERLAY_SONG_ROW_COUNT && rows[5].kind == TAIKO_OVERLAY_ROW_EXIT && rows[5].selected);
     key(TAIKO_BROWSER_NEXT);
+    assert(rows[5].chart_count == 12 && rows[5].course_mask == 8);
+    assert(rows[5].chart_stars[0] == 1 && rows[5].chart_stars[4] == 3);
     key(TAIKO_BROWSER_PLAY);
     assert(courses() == 8); // Visible window, not a five-course truncation.
     const unsigned preview_before = preview_requests;

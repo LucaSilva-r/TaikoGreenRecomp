@@ -223,6 +223,21 @@ void publish_preview(std::string_view music_id)
     taiko_host_audio_select_preview(g_preview_music_id, generation);
 }
 
+// Listing summaries retain installed-course identity and arbitrary osu chart counts.
+void browser_course_summary(taiko_overlay_song_row& row, const TaikoCatalogSong& song)
+{
+    row.course_mask = song.difficulty_mask;
+    for (unsigned d=0; d<5; ++d) row.course_stars[d]=song.stars[d];
+    if (song.osu_group.empty()) return;
+    const auto found=g_osu_groups.find(song.osu_group);
+    if (found==g_osu_groups.end()) return;
+    row.chart_count=found->second.size();
+    for (unsigned d=0; d<std::min(5u,row.chart_count); ++d) {
+        const auto* chart=taiko_catalog_song(found->second[d]);
+        if (chart) row.chart_stars[d]=chart->stars[3];
+    }
+}
+
 unsigned normalize_difficulty(const TaikoCatalogSong& song,
                               unsigned preferred)
 {
@@ -501,7 +516,7 @@ unsigned publish_carousel_rows_locked(
             else {
                 const auto* song=taiko_catalog_song(entry.catalog_index);
                 titles[i]=song?song->title:"";row.kind=TAIKO_OVERLAY_ROW_SONG;
-                if(song)for(unsigned d=0;d<5;++d)row.course_stars[d]=song->stars[d];
+                if(song)browser_course_summary(row,*song);
             }
         } else {
             titles[i]=kSongCategories[category].label;row.kind=TAIKO_OVERLAY_ROW_CATEGORY;
@@ -665,7 +680,7 @@ void show_current_song()
             rows[row].catalog_index = entry.song_position;
             rows[row].selected = first + row == g_song_browser_position;
             rows[row].kind = TAIKO_OVERLAY_ROW_SONG;
-            for(unsigned d=0;d<5;++d) rows[row].course_stars[d]=visible->stars[d];
+            browser_course_summary(rows[row],*visible);
         }
     }
 

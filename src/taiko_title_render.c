@@ -137,11 +137,12 @@ static int less_spacing_above(int cp) {
     };
     return in_list(cp, t, sizeof t / sizeof t[0]);
 }
+/* Full-width Latin letters stay upright, just like ASCII Latin letters. */
 static int in_rotate(int cp) {
     static const int t[] = {
         '-', 0x2010, '|', '/', '\\', 0x30FC, 0xFF5E, '~',
         0xFF08, 0xFF09, '(', ')', 0x300C, 0x300D, '[', ']',
-        0xFF33, 0xFF34, 0x3010, 0x3011, 0x2026, 0x2192, ':', 0xFF1A,
+        0x3010, 0x3011, 0x2026, 0x2192, ':', 0xFF1A,
     };
     return in_list(cp, t, sizeof t / sizeof t[0]);
 }
@@ -1553,15 +1554,17 @@ int taiko_title_render_spine_scaled_argb(const char *title, void *out,
     ft_lock();
     static TitleProfile profile;
     static unsigned int profile_scale;
+    static int profile_black;
     int ok = font_ready() && profiles_ready();
-    if (ok && profile_scale != scale) {
+    if (ok && (profile_scale != scale || profile_black != (rgb == 0))) {
         for (int i = 0; i < GCAP; ++i) {
             free(profile.glyphs[i].cov);
             free(profile.glyphs[i].dil);
         }
         ok = profile_init(&profile, VSHORT_FONT_PX * scale,
-                          VSHORT_OUTLINE * scale, VSHORT_LEADING_PX * scale,
-                          VSHORT_OUTLINE_RADIUS * scale, 1, 1);
+                          (rgb == 0 ? 6 : VSHORT_OUTLINE) * scale, VSHORT_LEADING_PX * scale,
+                          (rgb == 0 ? 5.5f : VSHORT_OUTLINE_RADIUS) * scale, 1, 1);
+        profile_black = rgb == 0;
         profile_scale = ok ? scale : 0;
     }
     if (ok) ok = render_short_scaled(title, out, rgb, &profile, scale, 1);

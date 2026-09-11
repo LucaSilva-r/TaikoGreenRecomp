@@ -115,13 +115,36 @@ static unsigned menu_character(const menu_folder_style* style)
     return ids[menu_style_index(style)];
 }
 
+static unsigned menu_course_columns(const song_row_storage* row)
+{
+    if(row->chart_count)return row->chart_count<4?row->chart_count:4;
+    unsigned mask=row->course_mask?row->course_mask:g_song_difficulty_mask;
+    unsigned count=0;
+    for(unsigned d=0;d<4;++d)if(mask&(1u<<d))++count;
+    // Ura-only imports still need a visible summary, but never a fifth lane.
+    return count?count:1;
+}
+static float menu_song_width(const song_row_storage* row)
+{
+    return row->kind==TAIKO_OVERLAY_ROW_SONG?160+60*menu_course_columns(row):400;
+}
+static float g_menu_width_override; /* Publication samples old/new poses separately. */
+static float menu_selected_width(void)
+{
+    if(g_menu_width_override>0)return g_menu_width_override;
+    if(g_song_browser_level!=TAIKO_OVERLAY_BROWSER_CATEGORIES)
+        for(unsigned i=0;i<g_song_row_count;++i)
+            if(g_song_rows[i].selected)return menu_song_width(&g_song_rows[i]);
+    return 400;
+}
 static float menu_card_x(int relative)
 {
-    return relative < 0 ? 440 + relative*96 : relative > 0 ? 764 + relative*96 : 440;
+    float half=menu_selected_width()/2;
+    return relative<0 ? 640-half+relative*96 : relative>0 ? 640+half-76+relative*96 : 640-half;
 }
-static float menu_card_w(int relative) { return relative ? 76 : 400; }
+static float menu_card_w(int relative) { return relative ? 76 : menu_selected_width(); }
 
-/* Keep the full centre slot reserved. Neighbours finish sliding before
+/* Reserve the selected card's content width. Neighbours finish sliding before
  * the selected spine opens; expansion must never push the row outward. */
 static void menu_card_pose(float from_x,float from_w,int relative,float progress,
                            float* x,float* w)
@@ -316,8 +339,8 @@ static void menu_navigation_arrows(void)
     g_menu_alpha=menu_prompt_alpha(phase);
     if(g_menu_alpha) {
         float travel=18*phase, w=84, h=w*120/104;
-        menu_image(787,448-w-travel,349-h/2,w,h,0);
-        menu_image(787,832+travel,349-h/2,w,h,1);
+        menu_image(787,640-menu_selected_width()/2+8-w-travel,349-h/2,w,h,0);
+        menu_image(787,640+menu_selected_width()/2-8+travel,349-h/2,w,h,1);
     }
     g_menu_alpha=saved_alpha;
 }
@@ -411,25 +434,69 @@ static void menu_heading(const menu_folder_style* style, const char* title, floa
     g_outline_radius=saved_outline;
 }
 
+/* This is a listing summary, not a chart cursor. Osu sets keep their actual
+ * chart order and show an overflow count instead of inventing standard courses. */
 static void menu_song_courses(const song_row_storage* row, const menu_folder_style* active,
                               float x, float w)
 {
-    static const char* courses[]={"EASY","NORMAL","HARD","ONI","URA"};
+    (void)active;
+    static const char* courses[]={"Easy","Normal","Hard","Extreme","Ura"};
+    static const unsigned icons[]={259,260,261,262,326};
+    unsigned mask=row->course_mask ? row->course_mask : g_song_difficulty_mask;
     unsigned shown=0;
-    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) ++shown;
-    unsigned column=0;
-    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) {
-        float cx=x+36+column++*(w-144)/(shown?shown:1);
-        fill_rounded_rect(cx,279,cx+38,511,18,active->colour);
-        static const unsigned icons[]={259,260,261,262,326};
-        menu_image(icons[d],cx-3,247,44,35,0);
-        menu_spine(courses[d],cx+19,296,180,0);
-        unsigned rating=row->course_stars[d];
-        if(!rating) draw_text_at("--",16,cx+19,483);
-        else for(unsigned star=0;star<rating && star<10;++star)
-            draw_text_at("★",11,cx+19,491-star*10);
+    if(row->chart_count) shown=row->chart_count<4?row->chart_count:4;
+    else {
+        if(mask&15)mask&=15;
+        for(unsigned d=0;d<5;++d) if(mask&(1u<<d)) ++shown;
     }
-    draw_text_at("DON: CHOOSE CHART",17,x+(w-80)/2,238);
+    float spacing=(w-150)/(shown>1?shown-1:1);
+    if(spacing>60)spacing=60;
+    unsigned column=0;
+    int saved_outline=g_menu_text_outline;
+    uint32_t saved_tint=g_menu_text_tint;
+    for(unsigned d=0;d<5;++d) {
+        if(row->chart_count ? d>=shown : !(mask&(1u<<d))) continue;
+        float cx=x+43+column++*spacing;
+        fill_rounded_rect(cx-20,258,cx+20,525,20,RGB_COLOUR(255,166,13));
+        /* The source icons are square (with authored transparent padding). */
+        float size=66;
+        menu_image(icons[row->chart_count?3:d],cx-size/2,213,size,size*421/461,0);
+        g_menu_text_outline=0;g_menu_text_tint=0;
+        char chart_label[16];
+        snprintf(chart_label,sizeof chart_label,"%u",d+1);
+        const char* label=row->chart_count?chart_label:courses[d];
+        // Broad, vertically compressed lettering, like the authored labels.
+        g_menu_text_scale_x=1.15f;g_menu_text_scale_y=0.72f;
+        for(unsigned c=0;label[c];++c) {
+            char glyph[2]={label[c],0};
+            draw_text_at(glyph,20,cx,274+c*12);
+        }
+        g_menu_text_scale_x=g_menu_text_scale_y=1;
+        unsigned rating=row->chart_count?row->chart_stars[d]:row->course_stars[d];
+        for(unsigned star=0;star<10;++star) {
+            float cy=505-star*16;
+            if(star<rating) menu_image(396,cx-16,cy-14.5f,32,29,0);
+            else fill_rounded_rect(cx-4,cy-4,cx+4,cy+4,4,RGB_COLOUR(229,133,27));
+        }
+        if(!rating) {
+            g_menu_text_tint=0;
+            draw_text_at("?",16,cx,505);
+        }
+    }
+    g_menu_text_tint=saved_tint;
+    if(row->chart_count) {
+        char count[40];
+        if(row->chart_count>4) snprintf(count,sizeof count,"+%u charts",row->chart_count-4);
+        else snprintf(count,sizeof count,"%u chart%s",row->chart_count,row->chart_count==1?"":"s");
+        g_menu_text_outline=2;
+        draw_text_fit(count,18,w-130,x+(w-100)/2,192);
+    }
+    if(!row->chart_count && (row->course_mask&16) && (row->course_mask&15)) {
+        g_menu_text_outline=2;
+        draw_text_fit("+ Ura",18,w-70,x+w/2,192);
+    }
+    g_menu_text_outline=saved_outline;
+    g_outline_radius=saved_outline;
 }
 
 /* Confirmation timeline sampled from the supplied 60 Hz opening recording.
@@ -539,6 +606,30 @@ static float menu_folder_right(void)
     return edge>1376?1376:edge<850?850:edge;
 }
 
+static void menu_return_spine(float centre)
+{
+    const menu_art* source=&g_menu_art[422];
+    static menu_art icon;
+    if(!icon.pixels && source->pixels && source->width==48 && source->height>=44) {
+        // Icon ink ends at row 41; rows 42/43 separate it from the lettering.
+        // Retain those transparent rows so the lower rounded border survives.
+        icon.width=48;icon.height=44;
+        icon.pixels=malloc(icon.width*icon.height*sizeof(uint32_t));
+        if(icon.pixels)for(unsigned i=0;i<icon.width*icon.height;++i) {
+            uint32_t c=source->pixels[i];
+            // Replace black with the reference's dark brown, preserving white
+            // fill, antialiasing and source alpha rather than tinting the box.
+            unsigned r=74+(c&255)*(255-74)/255;
+            unsigned g=40+((c>>8)&255)*(255-40)/255;
+            unsigned b=(c>>16)&255;
+            icon.pixels[i]=(c&0xff000000u)|r|(g<<8)|(b<<16);
+        }
+    }
+    menu_bitmap(&icon,UINT64_C(0x4a00000000000001),centre-22,157,
+                44,44*44/48.0f*421/461,0);
+    menu_spine("Return",centre,194,335,0x523008);
+}
+
 static void menu_song_card(const song_row_storage* row,const menu_folder_style* style,
                            float x,float w,int selected,unsigned opacity)
 {
@@ -546,7 +637,8 @@ static void menu_song_card(const song_row_storage* row,const menu_folder_style* 
     g_menu_alpha=g_text_opacity=opacity;
     static const menu_folder_style return_style={"Return",RGB_COLOUR(166,116,42),0,554};
     menu_folder(x,132,w,421,row->kind==TAIKO_OVERLAY_ROW_EXIT?&return_style:style,0);
-    float opening=(w-76)/324;
+    float target_width=menu_song_width(row);
+    float opening=(w-76)/(target_width-76);
     if(opening<0)opening=0;
     if(opening>1)opening=1;
     if(selected && opening>0)
@@ -555,14 +647,12 @@ static void menu_song_card(const song_row_storage* row,const menu_folder_style* 
         float reveal=menu_interval(opening,0.3,0.7);
         g_menu_alpha=g_text_opacity=(unsigned)(opacity*reveal);
         if(row->kind==TAIKO_OVERLAY_ROW_EXIT) menu_image(421,476,275,246,246,0);
-        else if(reveal>0) menu_song_courses(row,style,440,400);
+        else if(reveal>0) menu_song_courses(row,style,640-target_width/2,target_width);
     }
     g_menu_alpha=g_text_opacity=opacity;
-    float centre=x+w/2+(selected?(row->kind==TAIKO_OVERLAY_ROW_EXIT?119:139)*opening:0);
-    menu_spine(row->kind==TAIKO_OVERLAY_ROW_EXIT?"× Return":row->title,
-               centre,row->kind==TAIKO_OVERLAY_ROW_EXIT?165:157,
-               row->kind==TAIKO_OVERLAY_ROW_EXIT?335:360,
-               selected || row->kind==TAIKO_OVERLAY_ROW_EXIT?0:menu_outline(style));
+    float centre=x+w/2+(selected?(row->kind==TAIKO_OVERLAY_ROW_EXIT?119:target_width/2-61)*opening:0);
+    if(row->kind==TAIKO_OVERLAY_ROW_EXIT)menu_return_spine(centre);
+    else menu_spine(row->title,centre,157,360,selected?0:menu_outline(style));
     g_menu_alpha=g_text_opacity=255;
 }
 
@@ -849,13 +939,13 @@ static void render_green_categories(void)
         menu_folder(x,132,w,421,style,rel!=0 || w<=76);
         if(rel==0 && !categories && w>76) menu_yellow_frame(x,132,w,421);
         if(rel==0 && w>76)
-            menu_heading(active,categories?g_song_title:g_song_category,(w-76)/324,1);
+            menu_heading(active,categories?g_song_title:g_song_category,(w-76)/(menu_card_w(0)-76),1);
         if(rel==0 && w>173) {
-            float opacity=((w-76)/324-0.3f)/0.4f;
+            float opacity=((w-76)/(menu_card_w(0)-76)-0.3f)/0.4f;
             if(opacity>1) opacity=1;
             g_menu_alpha=g_text_opacity=(unsigned)(255*opacity);
             /* Content fades at its final position while the panel opens. */
-            x=440;w=400;
+            w=menu_card_w(0);x=640-w/2;
             if(categories) {
                 /* The original white pill is translucent over its category. */
                 g_menu_alpha=g_text_opacity/2;
@@ -870,13 +960,16 @@ static void render_green_categories(void)
             } else {
                 if(row->kind==TAIKO_OVERLAY_ROW_EXIT) {
                     menu_image(421,x+36,275,246,246,0);
-                    menu_spine("Return",x+w-61,165,335,0);
+                    menu_return_spine(x+w-61);
                 } else {
                     menu_spine(row->title,x+w-61,158,362,0);
                     menu_song_courses(row,active,x,w);
                 }
             }
-        } else if(w<180) menu_spine(row->kind==TAIKO_OVERLAY_ROW_EXIT?"Return":row->title,x+w/2,157,360,menu_outline(style));
+        } else if(w<180) {
+            if(row->kind==TAIKO_OVERLAY_ROW_EXIT)menu_return_spine(x+w/2);
+            else menu_spine(row->title,x+w/2,157,360,menu_outline(style));
+        }
         g_menu_alpha=g_text_opacity=255;
     }
     }

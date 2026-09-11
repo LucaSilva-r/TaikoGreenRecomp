@@ -75,15 +75,33 @@ layout follows guest loader `func_007D5034`: a big-endian record count, 0x90c
 bytes per song, then an offset-addressed string pool. A course record is 0x80
 bytes, with its string offset at +0 and stars at +4. The `ex_<id>` record's Oni
 rating belongs to `<id>_x.bin` (Ura). Missing or malformed ratings display
-`★ --`; difficulty availability still comes from installed chart files.
+`★ --` in the chart-selection list and `?` in the song-card summary;
+difficulty availability still comes from installed chart files.
 
-The overlay receives explicit chart identities, ratings and player-marker masks
-rather than assuming a fixed difficulty button position. Stock launch mapping
-still uses Green's five courses. [Local TJA songs](custom_songs.md) appear in
-CUSTOM TJA, with on-demand conversion and native title textures. Importing osu beatmaps and their arbitrary
-named difficulties is future work; this change establishes the expanded-list
-interaction, using osu's `BeatmapCarousel` song-group/child-row structure and
-`Panel` easing as references.
+The song-list card is a summary, before chart selection. Standard songs show
+only installed courses (including unrated courses), with orange columns,
+black vertical labels, original difficulty icons and ten rating positions.
+White stars fill from the bottom; unused positions are orange dots. A question
+mark indicates a missing rating. Selected song titles use a heavier black
+outline; category-coloured neighbour outlines retain their existing weight.
+
+The yellow card grows by one column per available course, from a compact
+one-course card to the original four-course width. Ura is indicated separately
+with `+ Ura`, rather than a fifth standard column.
+
+Osu sets show up to four numbered chart summaries in the same order as the
+selection list. A `+N charts` label makes overflow explicit without exceeding the
+four-column width or hiding adjacent songs. A single chart keeps a full-size column. Opening
+the song exposes every named chart through the existing scrolling selection
+list; the summary never assigns arbitrary osu charts to Easy/Normal/Hard slots.
+Stock launch mapping still uses Green's five courses. Local TJA and installed
+osu!lazer songs are described in [custom songs](custom_songs.md).
+
+Preview modes `courses`, `courses-one`, `courses-five`, and `courses-osu` cover
+four standard courses, one course, five courses, and an eight-chart osu set.
+Pass the mode after the output BMP path in the preview command above. These
+fixtures publish shared category identities and absolute song positions, so the
+continuous folder background uses the same composition as the live browser.
 
 Validation: native `taiko_boot` build; `taiko_browser_tests` exercises production
 frontend input with fixture catalog/guest/overlay boundaries; player-state and

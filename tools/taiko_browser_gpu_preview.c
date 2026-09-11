@@ -272,7 +272,7 @@ int main(int argc, char** argv)
     for(unsigned i=3;i<8;++i){rows[i].kind=TAIKO_OVERLAY_ROW_DIFFICULTY;rows[i].difficulty=i-3;rows[i].stars=i+1;}
     rows[2].selected=1; rows[5].cursors=2;rows[6].cursors=1;rows[6].ready=1;
     rows[5].selected=rows[6].selected=1;
-    const int songs = argc > 4 && (!strcmp(argv[4], "songs") || !strcmp(argv[4], "return"));
+    const int songs = argc > 4 && (!strcmp(argv[4], "songs") || !strcmp(argv[4], "return") || !strncmp(argv[4], "courses", 7));
     const int returning = songs && !strcmp(argv[4], "return");
     const int categories = argc > 4 && (!strcmp(argv[4], "categories") || !strcmp(argv[4], "anime"));
     const char* folders[]={"J-POP","ANIME","VOCALOID","VARIETY","CLASSICAL","GAME MUSIC","NAMCO ORIGINAL","MEDLEY","CHILDREN'S SONGS","CUSTOM TJA","OSU! LAZER","NIJIIRO"};
@@ -297,12 +297,27 @@ int main(int argc, char** argv)
                 }
                 taiko_overlay_show_song_browser("P1 + P2","",folders[selection],"CATEGORY FOLDER",149,6,12,9845,"CATEGORIES",6,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,rows,TAIKO_OVERLAY_SONG_ROW_COUNT);
             } else if(songs) {
-                static const char* names[]={"Return","1 Dream","1・2・3","88","The New Adventure","太鼓の達人","Another song","Music","Next song"};
+                static const char* names[]={"Return","The New Adventure","1・2・3","88","1 Dream","太鼓の達人","Another song","Music","Next song"};
+                const int course_preview=!strncmp(argv[4],"courses",7);
                 for(unsigned i=0;i<9;++i) {
-                    memset(&rows[i],0,sizeof rows[i]);rows[i].title=names[i];rows[i].genre="ANIME";
+                    memset(&rows[i],0,sizeof rows[i]);rows[i].title=names[!course_preview && i==1?4:!course_preview && i==4?1:i];rows[i].genre="ANIME";
                     rows[i].catalog_index=i;rows[i].kind=i?TAIKO_OVERLAY_ROW_SONG:TAIKO_OVERLAY_ROW_EXIT;
-                    rows[i].selected=i==(returning?0:1);
-                    rows[i].course_stars[0]=2;rows[i].course_stars[1]=3;rows[i].course_stars[2]=3;
+                    rows[i].selected=i==(returning?0:course_preview?4:1);
+                    rows[i].carousel_group=2;
+                    rows[i].browser_position=i+(course_preview?20:0);
+                    rows[i].browser_total=85;
+                    if(!strcmp(argv[4],"courses-latin")) {
+                        static const char* latin[]={"Return","ＤＲＥＡＭＥＲＳ","ＳＴＡＹ ＴＵＮＥ","ＴＴ -Japanese ver.-","ＤＲＥＡＭＥＲＳ","ＳＴＡＹ ＴＵＮＥ","ＴＴ","Music","Next song"};
+                        rows[i].title=latin[i];
+                    }
+                    rows[i].course_mask=15;
+                    rows[i].course_stars[0]=2;rows[i].course_stars[1]=3;rows[i].course_stars[2]=4;rows[i].course_stars[3]=8;
+                    if(!strcmp(argv[4],"courses-five")) {rows[i].course_mask=31;rows[i].course_stars[4]=10;}
+                    if(!strcmp(argv[4],"courses-one")) rows[i].course_mask=8;
+                    if(!strcmp(argv[4],"courses-osu")) {
+                        rows[i].chart_count=8;
+                        for(unsigned d=0;d<5;++d)rows[i].chart_stars[d]=d+2;
+                    }
                 }
                 taiko_overlay_show_song_browser("P1 + P2","preview",returning?"Return":"1 Dream","ANIME",123,1,85,881,"ANIME",1,12,"ONI",7,"",0,1,returning,rows,9);
             } else taiko_overlay_show_song_browser("P1 + P2","preview","太鼓の達人 / Groove","VOCALOID",123,12,47,881,"VOCALOID",2,9,"ONI",31,"",0,1,0,rows,9);

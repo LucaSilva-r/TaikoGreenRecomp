@@ -76,6 +76,30 @@ int main(int argc, char** argv)
         }
         CHECK(top<=2 && fill>20 && outline>20);
     }
+    // Full-width Latin S/T must remain upright in vertical song titles.
+    // S is taller than wide; T's crossbar belongs above its narrow stem.
+    const char* upright[]={"Ｓ","Ｔ"};
+    for(unsigned letter=0;letter<2;++letter) {
+        memset(pixels,0,sizeof pixels);
+        CHECK(taiko_title_render_spine_scaled_argb(upright[letter],pixels,0,1));
+        unsigned left=56,right=0,top=400,bottom=0;
+        for(unsigned y=0;y<400;++y)for(unsigned x=0;x<56;++x)
+            if(pixels[y*56+x]==0xffffffff) {
+                if(x<left)left=x;if(x>right)right=x;
+                if(y<top)top=y;if(y>bottom)bottom=y;
+            }
+        CHECK(left<=right && top<bottom);
+        if(!letter) CHECK(bottom-top>right-left);
+        else {
+            unsigned upper=0,lower=0,third=(bottom-top+1)/3;
+            for(unsigned y=top;y<=bottom;++y)for(unsigned x=left;x<=right;++x)
+                if(pixels[y*56+x]==0xffffffff) {
+                    if(y<top+third)++upper;
+                    if(y>bottom-third)++lower;
+                }
+            CHECK(upper>lower*3/2);
+        }
+    }
     // Rebuilding at larger drawable sizes must retain real glyph coverage,
     // and changing scale back must not retain the previous profile's metrics.
     uint32_t *large=calloc(56*400*16,sizeof(uint32_t));

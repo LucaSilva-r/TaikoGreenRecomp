@@ -49,6 +49,8 @@ static const uint32_t COLOR_TEXT_OUTLINE = 0xFF000000u;
 enum { TEXT_OUTLINE_RADIUS = 3 };
 static _Thread_local int g_outline_radius = TEXT_OUTLINE_RADIUS;
 static int g_menu_text_outline = TEXT_OUTLINE_RADIUS;
+static uint32_t g_menu_text_tint = 0xffffff;
+static float g_menu_text_scale_x=1, g_menu_text_scale_y=1;
 static unsigned g_text_opacity=255;
 static HostUiEmit g_ui_emit;
 static void* g_ui_user;
@@ -102,6 +104,9 @@ typedef struct song_row_storage {
     unsigned difficulty, stars;
     uint8_t cursors, ready;
     uint8_t course_stars[5];
+    uint8_t course_mask;
+    unsigned chart_count;
+    uint8_t chart_stars[5];
     unsigned browser_position, browser_total, carousel_group;
     float from_y, from_x;
     float from_card_x, from_card_w;
@@ -653,11 +658,11 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
         if(native)native=async_text(native,0,0,0,&fade);
         if (native) {
             HostUiDraw draw = {0};
-            draw.x = centre_x + (native->left - native->advance / 2) / g_ui_scale;
-            draw.y = centre_y + (native->top + native->baseline_shift) / g_ui_scale;
-            draw.w = native->width / g_ui_scale;
-            draw.h = native->height / g_ui_scale;
-            draw.colour = ((unsigned)(g_text_opacity*fade)<<24)|0xffffffu;
+            draw.x = centre_x + (native->left - native->advance / 2) * g_menu_text_scale_x / g_ui_scale;
+            draw.y = centre_y + (native->top + native->baseline_shift) * g_menu_text_scale_y / g_ui_scale;
+            draw.w = native->width * g_menu_text_scale_x / g_ui_scale;
+            draw.h = native->height * g_menu_text_scale_y / g_ui_scale;
+            draw.colour = ((unsigned)(g_text_opacity*fade)<<24)|g_menu_text_tint;
             draw.texture_id = native->texture_id;
             draw.pixels = native->bitmap;
             draw.width = native->width;
@@ -673,14 +678,16 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
         draw_text_uncached(text, pixels, centre_x, centre_y);
         return;
     }
-    const int left = centre_x - entry->advance / 2 + entry->left;
-    const int top = centre_y + entry->baseline_shift + entry->top;
-    for (int y = 0; y < entry->height; ++y) {
+    const int left = centre_x + (entry->left - entry->advance / 2) * g_menu_text_scale_x;
+    const int top = centre_y + (entry->baseline_shift + entry->top) * g_menu_text_scale_y;
+    const int width=(int)ceilf(entry->width*g_menu_text_scale_x);
+    const int height=(int)ceilf(entry->height*g_menu_text_scale_y);
+    for (int y = 0; y < height; ++y) {
         if (top + y < 0 || top + y >= g_height) continue;
-        const uint32_t* row = entry->bitmap + (size_t)y * entry->width;
-        for (int x = 0; x < entry->width; ++x) {
+        const uint32_t* row = entry->bitmap + (size_t)(int)(y/g_menu_text_scale_y) * entry->width;
+        for (int x = 0; x < width; ++x) {
             if (left + x < 0 || left + x >= g_width) continue;
-            const uint32_t colour = row[x];
+            const uint32_t colour = row[(int)(x/g_menu_text_scale_x)] & (0xff000000u | g_menu_text_tint);
             if ((colour >> 24) == 255 && g_text_opacity==255)
                 g_pixels[(size_t)(top + y) * g_width + left + x] = colour;
             else if (colour >> 24)
@@ -1385,6 +1392,7 @@ void taiko_overlay_show_song_browser(const char* player_name,
                                      unsigned row_count)
 {
     pthread_mutex_lock(&g_lock);
+    const float old_card_width=menu_selected_width();
     const int was_categories = g_mode == 5 && g_visible &&
         g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES;
     unsigned old_selected=0, incoming_selected=0;
@@ -1469,6 +1477,14 @@ void taiko_overlay_show_song_browser(const char* player_name,
     int previous_selected=0, next_selected=0;
     for(unsigned i=0;i<previous_count;++i) if(previous[i].selected) previous_selected=(int)i;
     for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) if(rows[i].selected) next_selected=(int)i;
+    song_row_storage incoming_card={0};
+    if(rows && row_count) {
+        incoming_card.kind=rows[next_selected].kind;
+        incoming_card.course_mask=rows[next_selected].course_mask;
+        incoming_card.chart_count=rows[next_selected].chart_count;
+    }
+    const float new_card_width=browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES?400:menu_song_width(&incoming_card);
+    g_menu_width_override=new_card_width;
     int changed = previous_count != row_count;
     int card_shift=0, have_card_shift=0;
     unsigned unmatched_cards=0;
@@ -1484,6 +1500,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
         g_song_rows[row].kind = rows ? rows[row].kind
                                     : TAIKO_OVERLAY_ROW_SONG;
         song_row_storage* item = &g_song_rows[row];
+        item->course_mask=rows?rows[row].course_mask:0;
+        item->chart_count=rows?rows[row].chart_count:0;
+        for(unsigned d=0;d<5;++d)item->chart_stars[d]=rows?rows[row].chart_stars[d]:0;
         item->browser_position=rows?rows[row].browser_position:0;
         item->browser_total=rows?rows[row].browser_total:0;
         item->carousel_group=rows?rows[row].carousel_group:0;
@@ -1512,9 +1531,13 @@ void taiko_overlay_show_song_browser(const char* player_name,
                     card_shift=prior_relative-relative;
                     have_card_shift=1;
                 }
+                g_menu_width_override=old_card_width;
                 menu_card_pose(prior->from_card_x,prior->from_card_w,prior_relative,old_ease,
                                &item->from_card_x,&item->from_card_w);
                 menu_shared_bounds(prior,prior_relative,old_ease,&item->from_group_left,&item->from_group_right);
+                g_menu_width_override=new_card_width;
+                changed |= prior->course_mask!=item->course_mask || prior->chart_count!=item->chart_count ||
+                           memcmp(prior->course_stars,item->course_stars,5) || memcmp(prior->chart_stars,item->chart_stars,5);
                 changed |= old != row || prior->selected != item->selected ||
                            prior->cursors != item->cursors || prior->ready != item->ready;
                 break;
@@ -1532,6 +1555,7 @@ void taiko_overlay_show_song_browser(const char* player_name,
         g_song_rows[row].from_card_w=menu_card_w(relative);
         menu_shared_target(&g_song_rows[row],relative,&g_song_rows[row].from_group_left,&g_song_rows[row].from_group_right);
     }
+    g_menu_width_override=0;
     g_song_shared_carousel=shared;
     for(unsigned i=0;i<g_song_row_count;++i)
         if(g_song_rows[i].kind==TAIKO_OVERLAY_ROW_DIFFICULTY)g_song_shared_carousel=0;

@@ -54,6 +54,9 @@ typedef struct taiko_overlay_song_row {
     uint8_t cursors;
     uint8_t ready;
     uint8_t course_stars[5]; /* Per-course song-card preview; zero = unknown. */
+    uint8_t course_mask; /* Installed courses, including unrated charts. */
+    unsigned chart_count; /* osu group size; zero = standard courses. */
+    uint8_t chart_stars[5]; /* First five named charts in selection order. */
     unsigned browser_position; /* Absolute entry ordinal, including Return cards. */
     unsigned browser_total; /* Complete entry count, not the visible window. */
     unsigned carousel_group; /* Nonzero shared category identity; zero = legacy/list UI. */
