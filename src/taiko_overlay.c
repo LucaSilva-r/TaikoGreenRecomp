@@ -101,14 +101,33 @@ typedef struct song_row_storage {
     unsigned difficulty, stars;
     uint8_t cursors, ready;
     uint8_t course_stars[5];
+    unsigned browser_position, browser_total, carousel_group;
     float from_y, from_x;
     float from_card_x, from_card_w;
+    float from_group_left, from_group_right;
 } song_row_storage;
 static song_row_storage g_song_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
 static unsigned g_song_row_count;
+static int g_song_shared_carousel;
 static double g_song_animation_start, g_song_last_render;
 static int g_song_animating;
 static int g_gpu_animation_pending;
+/* Own the outgoing categories across repeated song publications. */
+static song_row_storage g_folder_categories[TAIKO_OVERLAY_SONG_ROW_COUNT];
+static unsigned g_folder_category_count;
+static int g_folder_category_selected;
+static double g_folder_open_start;
+static int g_folder_open;
+static float g_folder_scroll_from, g_folder_scroll_target;
+static double g_folder_scroll_start;
+static int g_folder_closing;
+static double g_folder_close_start;
+static song_row_storage g_folder_close_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
+static unsigned g_folder_close_count;
+static char g_folder_close_category[64];
+static float g_folder_close_left, g_folder_close_right;
+static uint8_t g_folder_close_difficulties;
+static unsigned g_folder_close_group;
 /* Three cached, opaque panels keep overlapping text/cards fading as one layer.
  * Only the short handoff uses these 1280x720 snapshots; normal UI stays native
  * resolution. No per-frame text rasterization or GPU texture uploads. */
@@ -152,6 +171,10 @@ static long monotonic_seconds(void)
 
 static double monotonic_milliseconds(void)
 {
+#ifdef TAIKO_BROWSER_PREVIEW
+    extern double taiko_preview_clock_ms;
+    if (taiko_preview_clock_ms >= 0) return taiko_preview_clock_ms;
+#endif
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
@@ -358,32 +381,11 @@ static void draw_text_uncached(const char* text, int pixels, int centre_x, int c
             if (FT_Load_Char(g_face, codepoint, FT_LOAD_RENDER) != 0)
                 continue;
             const FT_GlyphSlot glyph = g_face->glyph;
-            if (g_ui_emit && pass == 0) {
-                // Vector stroke at drawable scale: rasterizing a wide outline
-                // once avoids O(radius^2) disk compositing at 4K/HiDPI sizes.
-                FT_Glyph outline = NULL;
-                FT_Stroker stroker = NULL;
-                if (FT_Load_Char(g_face, codepoint, FT_LOAD_NO_BITMAP) == 0 &&
-                    FT_Get_Glyph(g_face->glyph, &outline) == 0 &&
-                    FT_Stroker_New(g_library, &stroker) == 0) {
-                    FT_Stroker_Set(stroker, g_outline_radius * 64,
-                        FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
-                    if (FT_Glyph_StrokeBorder(&outline, stroker, 0, 1) == 0 &&
-                        FT_Glyph_To_Bitmap(&outline, FT_RENDER_MODE_NORMAL, NULL, 1) == 0) {
-                        FT_BitmapGlyph bitmap = (FT_BitmapGlyph)outline;
-                        for (unsigned y = 0; y < bitmap->bitmap.rows; ++y)
-                            for (unsigned x = 0; x < bitmap->bitmap.width; ++x)
-                                put_pixel(pen_x + bitmap->left + x,
-                                    baseline - bitmap->top + y, COLOR_TEXT_OUTLINE,
-                                    bitmap->bitmap.buffer[y * bitmap->bitmap.pitch + x]);
-                    }
-                }
-                if (stroker) FT_Stroker_Done(stroker);
-                if (outline) FT_Done_Glyph(outline);
-            } else {
-                draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
-                           baseline - glyph->bitmap_top, pass == 0);
-            }
+            // Grow the coverage mask, including tight counters. Offset vector
+            // contours can self-intersect and leave pinholes in a/g at this weight.
+            // Runs are cached, so this work is paid only when text/scale changes.
+            draw_glyph(&glyph->bitmap, pen_x + glyph->bitmap_left,
+                       baseline - glyph->bitmap_top, pass == 0);
             pen_x += (int)(glyph->advance.x >> 6);
         }
     }
@@ -1258,6 +1260,60 @@ void taiko_overlay_show_song_browser(const char* player_name,
                                      unsigned row_count)
 {
     pthread_mutex_lock(&g_lock);
+    const int was_categories = g_mode == 5 && g_visible &&
+        g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES;
+    unsigned old_selected=0, incoming_selected=0;
+    for(unsigned i=0;i<g_song_row_count;++i)if(g_song_rows[i].selected)old_selected=i;
+    for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i)
+        if(rows[i].selected)incoming_selected=i;
+    const int shared=rows && row_count && rows[0].carousel_group!=0;
+    int opening_folder = was_categories && browser_level != TAIKO_OVERLAY_BROWSER_CATEGORIES &&
+        !search_active && (!query || !*query) && rows && row_count;
+    if(shared) opening_folder=opening_folder &&
+        g_song_rows[old_selected].carousel_group==rows[incoming_selected].carousel_group;
+    for (unsigned i=0; opening_folder && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT; ++i)
+        if ((!shared && rows[i].kind == TAIKO_OVERLAY_ROW_CATEGORY) ||
+            rows[i].kind == TAIKO_OVERLAY_ROW_DIFFICULTY) opening_folder=0;
+    const int closing_folder = g_folder_open && !was_categories && g_visible &&
+        browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES &&
+        title && !strcmp(title,g_song_category);
+    if(closing_folder) {
+        memcpy(g_folder_close_rows,g_song_rows,sizeof g_folder_close_rows);
+        g_folder_close_count=g_song_row_count;
+        snprintf(g_folder_close_category,sizeof g_folder_close_category,"%s",g_song_category);
+        g_folder_close_difficulties=g_song_difficulty_mask;
+        g_folder_close_left=menu_folder_left();
+        g_folder_close_right=menu_folder_right();
+        g_folder_close_group=g_song_rows[old_selected].carousel_group;
+        if(g_song_shared_carousel) menu_shared_bounds(&g_song_rows[old_selected],0,song_ease(),
+            &g_folder_close_left,&g_folder_close_right);
+        g_folder_close_start=monotonic_milliseconds();
+        g_folder_closing=1;
+    } else if(opening_folder || !g_visible || g_mode!=5 || search_active ||
+              (query && *query) || (g_folder_closing && title &&
+              strcmp(title,g_folder_close_category))) g_folder_closing=0;
+    if (opening_folder) {
+        memcpy(g_folder_categories,g_song_rows,sizeof g_folder_categories);
+        g_folder_category_count=g_song_row_count;
+        g_folder_category_selected=0;
+        for(unsigned i=0;i<g_song_row_count;++i)
+            if(g_song_rows[i].selected) g_folder_category_selected=(int)i;
+        g_folder_open_start=monotonic_milliseconds();
+        g_folder_open=1;
+        g_folder_scroll_from=g_folder_scroll_target=0;
+    } else if (browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES ||
+               g_mode != 5 || !g_visible || search_active || (query && *query) ||
+               (category && strcmp(category,g_song_category))) {
+        g_folder_open=0;
+        if(!g_folder_closing) g_folder_category_count=0;
+    }
+    if(shared && !opening_folder && browser_level==TAIKO_OVERLAY_BROWSER_SONGS &&
+       rows[incoming_selected].kind!=TAIKO_OVERLAY_ROW_CATEGORY &&
+       rows[incoming_selected].kind!=TAIKO_OVERLAY_ROW_DIFFICULTY && !g_folder_open) {
+        // Entering an already open neighbour is a scroll, never an opening.
+        g_folder_open=1;g_folder_open_start=monotonic_milliseconds()-1000;
+        g_folder_scroll_from=g_folder_scroll_target=rows[incoming_selected].browser_position*96.0f;
+    }
     /* A fresh selection or a failed launch takes ownership immediately. */
     g_handoff = 0;
     g_handoff_snapshot = 0;
@@ -1303,6 +1359,9 @@ void taiko_overlay_show_song_browser(const char* player_name,
         g_song_rows[row].kind = rows ? rows[row].kind
                                     : TAIKO_OVERLAY_ROW_SONG;
         song_row_storage* item = &g_song_rows[row];
+        item->browser_position=rows?rows[row].browser_position:0;
+        item->browser_total=rows?rows[row].browser_total:0;
+        item->carousel_group=rows?rows[row].carousel_group:0;
         item->difficulty = rows ? rows[row].difficulty : 0;
         item->stars = rows ? rows[row].stars : 0;
         item->cursors = rows ? rows[row].cursors : 0;
@@ -1313,10 +1372,12 @@ void taiko_overlay_show_song_browser(const char* player_name,
         int relative=(int)row-next_selected;
         item->from_card_x=menu_card_x(relative);
         item->from_card_w=menu_card_w(relative);
+        menu_shared_target(item,relative,&item->from_group_left,&item->from_group_right);
         int found = -1;
         for (unsigned old = 0; old < previous_count; ++old) {
             const song_row_storage* prior = &previous[old];
-            if (prior->kind == item->kind && prior->catalog_index == item->catalog_index &&
+            if (prior->carousel_group==item->carousel_group &&
+                prior->kind == item->kind && prior->catalog_index == item->catalog_index &&
                 prior->difficulty == item->difficulty && !strcmp(prior->title, item->title)) {
                 found = (int)old;
                 item->from_y = prior->from_y + (111 + old * 59 - prior->from_y) * old_ease;
@@ -1328,6 +1389,7 @@ void taiko_overlay_show_song_browser(const char* player_name,
                 }
                 menu_card_pose(prior->from_card_x,prior->from_card_w,prior_relative,old_ease,
                                &item->from_card_x,&item->from_card_w);
+                menu_shared_bounds(prior,prior_relative,old_ease,&item->from_group_left,&item->from_group_right);
                 changed |= old != row || prior->selected != item->selected ||
                            prior->cursors != item->cursors || prior->ready != item->ready;
                 break;
@@ -1343,13 +1405,29 @@ void taiko_overlay_show_song_browser(const char* player_name,
         int relative=(int)row-next_selected+card_shift;
         g_song_rows[row].from_card_x=menu_card_x(relative);
         g_song_rows[row].from_card_w=menu_card_w(relative);
+        menu_shared_target(&g_song_rows[row],relative,&g_song_rows[row].from_group_left,&g_song_rows[row].from_group_right);
+    }
+    g_song_shared_carousel=shared;
+    for(unsigned i=0;i<g_song_row_count;++i)
+        if(g_song_rows[i].kind==TAIKO_OVERLAY_ROW_DIFFICULTY)g_song_shared_carousel=0;
+    if(closing_folder && shared) {
+        memcpy(g_folder_categories,g_song_rows,sizeof g_folder_categories);
+        g_folder_category_count=g_song_row_count;g_folder_category_selected=next_selected;
+    }
+    if(g_folder_open && green_categories() && g_song_row_count) {
+        float target=g_song_rows[next_selected].browser_position*96.0f;
+        if(target!=g_folder_scroll_target) {
+            g_folder_scroll_from=menu_folder_scroll();
+            g_folder_scroll_target=target;
+            g_folder_scroll_start=monotonic_milliseconds();
+        }
     }
     if (changed) {
         g_song_animation_start = monotonic_milliseconds();
         /* Navigation interrupts, rather than queues behind, an unfinished
          * carousel animation. Land on the next closed spine immediately and
          * retain the normal idle delay before opening it. */
-        if(green_categories() && have_card_shift && card_shift && old_ease<1.0f)
+        if(green_categories() && !g_song_shared_carousel && !g_folder_open && have_card_shift && card_shift && old_ease<1.0f)
             g_song_animation_start -= 8000.0/60;
         g_song_animating = 1;
         g_gpu_animation_pending = 1;
@@ -1358,10 +1436,13 @@ void taiko_overlay_show_song_browser(const char* player_name,
         for (unsigned row = 0; row < g_song_row_count; ++row) {
             g_song_rows[row].from_card_x = previous[row].from_card_x;
             g_song_rows[row].from_card_w = previous[row].from_card_w;
+            g_song_rows[row].from_group_left=previous[row].from_group_left;
+            g_song_rows[row].from_group_right=previous[row].from_group_right;
             g_song_rows[row].from_y = previous[row].from_y;
             g_song_rows[row].from_x = previous[row].from_x;
         }
     }
+    if(closing_folder) g_song_animation_start=monotonic_milliseconds()-500;
     g_mode = 5;
     g_visible = 1;
     g_deadline = 0;

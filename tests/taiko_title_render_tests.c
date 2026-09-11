@@ -76,6 +76,22 @@ int main(int argc, char** argv)
         }
         CHECK(top<=2 && fill>20 && outline>20);
     }
+    // Rebuilding at larger drawable sizes must retain real glyph coverage,
+    // and changing scale back must not retain the previous profile's metrics.
+    uint32_t *large=calloc(56*400*16,sizeof(uint32_t));
+    CHECK(large);
+    const unsigned scales[]={1,2,4,2,1};
+    for(unsigned i=0;i<5;++i) {
+        unsigned scale=scales[i], w=56*scale,h=400*scale,fill=0;
+        CHECK(taiko_title_render_spine_scaled_argb("Anime",large,0,scale));
+        for(unsigned j=0;j<w*h;++j) fill+=large[j]==0xffffffff;
+        CHECK(fill>100*scale*scale);
+        if(scale==1) {
+            CHECK(taiko_title_render_spine_argb("Anime",pixels,0));
+            CHECK(large[0]==0); // Host outline differs from the native vector stroke.
+        }
+    }
+    free(large);
     // Browser and custom-song workers share the same mutable short-title
     // profile. Their different outline colours must not bleed into each other.
     SpineJob jobs[2]={{.title="CUSTOM TJA"},{.title="ゲーム！？",.native=1}};

@@ -1,4 +1,6 @@
 /* Test the real rasterizer/cache without exposing cache controls in the game. */
+#define TAIKO_BROWSER_PREVIEW 1
+double taiko_preview_clock_ms = -1;
 #include "../src/taiko_overlay.c"
 #undef NDEBUG
 #include <assert.h>
@@ -301,6 +303,126 @@ int main(void)
         0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
         carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
     assert(g_song_animation_start==rapid_start);
+    // Confirmation owns the outgoing rows; publishing the catalog again must
+    // neither lose the left categories nor restart the opening animation.
+    taiko_overlay_song_row opened[2]={
+        {"Return","J-POP",0,1,TAIKO_OVERLAY_ROW_EXIT},
+        {"Lemon","J-POP",1,0,TAIKO_OVERLAY_ROW_SONG}};
+    taiko_overlay_show_song_browser("P1","","Return","J-POP",0,
+        0,1,1,"J-POP",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_SONGS,1,opened,2);
+    assert(g_folder_open && g_folder_category_count==TAIKO_OVERLAY_SONG_ROW_COUNT);
+    double opening_start=g_folder_open_start;
+    char retained_title[256];
+    strcpy(retained_title,g_folder_categories[0].title);
+    taiko_overlay_show_song_browser("P1","","Return","J-POP",0,
+        0,1,1,"J-POP",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_SONGS,1,opened,2);
+    assert(g_folder_open_start==opening_start);
+    assert(!strcmp(retained_title,g_folder_categories[0].title));
+    taiko_overlay_show_song_browser("P1","","C1","",0,
+        0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+        carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+    assert(!g_folder_open && !g_folder_category_count);
+    // Search and nested custom-folder lists use their existing transition.
+    opened[0].kind=TAIKO_OVERLAY_ROW_CATEGORY;
+    taiko_overlay_show_song_browser("P1","","Nested","CUSTOM TJA",0,
+        0,1,1,"CUSTOM TJA",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_SONGS,1,opened,2);
+    assert(!g_folder_open);
+    // Beginning, interior, and end share one close. Even a million-entry
+    // library emits only a viewport-sized folder, with a fixed title tab.
+    for(unsigned sample=0;sample<3;++sample) {
+        const unsigned position=sample==0?0:sample==1?500000:1000000;
+        taiko_overlay_show_song_browser("P1","","J-POP","",0,
+            0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+            carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+        opened[0].kind=TAIKO_OVERLAY_ROW_EXIT;
+        opened[0].browser_position=position;opened[0].browser_total=1000001;
+        opened[1].browser_position=position;opened[1].browser_total=1000001;
+        taiko_overlay_show_song_browser("P1","","Return","J-POP",0,
+            0,1,1,"J-POP",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_SONGS,1,opened,2);
+        g_folder_scroll_start=monotonic_milliseconds()-200;
+        g_folder_open_start=monotonic_milliseconds()-1000;
+        g_song_animation_start=monotonic_milliseconds()-500;
+        double scroll_start=g_folder_scroll_start;
+        taiko_overlay_show_song_browser("P1","","Return","J-POP",0,
+            0,1,1,"J-POP",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_SONGS,1,opened,2);
+        assert(g_folder_scroll_start==scroll_start);
+        native_count=0;assert(visit_host_ui(1,collect_ui,NULL,&info));
+        unsigned shell_draws=0;
+        for(unsigned i=0;i<native_count;++i)
+            if((native_draws[i].texture_id>>56)==0x48) {
+                ++shell_draws;
+                assert(native_draws[i].w<=1472 && native_draws[i].x>=-96);
+            }
+        assert(shell_draws==5);
+        taiko_overlay_show_song_browser("P1","","J-POP","",0,
+            0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+            carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+        assert(g_folder_closing && !g_folder_open && g_folder_close_count==2);
+        double close_start=g_folder_close_start;
+        taiko_overlay_show_song_browser("P1","","J-POP","",0,
+            0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+            carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+        assert(g_folder_close_start==close_start);
+        g_folder_close_start=monotonic_milliseconds()-450;
+        native_count=0;assert(visit_host_ui(1,collect_ui,NULL,&info));
+        unsigned edges=0;
+        for(unsigned i=0;i<native_count;++i) {
+            if(native_draws[i].texture_id==UINT64_C(0x4800000000000000)) {
+                assert(native_draws[i].x==430);++edges;
+            }
+            if(native_draws[i].texture_id==UINT64_C(0x4800000000000003)) {
+                assert(native_draws[i].x==838);++edges;
+            }
+        }
+        assert(edges==2); // Both arrived, independent of their travel distance.
+        g_folder_close_start=monotonic_milliseconds()-900;
+        native_count=0;assert(visit_host_ui(1,collect_ui,NULL,&info));
+        assert(!g_folder_closing);
+    }
+    // Fading slices must not overlap: identical body pixels blend once.
+    background(0xff000000);
+    g_menu_alpha=128;
+    menu_open_shell(&menu_styles[0],54,573,430,1330);
+    assert(g_pixels[300*HOST_WIDTH+455]==g_pixels[300*HOST_WIDTH+640]);
+    assert(g_pixels[300*HOST_WIDTH+640]==g_pixels[300*HOST_WIDTH+1100]);
+    assert(g_pixels[300*HOST_WIDTH+640]!=0xff000000);
+    g_menu_alpha=255;
+
+    // At the final close pose the blue shell must be completely occluded,
+    // not merely faded. Compare against normal categories at the SAME time.
+    taiko_preview_clock_ms=50201;
+    for(unsigned i=0;i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) {
+        unsigned category=(12-5+i)%12;
+        carousel[i].title=menu_styles[category].label;
+        carousel[i].genre=carousel[i].title;
+        carousel[i].selected=i==5;carousel[i].catalog_index=84;
+    }
+    taiko_overlay_show_song_browser("P1","","J-POP","",0,
+        0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+        carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+    taiko_preview_clock_ms+=1000;
+    opened[0].browser_position=0;opened[0].browser_total=11;
+    opened[1].browser_position=1;opened[1].browser_total=11;
+    taiko_overlay_show_song_browser("P1","","Return","J-POP",0,
+        0,1,1,"J-POP",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_SONGS,1,opened,2);
+    taiko_preview_clock_ms+=1000;
+    taiko_overlay_show_song_browser("P1","","J-POP","",0,
+        0,12,1,"CATEGORIES",0,12,"",0,"",0,TAIKO_OVERLAY_BROWSER_CATEGORIES,0,
+        carousel,TAIKO_OVERLAY_SONG_ROW_COUNT);
+    taiko_preview_clock_ms+=799;
+    background(0xff000000);render_green_categories();
+    memcpy(reference,g_pixels,sizeof reference);
+    assert(g_folder_closing);
+    g_folder_closing=0;
+    background(0xff000000);render_green_categories();
+    for(unsigned y=40;y<565;++y) for(unsigned x=400;x<880;++x) {
+        if(x>=440 && x<840 && y>=132 && y<553) continue; // Contents still fading.
+        if(reference[y*HOST_WIDTH+x]!=g_pixels[y*HOST_WIDTH+x]) {
+            fprintf(stderr,"close uncovered at %u,%u: %08x != %08x\n",x,y,reference[y*HOST_WIDTH+x],g_pixels[y*HOST_WIDTH+x]);
+            assert(0);
+        }
+    }
+    taiko_preview_clock_ms=-1;
     for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) release_text_bitmap(&g_text_cache[i]);
     assert(g_text_cache_bytes == 0);
     return 0;

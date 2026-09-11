@@ -192,3 +192,114 @@ This is an eyeballed speed, independent of display refresh; a full pattern cycle
 lasts about 107 seconds. Player nameplates use indicator textures 212–215 and
 234–235: original shadow/border, red or cyan upper half, large circular player
 badge, and a tinted lower half with the name centred inside it.
+
+## Opening a category
+
+Category confirmation follows the supplied 53-frame, 890 ms reference: fade out
+its illustration and count, raise and settle the folder outline, extend its
+right edge while pushing the right-hand categories away, then reveal Return
+and the song spines. The outgoing category rows are owned by the overlay and
+survive repeated catalog publications without restarting the opening clock.
+The timing was reviewed in the standalone SDL preview. Following visual review,
+inner cards retain the accepted category layout's y=132–553 bounds; the folder
+outline expands around them. Left-hand categories remain visible.
+
+Regular category lists now begin with a selected Return card. Rims/arrow keys
+move from Return to the first song; confirming Return closes the category.
+Search results and nested custom-folder lists keep their previous behavior.
+Course selection and per-player readiness are unchanged.
+
+Replay the opening without starting the guest:
+
+```sh
+LD_LIBRARY_PATH=third_party/sdl-gpu-linux/dxc-v1.8.2502/lib \
+  build-linux/taiko_browser_gpu_preview 1280 720 /tmp/opening.bmp opening 120000
+```
+
+Enter/R restarts, Space pauses, and Left/Right step at 60 Hz. The loop includes
+one second on the category and holds the finished opening before repeating.
+The last argument is the preview lifetime in milliseconds. `opening-frame 30`
+instead of `opening 120000` saves the exact 500 ms confirmation frame through
+the GPU path. The deterministic clock is compiled only into the preview.
+No guest character surface is available in this tool.
+
+Validation covers retained outgoing rows, publication stability, cancellation
+on return to categories, custom-folder exclusions, functional Return navigation,
+and the existing browser/player, overlay-cache and host-frame tests.
+
+## Scrolling and backing out
+
+Song entries carry their absolute browser position and total entry count,
+including Return cards. Scrolling moves the folder's left edge and the outer
+categories with that position, while the category tab stays centred. The right
+categories become visible near the final entry. The selected spine slides,
+waits closed, then expands into the yellow preview card; its title follows the
+expanding card. Repeated publications retain the current movement, and rapid
+input interrupts from the currently displayed position.
+
+The rendered folder is capped to x=-96..1376 in the logical 1280px view. The
+list's entry count does not create an arbitrarily wide polygon. One shared
+closing animation handles every position: retain the centre card frame, fade
+out song contents, bring both visible sides to the centre using one progress
+curve, then restore the category illustration. Different travel distances
+finish together. The category rows and outgoing songs are owned copies, so
+publishing the new category state cannot erase the closing animation early.
+Navigation or reopening can interrupt it.
+
+The scrolling and three backing-out recordings supplied on 2026-09-11 are
+30 FPS reference captures. The closing phases use about 167 ms for the outgoing
+content fade and complete contraction at 400 ms. The blank centre remains
+while the tab settles, then the illustration returns at 667–800 ms. The accepted card bounds remain y=132–553.
+
+```sh
+LD_LIBRARY_PATH=third_party/sdl-gpu-linux/dxc-v1.8.2502/lib \
+  build-linux/taiko_browser_gpu_preview 1280 720 /tmp/browser.bmp scrolling 180000
+```
+
+The demo opens, scrolls and backs out repeatedly. Any navigation key takes
+manual control: Left/Right or D/K browse, Enter opens/confirms Return, Escape
+backs out, Home/End select the first/last Return, M selects a middle Return,
+and R restarts the demo. `back-start`, `back-middle` and `back-end` replace
+`scrolling` for isolated closing demos. This fixture exercises renderer states;
+production input remains covered separately by `taiko_browser_tests`.
+
+Regression tests verify absolute positions across row-window boundaries,
+publication stability, bounded GPU draw geometry for a million-entry list,
+retained closing rows, and simultaneous arrival of the two folder edges.
+
+### Border transition frame analysis
+
+The follow-up comparison isolates the supplied opening GIF's title and frame
+at 1280x720 (the 1080p source is scaled down for measurement). The white J-POP
+glyphs occupy approximately x=568–710 throughout: the title translates, it does
+not shrink. Representative top/bottom glyph bounds are:
+
+| GIF frame | Time | White glyph y bounds | Border behavior |
+| --- | --- | --- | --- |
+| 0 | 0 ms | 66–101 | Original black frame visible |
+| 2 | 33 ms | 67–101 | Black frame gone; background visible |
+| 4 | 67 ms | 55–89 | Blue outline fading in |
+| 6 | 100 ms | 46–79 | Outline and title rising |
+| 10 | 167 ms | 37–71 | Highest pose, blue outline opaque |
+| 20 | 333 ms | 47–81 | Settled pose before horizontal extension |
+
+The reconstructed host motion keeps its accepted card geometry, uses one source
+frame before removing the black frame, then fades in the blue shell over four
+source frames. The title retains its 38px host font size, rises 30 logical
+pixels with quadratic ease-out, and settles down 10 pixels. Background slices
+are disjoint: the title strip must not overlap a full-width body strip during
+alpha blending, which previously darkened the centre twice.
+
+Closing retains the same side contraction and content timing. Its final settle
+continues to x=444–836, bottom y=549, with the title portion inset six pixels.
+The shell remains opaque and becomes fully covered by the foreground category
+card/tab; it is not faded out while still protruding. A frozen-clock raster
+comparison verifies that removing this final shell changes no pixels outside
+the card's still-fading contents. Another check verifies identical body colour
+in all three horizontal sections at half opacity.
+
+For reproducible GPU frame inspection, `opening-frames 54` writes 54 BMPs using
+the output argument as a filename prefix. `back-start-frames`,
+`back-middle-frames` and `back-end-frames` do the same for closing. The singular
+`*-frame N` variants save only frame N; all frame numbers use 60 Hz timestamps.
+These modes freeze the preview clock and render the production GPU draw path.

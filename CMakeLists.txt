@@ -1163,6 +1163,7 @@ if(TARGET rsx_replay)
             set_property(TARGET taiko_browser_gpu_preview PROPERTY ${_property} "${_value}")
         endif()
     endforeach()
+    target_compile_definitions(taiko_browser_gpu_preview PRIVATE TAIKO_BROWSER_PREVIEW=1)
     target_link_libraries(taiko_browser_gpu_preview PRIVATE "${TAIKO_FREETYPE_LIB}" Threads::Threads)
 endif()
 

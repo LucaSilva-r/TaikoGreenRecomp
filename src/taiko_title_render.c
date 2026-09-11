@@ -1452,20 +1452,43 @@ static void buf_to_argb(const Buf *b, uint32_t *out, int ow, int oh) {
     }
 }
 
-static int render_short_fixed(const char *title, void *out,
-                              unsigned int outline_rgb) {
-    profile_set_outline(&g_vs_short, outline_rgb);
+/* Dilate the completed fill, rather than offsetting intersecting font
+ * contours. Horizontal runs of the disk keep this bounded at large sizes. */
+static void browser_outline(Buf *dst, const Buf *fill, TitleProfile *p) {
+    int r=(int)(p->stroke_radius+0.5f);
+    for(int y=0;y<fill->h;++y) for(int x=0;x<fill->w;++x) {
+        unsigned a=fill->px[((size_t)y*fill->w+x)*4+3];
+        if(!a)continue;
+        for(int dy=-r;dy<=r;++dy) {
+            int yy=y+dy;if(yy<0 || yy>=dst->h)continue;
+            int span=0;while((span+1)*(span+1)+dy*dy<=r*r)++span;
+            int lo=x-span,hi=x+span;
+            if(lo<0)lo=0;if(hi>=dst->w)hi=dst->w-1;
+            for(int xx=lo;xx<=hi;++xx) {
+                uint8_t *d=dst->px+((size_t)yy*dst->w+xx)*4;
+                if(d[3]<a) {
+                    d[0]=div255(p->out_r*a);d[1]=div255(p->out_g*a);
+                    d[2]=div255(p->out_b*a);d[3]=a;
+                }
+            }
+        }
+    }
+}
+
+static int render_short_scaled(const char *title, void *out,
+                              unsigned int outline_rgb, TitleProfile *profile, int scale, int browser) {
+    profile_set_outline(profile, outline_rgb);
     Buf img, fill, final;
     Item items[MAX_ITEMS];
     float ypos[MAX_ITEMS], max_w;
-    int n = plan_items_p(&g_vs_short, title, items, ypos, &max_w);
+    int n = plan_items_p(profile, title, items, ypos, &max_w);
     if (n <= 0) return 0;
-    if (!render_range_p(&g_vs_short, items, ypos, 0, n, &img)) return 0;
-    if (!buf_init(&fill, TITLE_DIM_SHORT_W, TITLE_DIM_SHORT_H)) {
+    if (!render_range_p(profile, items, ypos, 0, n, &img)) return 0;
+    if (!buf_init(&fill, (TITLE_DIM_SHORT_W * scale), (TITLE_DIM_SHORT_H * scale))) {
         buf_free(&img);
         return 0;
     }
-    if (!buf_init(&final, TITLE_DIM_SHORT_W, TITLE_DIM_SHORT_H)) {
+    if (!buf_init(&final, (TITLE_DIM_SHORT_W * scale), (TITLE_DIM_SHORT_H * scale))) {
         buf_free(&fill);
         buf_free(&img);
         return 0;
@@ -1474,30 +1497,57 @@ static int render_short_fixed(const char *title, void *out,
         int t, b, l, r;
         if (buf_ink_bounds(&img, &t, &b, &l, &r)) {
             int ink_w = r - l + 1;
-            int dx = ((int)TITLE_DIM_SHORT_W - ink_w) / 2 - l;
+            int dx = ((int)(TITLE_DIM_SHORT_W * scale) - ink_w) / 2 - l;
             int bounds[4] = { t, b, l, r };
             (void)t; (void)b;
-            if (render_range_stroked_final_p(
-                    &g_vs_short, items, ypos, 0, n, &img, bounds, &final, dx,
-                    VSHORT_TOP + g_vs_short.outline, g_vs_short.outline, 0)) {
-                buf_to_argb(&final, (uint32_t *)out, TITLE_DIM_SHORT_W,
-                            TITLE_DIM_SHORT_H);
+            if (!browser && render_range_stroked_final_p(
+                    profile, items, ypos, 0, n, &img, bounds, &final, dx,
+                    VSHORT_TOP * scale + profile->outline, profile->outline, 0)) {
+                buf_to_argb(&final, (uint32_t *)out, (TITLE_DIM_SHORT_W * scale),
+                            (TITLE_DIM_SHORT_H * scale));
                 buf_free(&final);
                 buf_free(&fill);
                 buf_free(&img);
                 return 1;
             }
-            blit_ink_fit_y(&fill, &img, dx, VSHORT_TOP + g_vs_short.outline,
-                           g_vs_short.outline, 0);
+            blit_ink_fit_y(&fill, &img, dx, VSHORT_TOP * scale + profile->outline,
+                           profile->outline, 0);
         }
     }
-    outline_from_alpha_p(&g_vs_short, &final, &fill);
+    if(browser) browser_outline(&final, &fill, profile);
+    else outline_from_alpha_p(profile, &final, &fill);
     blit_buf(&final, &fill, 0, 0);
-    buf_to_argb(&final, (uint32_t *)out, TITLE_DIM_SHORT_W, TITLE_DIM_SHORT_H);
+    buf_to_argb(&final, (uint32_t *)out, (TITLE_DIM_SHORT_W * scale), (TITLE_DIM_SHORT_H * scale));
     buf_free(&final);
     buf_free(&fill);
     buf_free(&img);
     return 1;
+}
+
+static int render_short_fixed(const char *title, void *out, unsigned int rgb) {
+    return render_short_scaled(title, out, rgb, &g_vs_short, 1, 0);
+}
+
+int taiko_title_render_spine_scaled_argb(const char *title, void *out,
+                                        unsigned int rgb, unsigned int scale) {
+    if (!title || !out || scale < 1 || scale > 4) return 0;
+    ft_lock();
+    static TitleProfile profile;
+    static unsigned int profile_scale;
+    int ok = font_ready() && profiles_ready();
+    if (ok && profile_scale != scale) {
+        for (int i = 0; i < GCAP; ++i) {
+            free(profile.glyphs[i].cov);
+            free(profile.glyphs[i].dil);
+        }
+        ok = profile_init(&profile, VSHORT_FONT_PX * scale,
+                          VSHORT_OUTLINE * scale, VSHORT_LEADING_PX * scale,
+                          VSHORT_OUTLINE_RADIUS * scale, 1, 1);
+        profile_scale = ok ? scale : 0;
+    }
+    if (ok) ok = render_short_scaled(title, out, rgb, &profile, scale, 1);
+    ft_unlock();
+    return ok;
 }
 
 int taiko_title_render_spine_argb(const char *title, void *out,

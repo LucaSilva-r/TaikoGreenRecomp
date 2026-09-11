@@ -6,6 +6,7 @@ static int green_categories(void)
     if (g_mode != 5) return 0;
     if (g_song_browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES) return 1;
     if (g_song_search_active || g_song_query[0] || !g_song_row_count) return 0;
+    if(g_song_shared_carousel)return 1;
     for (unsigned i=0;i<g_song_row_count;++i)
         if (g_song_rows[i].kind == TAIKO_OVERLAY_ROW_DIFFICULTY ||
             g_song_rows[i].kind == TAIKO_OVERLAY_ROW_CATEGORY) return 0;
@@ -217,21 +218,23 @@ static unsigned g_menu_spine_next;
 
 static void menu_spine(const char* text, float x, float y, float height, uint32_t outline)
 {
+    unsigned scale=(unsigned)ceilf(height / 400 * (g_ui_emit ? g_ui_scale : 1));
+    if(scale<1)scale=1; if(scale>4)scale=4;
     unsigned slot;
     for (slot=0; slot<16; ++slot)
-        if (g_menu_spines[slot].art.pixels && !strcmp(text,g_menu_spines[slot].title) && g_menu_spines[slot].outline==outline) break;
+        if (g_menu_spines[slot].art.pixels && !strcmp(text,g_menu_spines[slot].title) && g_menu_spines[slot].outline==outline && g_menu_spines[slot].art.width==56*(int)scale) break;
     if (slot==16) {
         slot=g_menu_spine_next++%16;
         menu_art* art=&g_menu_spines[slot].art;
         free(art->pixels);
-        art->width=56; art->height=400;
-        art->pixels=calloc(56*400,sizeof(uint32_t));
+        art->width=56*scale; art->height=400*scale;
+        art->pixels=calloc(art->width*art->height,sizeof(uint32_t));
         if (!art->pixels) return;
-        if (!taiko_title_render_spine_argb(text,art->pixels,outline)) {
+        if (!taiko_title_render_spine_scaled_argb(text,art->pixels,outline,scale)) {
             free(art->pixels);art->pixels=NULL;return;
         }
         /* The guest title renderer returns ARGB words; host UI uses RGBA. */
-        for (unsigned i=0;i<56*400;++i) {
+        for (unsigned i=0;i<(unsigned)(art->width*art->height);++i) {
             uint32_t c=art->pixels[i];
             art->pixels[i]=(c&0xff00ff00u)|((c>>16)&255)|((c&255)<<16);
         }
@@ -359,7 +362,7 @@ static int menu_tab_contains(float x, float y, int inner)
     return x>=13.63929f-y*0.18f+inset*1.016071f;
 }
 
-static void menu_heading(const menu_folder_style* style, const char* title, float opening)
+static void menu_heading(const menu_folder_style* style, const char* title, float opening, int text)
 {
     static menu_art tabs[12];
     unsigned slot=(unsigned)(style-menu_styles);
@@ -384,6 +387,7 @@ static void menu_heading(const menu_folder_style* style, const char* title, floa
     if(rise<0) rise=0;
     if(rise>1) rise=1;
     menu_bitmap(tab,UINT64_C(0x4700000000000000)+slot,468,138-64*rise,344,64*rise,0);
+    if (!text) return;
     int saved_outline=g_menu_text_outline;
     g_menu_text_outline=5;
     g_text_opacity=(unsigned)(255*rise);
@@ -391,6 +395,372 @@ static void menu_heading(const menu_folder_style* style, const char* title, floa
     g_text_opacity=255;
     g_menu_text_outline=saved_outline;
     g_outline_radius=saved_outline;
+}
+
+static void menu_song_courses(const song_row_storage* row, const menu_folder_style* active,
+                              float x, float w)
+{
+    static const char* courses[]={"EASY","NORMAL","HARD","ONI","URA"};
+    unsigned shown=0;
+    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) ++shown;
+    unsigned column=0;
+    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) {
+        float cx=x+36+column++*(w-144)/(shown?shown:1);
+        fill_rounded_rect(cx,279,cx+38,511,18,active->colour);
+        static const unsigned icons[]={259,260,261,262,326};
+        menu_image(icons[d],cx-3,247,44,35,0);
+        menu_spine(courses[d],cx+19,296,180,0);
+        unsigned rating=row->course_stars[d];
+        if(!rating) draw_text_at("--",16,cx+19,483);
+        else for(unsigned star=0;star<rating && star<10;++star)
+            draw_text_at("★",11,cx+19,491-star*10);
+    }
+    draw_text_at("DON: CHOOSE CHART",17,x+(w-80)/2,238);
+}
+
+/* Confirmation timeline sampled from the supplied 60 Hz opening recording.
+ * Keep this clock separate from row easing: catalog publications are frequent. */
+static float menu_interval(double ms,double begin,double end)
+{
+    if(ms<=begin) return 0;
+    if(ms>=end) return 1;
+    return (float)((ms-begin)/(end-begin));
+}
+
+static int menu_open_contains(float x,float y,float inset)
+{
+    if(x<inset || x>420-inset || y<inset || y>560-inset) return 0;
+    if(y>=64+inset) {
+        float cx=x<12?12:x>408?408:x;
+        float cy=y<76?76:y>548?548:y;
+        float radius=12-inset;
+        return (x-cx)*(x-cx)+(y-cy)*(y-cy)<=radius*radius;
+    }
+    /* Same shoulder and side angle as the closed category's title tab. */
+    return x>=38 && x<=382 && menu_tab_contains(x-38,y,inset>0);
+}
+
+/* Four immutable slices keep the title centred as either wall moves. Scaling the complete
+ * silhouette would stretch the title tab and its black outline. */
+static void menu_shell_inset(const menu_folder_style* style,float top,float bottom,
+                             float left,float right,float tab_inset,int heading)
+{
+    // Several categories can be visible simultaneously. Retain each immutable
+    // style instead of rebuilding and freeing it on every neighbouring draw.
+    static menu_art styles[12][4];
+    unsigned slot=menu_style_index(style);
+    menu_art* parts=styles[slot];
+    if(!parts[0].pixels || !parts[1].pixels || !parts[2].pixels || !parts[3].pixels) {
+        for(unsigned part=0;part<4;++part) { free(parts[part].pixels);parts[part].pixels=NULL; }
+        const unsigned widths[]={12,1,344,12}, offsets[]={0,20,38,408};
+        for(unsigned part=0;part<4;++part) {
+            menu_art* a=&parts[part];
+            a->width=widths[part]*2;a->height=560*2;
+            a->pixels=calloc((size_t)a->width*a->height,4);
+            if(!a->pixels) continue;
+            for(unsigned y=0;y<a->height;++y) for(unsigned x=0;x<a->width;++x) {
+                float px=x/2.0f+offsets[part]+0.25f,py=y/2.0f+0.25f;
+                if(menu_open_contains(px,py,0))
+                    a->pixels[y*a->width+x]=menu_open_contains(px,py,6)?style->colour:
+                        (0xff000000u|((style->colour&0xfefefeu)>>1));
+            }
+        }
+    }
+    float height=bottom-top;
+    uint64_t id=UINT64_C(0x4800000000000000)+slot*4;
+    menu_bitmap(&parts[0],id,left,top,12,height,0);
+    /* Disjoint spans are essential during fade-in: drawing a full-width body
+     * under the tab would blend the middle twice and leave a dark rectangle. */
+    float tab_left=468+tab_inset,tab_right=812-tab_inset;
+    if(heading) {
+        menu_bitmap(&parts[1],id+1,left+12,top,tab_left-left-12,height,0);
+        menu_bitmap(&parts[2],id+2,tab_left,top,tab_right-tab_left,height,0);
+        menu_bitmap(&parts[1],id+1,tab_right,top,right-12-tab_right,height,0);
+    } else menu_bitmap(&parts[1],id+1,left+12,top,right-left-24,height,0);
+    menu_bitmap(&parts[3],id+3,right-12,top,12,height,0);
+}
+
+static void menu_open_shell(const menu_folder_style* style,float top,float bottom,float left,float right)
+{
+    menu_shell_inset(style,top,bottom,left,right,0,1);
+}
+
+static float menu_folder_scroll(void)
+{
+    float t=menu_interval(monotonic_milliseconds()-g_folder_scroll_start,0,8000.0/60);
+    t=1-(1-t)*(1-t);
+    return g_folder_scroll_from+(g_folder_scroll_target-g_folder_scroll_from)*t;
+}
+
+/* Only the visible envelope grows. Absolute entry ordinals drive scrolling,
+ * never the size of a polygon for a potentially enormous custom library. */
+static float menu_folder_left(void)
+{
+    float left=430-menu_folder_scroll();
+    return left < -96 ? -96 : left;
+}
+
+static float menu_folder_right(void)
+{
+    unsigned total=0;
+    for(unsigned i=0;i<g_song_row_count;++i)
+        if(g_song_rows[i].browser_total>total) total=g_song_rows[i].browser_total;
+    if(g_song_shared_carousel)for(unsigned i=0;i<g_song_row_count;++i)
+        if(g_song_rows[i].selected)total=g_song_rows[i].browser_total;
+    if(!total) return 1376;
+    float edge=850+(total-1)*96.0f-menu_folder_scroll();
+    return edge>1376?1376:edge<850?850:edge;
+}
+
+static void menu_song_card(const song_row_storage* row,const menu_folder_style* style,
+                           float x,float w,int selected,unsigned opacity)
+{
+    if(x+w<0 || x>1280) return;
+    g_menu_alpha=g_text_opacity=opacity;
+    static const menu_folder_style return_style={"Return",RGB_COLOUR(166,116,42),0,554};
+    menu_folder(x,132,w,421,row->kind==TAIKO_OVERLAY_ROW_EXIT?&return_style:style,0);
+    float opening=(w-76)/324;
+    if(opening<0)opening=0;
+    if(opening>1)opening=1;
+    if(selected && opening>0)
+        menu_yellow_frame(x,132,w,421);
+    if(selected && opening>0) {
+        float reveal=menu_interval(opening,0.3,0.7);
+        g_menu_alpha=g_text_opacity=(unsigned)(opacity*reveal);
+        if(row->kind==TAIKO_OVERLAY_ROW_EXIT) menu_image(421,476,275,246,246,0);
+        else if(reveal>0) menu_song_courses(row,style,440,400);
+    }
+    g_menu_alpha=g_text_opacity=opacity;
+    float centre=x+w/2+(selected?(row->kind==TAIKO_OVERLAY_ROW_EXIT?119:139)*opening:0);
+    menu_spine(row->kind==TAIKO_OVERLAY_ROW_EXIT?"× Return":row->title,
+               centre,row->kind==TAIKO_OVERLAY_ROW_EXIT?165:157,
+               row->kind==TAIKO_OVERLAY_ROW_EXIT?335:360,
+               selected || row->kind==TAIKO_OVERLAY_ROW_EXIT?0:menu_outline(style));
+    g_menu_alpha=g_text_opacity=255;
+}
+
+/* Group bounds are inferred from a visible entry's local ordinal. Clamp the
+ * relative positions before converting to pixels, regardless of library size. */
+static float menu_bound_x(double relative,int right)
+{
+    if(relative < -7)return -96;
+    if(relative > 7)return 1376;
+    int rel=(int)relative;
+    float value=menu_card_x(rel)+(right?menu_card_w(rel)+10:-10);
+    return value < -96?-96:value>1376?1376:value;
+}
+static void menu_shared_target(const song_row_storage* row,int relative,float* left,float* right)
+{
+    *left=menu_bound_x((double)relative-row->browser_position,0);
+    *right=menu_bound_x((double)relative+(row->browser_total?row->browser_total-1:0)-row->browser_position,1);
+}
+static void menu_shared_bounds(const song_row_storage* row,int relative,float ease,float* left,float* right)
+{
+    float target_left,target_right;
+    menu_shared_target(row,relative,&target_left,&target_right);
+    float t=ease/0.45f;if(t>1)t=1;
+    *left=row->from_group_left+(target_left-row->from_group_left)*t;
+    *right=row->from_group_right+(target_right-row->from_group_right)*t;
+}
+
+static void menu_category_contents(const song_row_storage* row,const menu_folder_style* style,unsigned opacity)
+{
+    char count[40];g_menu_alpha=g_text_opacity=opacity;
+    g_menu_alpha=opacity/2;menu_image(492,463,150,159,37,0);g_menu_alpha=opacity;
+    snprintf(count,sizeof count,"%u SONGS",row->catalog_index);
+    draw_text_fit(count,23,149,542,169);
+    menu_image(menu_character(style),468,208,180,320,0);
+    draw_text_at("Play your",23,746,286);
+    draw_text_at("favourite",23,746,321);
+    draw_text_at("songs!",23,746,356);
+    g_menu_alpha=g_text_opacity=255;
+}
+
+/* Paint a bounded mixed window. An open neighbour keeps its coloured body but
+ * only the selected group has a raised title. No group closes on navigation. */
+static void menu_shared_window(const song_row_storage* rows,unsigned count,int selected,
+                               float ease,int neighbours,float left_shift,float right_shift)
+{
+    unsigned seen=0;
+    for(unsigned i=0;i<count;++i) {
+        const song_row_storage* row=&rows[i];
+        if(!row->carousel_group || !row->browser_total)continue;
+        unsigned bit=1u<<(row->carousel_group-1);
+        if(seen&bit)continue;
+        seen|=bit;
+        int active=row->carousel_group==rows[selected].carousel_group;
+        if(neighbours && active)continue;
+        float left,right;
+        menu_shared_bounds(row,(int)i-selected,ease,&left,&right);
+        float shift=(int)i<selected?left_shift:right_shift;
+        left+=shift;right+=shift;
+        if(right<=0 || left>=1280)continue;
+        if(left < -96)left=-96;if(right>1376)right=1376;
+        const menu_folder_style* style=menu_style(row->genre);
+        menu_shell_inset(style,54,573,left,right,0,active);
+        if(active) {
+            int outline=g_menu_text_outline;g_menu_text_outline=5;
+            draw_text_fit(row->genre,38,300,640,86);
+            g_menu_text_outline=outline;g_outline_radius=outline;
+        }
+    }
+    for(unsigned pass=0;pass<2;++pass)for(unsigned i=0;i<count;++i) {
+        const song_row_storage* row=&rows[i];
+        int rel=(int)i-selected;
+        if((!rel)!=(pass==1) || (neighbours && !rel))continue;
+        float x,w;
+        if(neighbours) {x=menu_card_x(rel);w=76;}
+        else menu_card_pose(row->from_card_x,row->from_card_w,rel,ease,&x,&w);
+        x+=rel<0?left_shift:rel>0?right_shift:0;
+        if(x+w<0 || x>1280)continue;
+        const menu_folder_style* style=menu_style(row->genre);
+        if(row->kind!=TAIKO_OVERLAY_ROW_CATEGORY) {
+            menu_song_card(row,style,x,w,rel==0,255);
+            continue;
+        }
+        menu_folder(x,132,w,421,style,rel!=0 || w<=76);
+        if(!rel && w>76)menu_heading(style,row->title,(w-76)/324,1);
+        if(!rel && w>173) {
+            float alpha=menu_interval((w-76)/324,0.3,0.7);
+            menu_category_contents(row,style,(unsigned)(255*alpha));
+        } else if(w<180)menu_spine(row->title,x+w/2,157,360,menu_outline(style));
+    }
+}
+
+static void menu_close_folder(const menu_folder_style* active)
+{
+    double ms=monotonic_milliseconds()-g_folder_close_start;
+    float fade=1-menu_interval(ms,0,5000.0/30);
+    float contract=menu_interval(ms,5000.0/30,400);
+    contract=1-(1-contract)*(1-contract);
+    /* Both visible edges use one clock/easing curve, so unequal distances
+     * finish together. The selected card and title never move horizontally. */
+    float left=g_folder_close_left+(430-g_folder_close_left)*contract;
+    float right=g_folder_close_right+(850-g_folder_close_right)*contract;
+    float settle=menu_interval(ms,500,2000.0/3);
+    float contents=menu_interval(ms,2000.0/3,800);
+    if(g_song_shared_carousel) menu_shared_window(g_folder_categories,g_folder_category_count,
+        g_folder_category_selected,1,1,left-430,right-850);
+    else for(unsigned i=0;i<g_folder_category_count;++i) {
+        int rel=(int)i-g_folder_category_selected;
+        if(!rel)continue;
+        float x=menu_card_x(rel)+(rel<0?left-430:right-850);
+        if(x+76<0 || x>1280)continue;
+        const menu_folder_style* style=menu_style(g_folder_categories[i].title);
+        menu_folder(x,132,76,421,style,1);
+        menu_spine(style->label,x+38,157,360,menu_outline(style));
+    }
+    /* Finish the geometry UNDER the foreground card and title tab. The shell
+     * stays opaque: removing it is invisible only once every edge is covered. */
+    menu_shell_inset(active,54+26*settle,573-24*settle,
+                     left+14*settle,right-14*settle,6*settle,1);
+    /* The selected card's teal bevel stays visible during the entire close. */
+    menu_folder(440,132,400,421,active,0);
+    if(fade>0) {
+        int selected=0;
+        for(unsigned i=0;i<g_folder_close_count;++i) if(g_folder_close_rows[i].selected)selected=i;
+        uint8_t mask=g_song_difficulty_mask;g_song_difficulty_mask=g_folder_close_difficulties;
+        for(unsigned i=0;i<g_folder_close_count;++i)
+            if(!g_folder_close_group || g_folder_close_rows[i].carousel_group==g_folder_close_group)
+            menu_song_card(&g_folder_close_rows[i],active,menu_card_x((int)i-selected),
+                           menu_card_w((int)i-selected),(int)i==selected,(unsigned)(fade*255));
+        g_song_difficulty_mask=mask;
+    }
+    if(settle>0) {
+        g_menu_alpha=(unsigned)(settle*255);
+        menu_heading(active,g_song_title,1,0);
+        g_menu_alpha=255;
+    }
+    int outline=g_menu_text_outline;g_menu_text_outline=5;
+    draw_text_fit(g_song_title,38,300,640,86+20*settle);
+    g_menu_text_outline=outline;g_outline_radius=outline;
+    if(contents>0) {
+        char count[40];
+        g_menu_alpha=g_text_opacity=(unsigned)(255*contents);
+        g_menu_alpha=g_text_opacity/2;menu_image(492,463,150,159,37,0);
+        g_menu_alpha=g_text_opacity;
+        snprintf(count,sizeof count,"%u SONGS",g_folder_categories[g_folder_category_selected].catalog_index);
+        draw_text_fit(count,23,149,542,169);
+        menu_image(menu_character(active),468,208,180,320,0);
+        draw_text_at("Play your",23,746,286);
+        draw_text_at("favourite",23,746,321);
+        draw_text_at("songs!",23,746,356);
+        g_menu_alpha=g_text_opacity=255;
+    }
+}
+
+
+static void menu_open_folder(const menu_folder_style* active)
+{
+    double ms=monotonic_milliseconds()-g_folder_open_start;
+    /* The reference holds the first pose for one 30 Hz source frame. The
+     * black frame then vanishes; blue fades in over the next four frames.
+     * Title glyph bounds stay constant throughout (there is no text zoom). */
+    float lift=menu_interval(ms,1000.0/30,5000.0/30);
+    float shell_alpha=lift;
+    lift=1-(1-lift)*(1-lift);
+    float settle=menu_interval(ms,5000.0/30,1000.0/3);
+    settle=settle*settle*(3-2*settle);
+    float spread=menu_interval(ms,400,2000.0/3);
+    float reveal=menu_interval(ms,2000.0/3,2500.0/3);
+    /* Constant acceleration in the horizontal opening, after the held pose. */
+    float travel=480*spread*spread;
+    float scroll=menu_folder_scroll();
+    float left=menu_folder_left();
+    float right=ms<2500.0/3?850+travel:menu_folder_right();
+    if(g_song_shared_carousel) menu_shared_window(g_folder_categories,g_folder_category_count,
+        g_folder_category_selected,1,1,-scroll,right-850);
+    else for(unsigned i=0;i<g_folder_category_count;++i) {
+        int rel=(int)i-g_folder_category_selected;
+        if(!rel) continue;
+        float x=menu_card_x(rel)+(rel>0?right-850:-scroll);
+        if(x>1280 || x+76<0)continue;
+        const menu_folder_style* style=menu_style(g_folder_categories[i].title);
+        menu_folder(x,132,76,421,style,1);
+        menu_spine(g_folder_categories[i].title,x+38,157,360,menu_outline(style));
+    }
+    g_menu_alpha=(unsigned)(255*shell_alpha);
+    menu_open_shell(active,74-30*lift+10*settle,549+24*lift,
+                    left+14*(1-lift),right-14*(1-lift));
+    g_menu_alpha=255;
+    if(ms+0.01<1000.0/30) {
+        menu_folder(440,132,400,421,active,0);
+        menu_heading(active,g_song_category,1,0);
+    }
+    g_menu_alpha=g_text_opacity=(unsigned)(255*(1-menu_interval(ms,1000.0/30,200)));
+    if(g_menu_alpha) {
+        char count[40];
+        g_menu_alpha=g_text_opacity/2;
+        menu_image(492,463,150,159,37,0);
+        g_menu_alpha=g_text_opacity;
+        snprintf(count,sizeof count,"%u SONGS",g_folder_categories[g_folder_category_selected].catalog_index);
+        draw_text_fit(count,23,149,542,169);
+        menu_image(menu_character(active),468,208,180,320,0);
+        draw_text_at("Play your",23,746,286);
+        draw_text_at("favourite",23,746,321);
+        draw_text_at("songs!",23,746,356);
+    }
+    g_menu_alpha=g_text_opacity=255;
+    int saved_outline=g_menu_text_outline;
+    g_menu_text_outline=5;
+    draw_text_fit(g_song_category,38,300,640,106-30*lift+10*settle);
+    g_menu_text_outline=saved_outline;g_outline_radius=saved_outline;
+    if(reveal>0) {
+        int selected=0;
+        for(unsigned i=0;i<g_song_row_count;++i) if(g_song_rows[i].selected)selected=(int)i;
+        g_menu_alpha=g_text_opacity=(unsigned)(255*reveal);
+        for(unsigned i=0;i<g_song_row_count;++i) {
+            const song_row_storage* row=&g_song_rows[i];
+            if(g_song_shared_carousel && row->carousel_group!=g_song_rows[selected].carousel_group)continue;
+            int rel=(int)i-selected;
+            float x,w;
+            if(ms<2500.0/3) { x=menu_card_x(rel);w=menu_card_w(rel); }
+            else menu_card_pose(row->from_card_x,row->from_card_w,rel,song_ease(),&x,&w);
+            if(x+w<0 || x>1280)continue;
+            menu_song_card(row,active,x,w,rel==0,(unsigned)(255*reveal));
+        }
+        g_menu_alpha=g_text_opacity=255;
+    }
 }
 
 static void render_green_categories(void)
@@ -411,13 +781,19 @@ static void render_green_categories(void)
     draw_text_at("TAB / CTRL+F  SEARCH",20,1088,51);
     char label[96];
     /* The expanded folder's wide title tab is part of the folder silhouette. */
-    if (!categories) {
+    if (!categories && !g_folder_open) {
         fill_rounded_rect(425,117,1280,568,14,active->colour);
     }
 
     int selected=0;
     for(unsigned i=0;i<g_song_row_count;++i) if(g_song_rows[i].selected) selected=(int)i;
     float ease=song_ease();
+    if(g_folder_closing && monotonic_milliseconds()-g_folder_close_start>=800) g_folder_closing=0;
+    if(g_folder_closing) menu_close_folder(active);
+    else if (!categories && g_folder_open && (!g_song_shared_carousel ||
+             monotonic_milliseconds()-g_folder_open_start<2500.0/3)) menu_open_folder(active);
+    else if(g_song_shared_carousel) menu_shared_window(g_song_rows,g_song_row_count,selected,ease,0,0,0);
+    else {
     /* Draw neighbours first so the expanding centre folder stays in front. */
     for(unsigned pass=0;pass<2;++pass) for(unsigned i=0;i<g_song_row_count;++i) {
         const song_row_storage* row=&g_song_rows[i];
@@ -430,7 +806,7 @@ static void render_green_categories(void)
         menu_folder(x,132,w,421,style,rel!=0 || w<=76);
         if(rel==0 && !categories && w>76) menu_yellow_frame(x,132,w,421);
         if(rel==0 && w>76)
-            menu_heading(active,categories?g_song_title:g_song_category,(w-76)/324);
+            menu_heading(active,categories?g_song_title:g_song_category,(w-76)/324,1);
         if(rel==0 && w>173) {
             float opacity=((w-76)/324-0.3f)/0.4f;
             if(opacity>1) opacity=1;
@@ -454,28 +830,14 @@ static void render_green_categories(void)
                     menu_spine("Return",x+w-61,165,335,0);
                 } else {
                     menu_spine(row->title,x+w-61,158,362,0);
-                    static const char* courses[]={"EASY","NORMAL","HARD","ONI","URA"};
-                    unsigned shown=0;
-                    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) ++shown;
-                    unsigned column=0;
-                    for(unsigned d=0;d<5;++d) if(g_song_difficulty_mask&(1u<<d)) {
-                        float cx=x+36+column++*(w-144)/(shown?shown:1);
-                        fill_rounded_rect(cx,279,cx+38,511,18,active->colour);
-                        static const unsigned icons[]={259,260,261,262,326};
-                        menu_image(icons[d],cx-3,247,44,35,0);
-                        menu_spine(courses[d],cx+19,296,180,0);
-                        unsigned rating=row->course_stars[d];
-                        if(!rating) draw_text_at("--",16,cx+19,483);
-                        else for(unsigned star=0;star<rating && star<10;++star)
-                            draw_text_at("★",11,cx+19,491-star*10);
-                    }
-                    draw_text_at("DON: CHOOSE CHART",17,x+(w-80)/2,238);
+                    menu_song_courses(row,active,x,w);
                 }
             }
         } else if(w<180) menu_spine(row->kind==TAIKO_OVERLAY_ROW_EXIT?"Return":row->title,x+w/2,157,360,menu_outline(style));
         g_menu_alpha=g_text_opacity=255;
     }
-    menu_navigation_arrows();
+    }
+    if(!g_folder_closing) menu_navigation_arrows();
     fill_rect(0,594,1280,720,RGB_COLOUR(255,71,42));
     fill_rect(640,594,1280,720,RGB_COLOUR(100,190,192));
     /* Asset 394 has 18 transparent rows, then an eight-pixel divider.

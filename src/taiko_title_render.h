@@ -46,6 +46,10 @@ int taiko_text_render_argb(const char *utf8, void *out, unsigned int max_w,
 int taiko_title_render_spine_argb(const char *title, void *out,
                                   unsigned int outline_rgb);
 
+/* Display-resolution browser buffer: (56*scale)*(400*scale), scale 1..4. */
+int taiko_title_render_spine_scaled_argb(const char *title, void *out,
+                                        unsigned int outline_rgb, unsigned int scale);
+
 /* Native pixel size of `type`'s texture. Returns 1 if the type is known. */
 int title_tex_dims(unsigned int type, unsigned int *w, unsigned int *h);
 

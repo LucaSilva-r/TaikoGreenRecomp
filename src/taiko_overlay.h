@@ -54,6 +54,9 @@ typedef struct taiko_overlay_song_row {
     uint8_t cursors;
     uint8_t ready;
     uint8_t course_stars[5]; /* Per-course song-card preview; zero = unknown. */
+    unsigned browser_position; /* Absolute entry ordinal, including Return cards. */
+    unsigned browser_total; /* Complete entry count, not the visible window. */
+    unsigned carousel_group; /* Nonzero shared category identity; zero = legacy/list UI. */
 } taiko_overlay_song_row;
 
 void taiko_overlay_set_browser_login(int phase, const char* status);

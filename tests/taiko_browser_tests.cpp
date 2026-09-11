@@ -188,18 +188,26 @@ int main() {
     assert(browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES && !courses());
     // The carousel stays centred while traversing both wrap boundaries.
     for (unsigned step=0; step<24; ++step) {
-        assert(rows.size()==9 && rows[4].selected);
+        assert(rows.size()==TAIKO_OVERLAY_SONG_ROW_COUNT && rows[rows.size()/2].selected);
         unsigned selected=0;
         for(const auto& row:rows) selected+=row.selected!=0;
         assert(selected==1 && current_song==step%12);
         key(TAIKO_BROWSER_NEXT);
     }
     key(TAIKO_BROWSER_PREVIOUS);
-    assert(current_song==11 && rows[4].selected);
+    assert(current_song==11 && rows[rows.size()/2].selected);
     key(TAIKO_BROWSER_NEXT);
-    assert(current_song==0 && rows[4].selected);
+    assert(current_song==0 && rows[rows.size()/2].selected);
     key(TAIKO_BROWSER_PLAY); // Category opens without launching or selecting a course.
     assert(browser_level == TAIKO_OVERLAY_BROWSER_SONGS && !courses());
+    assert(rows[5].selected && rows[5].kind == TAIKO_OVERLAY_ROW_EXIT);
+    for(unsigned i=5;i<rows.size();++i) {
+        assert(rows[i].browser_position==i-5 && rows[i].browser_total==15);
+    }
+    key(TAIKO_BROWSER_PLAY); // Leading Return really closes the category.
+    assert(browser_level == TAIKO_OVERLAY_BROWSER_CATEGORIES);
+    key(TAIKO_BROWSER_PLAY);
+    key(TAIKO_BROWSER_NEXT); // First song follows Return.
     key(TAIKO_BROWSER_PLAY); // Keyboard opens and joins P1.
     assert(courses() == 5 && joined == 1 && cursor(0) == 3 && cursor(1) == 99);
     assert(identity_requests == 0 && !ready);
@@ -224,6 +232,7 @@ int main() {
     key(TAIKO_BROWSER_SEARCH_CLEAR);
     assert(!courses() && browser_level == TAIKO_OVERLAY_BROWSER_SONGS);
     key(TAIKO_BROWSER_LAST); // Last entry is the explicit exit card.
+    assert(rows[5].browser_position==14 && rows[5].browser_total==15);
     key(TAIKO_BROWSER_PREVIOUS);
     assert(current_song == 11);
     key(TAIKO_BROWSER_PLAY);
@@ -240,6 +249,7 @@ int main() {
     assert(!courses() && identity_requests == 1); // Empty results cannot open/launch.
     key(TAIKO_BROWSER_SEARCH_CLEAR);
     key(TAIKO_BROWSER_FIRST);
+    key(TAIKO_BROWSER_NEXT);
     key(TAIKO_BROWSER_PLAY);
     assert(courses() == 5);
     key(TAIKO_BROWSER_SEARCH_CLEAR);
@@ -249,6 +259,7 @@ int main() {
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();
     drum(1, TAIKO_ACTION_HIT_CR);
+    drum(1, TAIKO_ACTION_HIT_SR);
     drum(1, TAIKO_ACTION_HIT_CR);
     assert(courses() == 5 && joined == 2 && cursor(0) == 99 && cursor(1) < 5);
     drum(1, TAIKO_ACTION_HIT_CR);
@@ -261,6 +272,7 @@ int main() {
     key(TAIKO_BROWSER_PLAYER2_TOGGLE);
     assert(joined == 3);
     key(TAIKO_BROWSER_PLAY);
+    key(TAIKO_BROWSER_NEXT);
     key(TAIKO_BROWSER_PLAY);
     drum(0, TAIKO_ACTION_HIT_CR);
     assert(ready == 1);
@@ -334,7 +346,8 @@ int main() {
     key(TAIKO_BROWSER_LAST);
     key(TAIKO_BROWSER_PREVIOUS); // OSU! LAZER
     key(TAIKO_BROWSER_PLAY);
-    assert(rows.size() == 2 && rows[0].kind == TAIKO_OVERLAY_ROW_SONG);
+    assert(rows.size() == TAIKO_OVERLAY_SONG_ROW_COUNT && rows[5].kind == TAIKO_OVERLAY_ROW_EXIT && rows[5].selected);
+    key(TAIKO_BROWSER_NEXT);
     key(TAIKO_BROWSER_PLAY);
     assert(courses() == 8); // Visible window, not a five-course truncation.
     const unsigned preview_before = preview_requests;
@@ -368,6 +381,7 @@ int main() {
     taiko_frontend_standalone_session_begin();
     taiko_frontend_enter_song_select_shell();
     key(TAIKO_BROWSER_PLAY);
+    key(TAIKO_BROWSER_NEXT);
     key(TAIKO_BROWSER_PLAY);
     assert(courses() == 5 && cursor(0) < 5 && cursor(1) == 99);
     const auto before = cursor(0);
@@ -375,5 +389,34 @@ int main() {
     assert(cursor(0) != before);
     key(TAIKO_BROWSER_SEARCH_CLEAR);
     assert(!courses());
+    // Open lists remain in the shared carousel when their boundary is crossed.
+    standalone=true;
+    for(unsigned i=0;i<2;++i) {
+        TaikoCatalogSong song;song.music_id="anime"+std::to_string(i);
+        song.title="Anime "+std::to_string(i);song.genre="アニメ";song.difficulty_mask=8;
+        songs.push_back(song);
+    }
+    taiko_frontend_standalone_session_begin();taiko_frontend_enter_song_select_shell();
+    key(TAIKO_BROWSER_FIRST);key(TAIKO_BROWSER_PLAY);key(TAIKO_BROWSER_LAST);
+    key(TAIKO_BROWSER_NEXT); // J-POP end -> unopened Anime, not J-POP start.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES && rows[5].carousel_group==2);
+    assert(rows[4].carousel_group==1 && rows[4].kind==TAIKO_OVERLAY_ROW_EXIT && rows[4].browser_total==15);
+    key(TAIKO_BROWSER_PLAY); // Both categories are now open.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_SONGS && rows[5].carousel_group==2);
+    assert(rows[4].carousel_group==1 && rows[4].browser_total==15);
+    key(TAIKO_BROWSER_LAST);key(TAIKO_BROWSER_NEXT); // Anime end -> Vocaloid.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES && rows[5].carousel_group==3);
+    key(TAIKO_BROWSER_PREVIOUS); // Re-enter Anime at its still-open last Return.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_SONGS && rows[5].browser_position==3);
+    key(TAIKO_BROWSER_PLAY); // Close only Anime.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES && rows[5].carousel_group==2);
+    assert(rows[4].carousel_group==1 && rows[4].browser_total==15);
+    key(TAIKO_BROWSER_PREVIOUS); // J-POP is still open.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_SONGS && rows[5].browser_position==14);
+    key(TAIKO_BROWSER_FIRST);key(TAIKO_BROWSER_PREVIOUS); // Beginning -> previous category.
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_CATEGORIES && rows[5].carousel_group==12);
+    key(TAIKO_BROWSER_NEXT);
+    assert(browser_level==TAIKO_OVERLAY_BROWSER_SONGS && rows[5].carousel_group==1 && rows[5].browser_position==0);
+
 }
 extern "C" void taiko_overlay_set_browser_save_status(const char*) {}

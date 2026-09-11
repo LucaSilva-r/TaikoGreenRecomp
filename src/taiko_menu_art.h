@@ -112,7 +112,7 @@ static void menu_load_art(void)
      * tabs are composed by the layout; dynamic labels remain native text. */
     static const unsigned ids[] = {90,91,244,492,394,641,643,645,647,649,651,653,655,
         657,659,661,663,667,673,676,
-        550,551,556,557,561,562,566,567,571,572,576,577,581,582,586,587,
+        550,551,553,554,556,557,561,562,566,567,571,572,576,577,581,582,586,587,
         591,592,596,597,616,617,
         771,772,773,774,775,776,777,778,779,780,781,783,
         505,507,509,511,513,515,517,519,521,523,525,527,421,354,259,260,261,262,326,
@@ -135,7 +135,7 @@ static void menu_load_art(void)
              * padding. Trim it once so their outside border meets our bounds. */
             menu_art* a=&g_menu_art[id];
             if(a->width==32 && a->height==480) {
-                unsigned left=(id==550 || id==556 || id==561 || id==566 ||
+                unsigned left=(id==550 || id==553 || id==556 || id==561 || id==566 ||
                     id==571 || id==576 || id==581 || id==586 || id==591 ||
                     id==596 || id==616);
                 unsigned x=left?6:0, w=left?26:25;

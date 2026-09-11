@@ -147,6 +147,10 @@ struct SongBrowserEntry {
     std::string folder;
 };
 std::vector<SongBrowserEntry> g_song_entries;
+std::array<std::vector<SongBrowserEntry>,12> g_open_category_entries;
+std::array<bool,12> g_open_categories{};
+uint64_t g_song_entries_generation;
+std::array<uint64_t,12> g_open_category_generation{};
 std::string g_song_query;
 unsigned g_song_browser_position = 0;
 unsigned g_song_category = 0;
@@ -358,6 +362,10 @@ void leave_song_folder_locked()
         const auto slash = g_custom_folder.rfind('/');
         g_custom_folder = slash == std::string::npos ? "" : g_custom_folder.substr(0, slash);
     } else {
+        if(!g_song_global_search && g_song_query.empty()) {
+            g_open_categories[g_song_category]=false;
+            g_open_category_entries[g_song_category].clear();
+        }
         g_song_browser_level = SongBrowserLevel::Categories;
         g_custom_folder.clear();
     }
@@ -368,6 +376,7 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
     g_browser_players.collapse();
     g_song_matches.clear();
     g_song_entries.clear();
+    ++g_song_entries_generation;
     g_osu_groups.clear();
     for (unsigned i = 0; i < taiko_catalog_count(); ++i) {
         const auto* song = taiko_catalog_song(i);
@@ -418,6 +427,10 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
     std::sort(folders.begin(), folders.end());
     for (const auto& folder : folders)
         g_song_entries.push_back({true, folder_counts[folder], 0, folder});
+    // Green opens a stock category on its leading Return card.
+    if (!g_song_global_search && g_song_query.empty() && !custom_folder_browser() &&
+        !g_song_matches.empty())
+        g_song_entries.push_back({true, 0, 0});
     for (unsigned position = 0; position < g_song_matches.size(); ++position) {
         g_song_entries.push_back(
             {false, g_song_matches[position], position});
@@ -436,6 +449,73 @@ void rebuild_song_matches_locked(unsigned preferred_catalog_index)
     if (existing != g_song_entries.end())
         g_song_browser_position = static_cast<unsigned>(
             existing - g_song_entries.begin());
+}
+
+// Only the current category needs its live catalog/preview state. Neighbours
+// retain owning entry lists; publishing eleven rows never flattens a huge library.
+void remember_open_category_locked()
+{
+    if(g_song_browser_level==SongBrowserLevel::Songs && !g_song_global_search &&
+       g_song_query.empty() && !custom_folder_browser()) {
+        if(!g_open_categories[g_song_category] ||
+           g_open_category_generation[g_song_category]!=g_song_entries_generation) {
+            g_open_category_entries[g_song_category]=g_song_entries;
+            g_open_category_generation[g_song_category]=g_song_entries_generation;
+        }
+        g_open_categories[g_song_category]=true;
+    }
+}
+
+bool shared_carousel_locked()
+{
+    return !g_song_global_search && g_song_query.empty() &&
+        !g_song_search_active.load(std::memory_order_relaxed) &&
+        (g_song_browser_level==SongBrowserLevel::Categories || !custom_folder_browser());
+}
+
+unsigned publish_carousel_rows_locked(
+    std::array<taiko_overlay_song_row,TAIKO_OVERLAY_SONG_ROW_COUNT>& rows,
+    std::array<std::string,TAIKO_OVERLAY_SONG_ROW_COUNT>& titles,
+    std::array<std::string,TAIKO_OVERLAY_SONG_ROW_COUNT>& genres)
+{
+    auto length=[](unsigned category) -> unsigned {
+        return g_open_categories[category] && !g_open_category_entries[category].empty()
+            ? static_cast<unsigned>(g_open_category_entries[category].size()) : 1;
+    };
+    unsigned category=g_song_category;
+    unsigned position=g_song_browser_level==SongBrowserLevel::Songs?g_song_browser_position:0;
+    for(unsigned step=0;step<TAIKO_OVERLAY_SONG_ROW_COUNT/2;++step) {
+        if(position) --position;
+        else { category=(category+11)%12;position=length(category)-1; }
+    }
+    for(unsigned i=0;i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i) {
+        auto& row=rows[i];row={};
+        row.carousel_group=category+1;row.selected=i==TAIKO_OVERLAY_SONG_ROW_COUNT/2;
+        row.browser_position=position;
+        genres[i]=kSongCategories[category].label;
+        if(g_open_categories[category] && !g_open_category_entries[category].empty()) {
+            const auto& entry=g_open_category_entries[category][position];
+            row.browser_total=length(category);
+            row.catalog_index=entry.catalog_index;
+            if(entry.exit_category) { titles[i]="Return";row.kind=TAIKO_OVERLAY_ROW_EXIT;row.catalog_index=position; }
+            else {
+                const auto* song=taiko_catalog_song(entry.catalog_index);
+                titles[i]=song?song->title:"";row.kind=TAIKO_OVERLAY_ROW_SONG;
+                if(song)for(unsigned d=0;d<5;++d)row.course_stars[d]=song->stars[d];
+            }
+        } else {
+            titles[i]=kSongCategories[category].label;row.kind=TAIKO_OVERLAY_ROW_CATEGORY;
+            std::unordered_set<std::string> groups;
+            for(unsigned n=0;n<taiko_catalog_count();++n) {
+                const auto* song=taiko_catalog_song(n);
+                if(song && song->genre==kSongCategories[category].genre &&
+                   (song->osu_group.empty() || groups.insert(song->osu_group).second)) ++row.catalog_index;
+            }
+        }
+        row.title=titles[i].c_str();row.genre=genres[i].c_str();
+        if(++position>=length(category)) { position=0;category=(category+1)%12; }
+    }
+    return TAIKO_OVERLAY_SONG_ROW_COUNT;
 }
 
 void show_current_song()
@@ -489,6 +569,10 @@ void show_current_song()
             rows[row].catalog_index = category_song_count;
             rows[row].selected = category == category_index;
             rows[row].kind = TAIKO_OVERLAY_ROW_CATEGORY;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_song_browser_lock);
+            publish_carousel_rows_locked(rows,row_titles,row_genres);
         }
         taiko_overlay_show_song_browser(
             g_session_label, "", kSongCategories[category_index].label,
@@ -553,6 +637,8 @@ void show_current_song()
         if (first + row_count > entry_total) first = entry_total - row_count;
         for (unsigned row = 0; row < row_count; ++row) {
             const SongBrowserEntry& entry = g_song_entries[first + row];
+            rows[row].browser_position=first+row;
+            rows[row].browser_total=entry_total;
             if (entry.exit_category) {
                 row_titles[row] = entry.folder.empty()
                     ? (custom_folder_browser() && !g_custom_folder.empty() ? "BACK TO PARENT FOLDER" : "BACK TO CATEGORIES")
@@ -561,7 +647,7 @@ void show_current_song()
                     : custom_category_colour(entry.folder);
                 rows[row].title = row_titles[row].c_str();
                 rows[row].genre = row_genres[row].c_str();
-                rows[row].catalog_index = entry.folder.empty() ? entry.song_position / 10 + 1 : entry.catalog_index;
+                rows[row].catalog_index = entry.folder.empty() ? first + row + 1 : entry.catalog_index;
                 rows[row].selected =
                     first + row == g_song_browser_position;
                 rows[row].kind = entry.folder.empty() ? TAIKO_OVERLAY_ROW_EXIT : TAIKO_OVERLAY_ROW_CATEGORY;
@@ -580,6 +666,14 @@ void show_current_song()
             rows[row].selected = first + row == g_song_browser_position;
             rows[row].kind = TAIKO_OVERLAY_ROW_SONG;
             for(unsigned d=0;d<5;++d) rows[row].course_stars[d]=visible->stars[d];
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_song_browser_lock);
+        if(shared_carousel_locked() && !g_browser_players.expanded) {
+            remember_open_category_locked();
+            row_count=publish_carousel_rows_locked(rows,row_titles,row_genres);
         }
     }
 
@@ -698,6 +792,8 @@ void enter_song_select_shell()
         g_song_browser_level = SongBrowserLevel::Categories;
         g_song_global_search = false;
         g_song_browser_position = 0;
+        g_open_categories.fill(false);
+        for(auto& entries:g_open_category_entries) entries.clear();
     }
     g_song_search_active.store(false, std::memory_order_release);
     show_current_song();
@@ -721,6 +817,11 @@ void change_song_category(int direction)
         next %= static_cast<int>(count);
         if (next < 0) next += static_cast<int>(count);
         g_song_category = static_cast<unsigned>(next);
+        if(g_open_categories[g_song_category]) {
+            g_song_browser_level=SongBrowserLevel::Songs;
+            rebuild_song_matches_locked(~0u);
+            g_song_browser_position=direction<0 && !g_song_entries.empty()?g_song_entries.size()-1:0;
+        }
     }
     browser_sfx(TaikoPlusSfx::Move);
     show_current_song();
@@ -736,17 +837,33 @@ void move_song_selection(int delta, unsigned player = 2)
     }
     {
         std::lock_guard<std::mutex> lock(g_song_browser_lock);
-        if (g_song_browser_level == SongBrowserLevel::Categories) {
-            const int count = static_cast<int>(kSongCategories.size());
-            int next = static_cast<int>(g_song_category) + delta;
-            next %= count;
-            if (next < 0) next += count;
-            g_song_category = static_cast<unsigned>(next);
+        if(shared_carousel_locked()) {
+            remember_open_category_locked();
+            int direction=delta<0?-1:1;
+            for(int step=0;step<std::abs(delta);++step) {
+                int next=static_cast<int>(g_song_browser_position)+direction;
+                if(g_song_browser_level==SongBrowserLevel::Songs && next>=0 &&
+                   next<static_cast<int>(g_song_entries.size())) {
+                    g_song_browser_position=static_cast<unsigned>(next);
+                    continue;
+                }
+                g_song_category=(g_song_category+12+direction)%12;
+                g_custom_folder.clear();
+                if(g_open_categories[g_song_category]) {
+                    g_song_browser_level=SongBrowserLevel::Songs;
+                    rebuild_song_matches_locked(~0u);
+                    g_song_browser_position=direction>0 || g_song_entries.empty()?0:
+                        static_cast<unsigned>(g_song_entries.size()-1);
+                    remember_open_category_locked();
+                } else {
+                    g_song_browser_level=SongBrowserLevel::Categories;
+                    g_song_browser_position=0;
+                }
+            }
         } else {
             const int count = static_cast<int>(g_song_entries.size());
             if (!count) return;
-            int next = static_cast<int>(g_song_browser_position) + delta;
-            next %= count;
+            int next = (static_cast<int>(g_song_browser_position) + delta)%count;
             if (next < 0) next += count;
             g_song_browser_position = static_cast<unsigned>(next);
         }
@@ -763,6 +880,11 @@ void select_song_endpoint(bool last)
         if (g_song_browser_level == SongBrowserLevel::Categories) {
             g_song_category = last
                 ? static_cast<unsigned>(kSongCategories.size() - 1) : 0;
+            if(g_open_categories[g_song_category]) {
+                g_song_browser_level=SongBrowserLevel::Songs;
+                rebuild_song_matches_locked(~0u);
+                g_song_browser_position=last && !g_song_entries.empty()?g_song_entries.size()-1:0;
+            }
         } else {
             if (g_song_entries.empty()) return;
             g_song_browser_position = last
@@ -925,9 +1047,10 @@ void activate_browser_selection(unsigned player = 2)
             g_song_browser_level = SongBrowserLevel::Songs;
             g_song_global_search = false;
             g_song_query.clear();
-            rebuild_song_matches_locked(
-                g_song_selection.load(std::memory_order_acquire));
+            rebuild_song_matches_locked(custom_folder_browser()
+                ? g_song_selection.load(std::memory_order_acquire) : ~0u);
             g_song_search_active.store(false, std::memory_order_release);
+            remember_open_category_locked();
         } else if (!g_song_entries.empty() &&
                    !g_song_entries[g_song_browser_position].folder.empty()) {
             g_custom_folder = g_song_entries[g_song_browser_position].folder;
