@@ -792,7 +792,7 @@ static void emit_portrait(unsigned slot, float slide, unsigned alpha)
     portrait.w = portrait.h = 450;
     if (green_categories()) {
         portrait.x = (slot ? 845 : -185) + slide;
-        portrait.y = 190;
+        portrait.y = 202;
         portrait.w = portrait.h = 620;
     }
     portrait.colour = (alpha << 24) | 0xffffffu;

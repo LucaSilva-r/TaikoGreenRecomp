@@ -289,7 +289,7 @@ static unsigned menu_prompt_alpha(float phase)
 
 static void menu_control_drums(void)
 {
-    const float y=565, size=50, unit=size/56;
+    const float y=577, size=50, unit=size/56;
     float phase=menu_prompt_phase();
     unsigned saved_alpha=g_menu_alpha;
     menu_bitmap(&g_menu_indicator[2],UINT64_C(0x4300000000000002),430,y,size,size,0);
@@ -445,13 +445,26 @@ static int menu_open_contains(float x,float y,float inset)
 {
     if(x<inset || x>420-inset || y<inset || y>560-inset) return 0;
     if(y>=64+inset) {
-        float cx=x<12?12:x>408?408:x;
-        float cy=y<76?76:y>548?548:y;
-        float radius=12-inset;
+        float cx=x<20?20:x>400?400:x;
+        float cy=y<84?84:y>540?540:y;
+        float radius=20-inset;
         return (x-cx)*(x-cx)+(y-cy)*(y-cy)<=radius*radius;
     }
-    /* Same shoulder and side angle as the closed category's title tab. */
-    return x>=38 && x<=382 && menu_tab_contains(x-38,y,inset>0);
+    /* Open containers have broader rounded shoulders than closed cards.
+     * Keep the same slanted side and offset its border along the normal. */
+    if(x<38 || x>382)return 0;
+    // Shorter open flap: move its crown down four pixels, keeping the
+    // shoulder/body junction fixed at y=64.
+    if(y<4+inset)return 0;
+    y=(y-4)*(64.0f/60.0f);
+    x-=38;if(x>172)x=344-x;
+    const float radius=20-inset;
+    if(y<20-radius*0.177153f) {
+        if(x>=30.36071f)return 1;
+        float dx=x-30.36071f,dy=y-20;
+        return dx*dx+dy*dy<=radius*radius;
+    }
+    return x>=13.63929f-y*0.18f+inset*1.016071f;
 }
 
 /* Four immutable slices keep the title centred as either wall moves. Scaling the complete
@@ -466,7 +479,7 @@ static void menu_shell_inset(const menu_folder_style* style,float top,float bott
     menu_art* parts=styles[slot];
     if(!parts[0].pixels || !parts[1].pixels || !parts[2].pixels || !parts[3].pixels) {
         for(unsigned part=0;part<4;++part) { free(parts[part].pixels);parts[part].pixels=NULL; }
-        const unsigned widths[]={12,1,344,12}, offsets[]={0,20,38,408};
+        const unsigned widths[]={20,1,344,20}, offsets[]={0,24,38,400};
         for(unsigned part=0;part<4;++part) {
             menu_art* a=&parts[part];
             a->width=widths[part]*2;a->height=560*2;
@@ -482,16 +495,16 @@ static void menu_shell_inset(const menu_folder_style* style,float top,float bott
     }
     float height=bottom-top;
     uint64_t id=UINT64_C(0x4800000000000000)+slot*4;
-    menu_bitmap(&parts[0],id,left,top,12,height,0);
+    menu_bitmap(&parts[0],id,left,top,20,height,0);
     /* Disjoint spans are essential during fade-in: drawing a full-width body
      * under the tab would blend the middle twice and leave a dark rectangle. */
     float tab_left=468+tab_inset,tab_right=812-tab_inset;
     if(heading) {
-        menu_bitmap(&parts[1],id+1,left+12,top,tab_left-left-12,height,0);
+        menu_bitmap(&parts[1],id+1,left+20,top,tab_left-left-20,height,0);
         menu_bitmap(&parts[2],id+2,tab_left,top,tab_right-tab_left,height,0);
-        menu_bitmap(&parts[1],id+1,tab_right,top,right-12-tab_right,height,0);
-    } else menu_bitmap(&parts[1],id+1,left+12,top,right-left-24,height,0);
-    menu_bitmap(&parts[3],id+3,right-12,top,12,height,0);
+        menu_bitmap(&parts[1],id+1,tab_right,top,right-20-tab_right,height,0);
+    } else menu_bitmap(&parts[1],id+1,left+20,top,right-left-40,height,0);
+    menu_bitmap(&parts[3],id+3,right-20,top,20,height,0);
 }
 
 static void menu_open_shell(const menu_folder_style* style,float top,float bottom,float left,float right)
@@ -614,7 +627,7 @@ static void menu_shared_window(const song_row_storage* rows,unsigned count,int s
         menu_shell_inset(style,54,573,left,right,0,active);
         if(active) {
             int outline=g_menu_text_outline;g_menu_text_outline=5;
-            draw_text_fit(row->genre,38,300,640,86);
+            draw_text_fit(row->genre,36,300,640,90);
             g_menu_text_outline=outline;g_outline_radius=outline;
         }
     }
@@ -686,7 +699,7 @@ static void menu_close_folder(const menu_folder_style* active)
         g_menu_alpha=255;
     }
     int outline=g_menu_text_outline;g_menu_text_outline=5;
-    draw_text_fit(g_song_title,38,300,640,86+20*settle);
+    draw_text_fit(g_song_title,36+2*settle,300,640,90+16*settle);
     g_menu_text_outline=outline;g_outline_radius=outline;
     if(contents>0) {
         char count[40];
@@ -757,7 +770,7 @@ static void menu_open_folder(const menu_folder_style* active)
     g_menu_alpha=g_text_opacity=255;
     int saved_outline=g_menu_text_outline;
     g_menu_text_outline=5;
-    draw_text_fit(g_song_category,38,300,640,106-30*lift+10*settle);
+    draw_text_fit(g_song_category,38-2*lift,300,640,106-26*lift+10*settle);
     g_menu_text_outline=saved_outline;g_outline_radius=saved_outline;
     if(reveal>0) {
         int selected=0;
@@ -777,6 +790,20 @@ static void menu_open_folder(const menu_folder_style* active)
     }
 }
 
+/* Reference viewport: card body y=104..565, versus the previous 132..553.
+ * Transform the entire carousel together so opening/closing silhouettes and
+ * their contents remain registered throughout the approved animation. */
+static HostUiEmit menu_layout_emit;
+static void *menu_layout_user;
+static void menu_carousel_emit(void *user,const HostUiDraw *source) {
+    (void)user;
+    HostUiDraw draw=*source;
+    const float scale=461.0f/421.0f;
+    draw.y=104+(draw.y-132)*scale;
+    draw.h*=scale;
+    menu_layout_emit(menu_layout_user,&draw);
+}
+
 static void render_green_categories(void)
 {
     menu_load_art();
@@ -790,15 +817,17 @@ static void render_green_categories(void)
     const float scroll=(float)(distance-(uint64_t)(distance/1280.0)*1280.0);
     for(unsigned tile=0;tile<4;++tile)
         menu_image(bg,tile*640.0f-scroll,0,640,720,tile&1);
-    if(!menu_image(244,16,12,264,60,0)) draw_text_at("SONG SELECT",36,164,42);
-    fill_rounded_rect(923,26,1254,75,24,RGB_COLOUR(249,247,220));
-    draw_text_at("TAB / CTRL+F  SEARCH",20,1088,51);
+    if(!menu_image(244,16,12,340,77,0)) draw_text_at("SONG SELECT",42,178,44);
+    fill_rounded_rect(980,28,1310,82,27,0xffffffffu);
+    draw_text_at("TAB / CTRL+F SEARCH",20,1120,55);
     char label[96];
     /* The expanded folder's wide title tab is part of the folder silhouette. */
     if (!categories && !g_folder_open) {
         fill_rounded_rect(425,117,1280,568,14,active->colour);
     }
 
+    menu_layout_emit=g_ui_emit;menu_layout_user=g_ui_user;
+    if(g_ui_emit)g_ui_emit=menu_carousel_emit;
     int selected=0;
     for(unsigned i=0;i<g_song_row_count;++i) if(g_song_rows[i].selected) selected=(int)i;
     float ease=song_ease();
@@ -852,12 +881,13 @@ static void render_green_categories(void)
     }
     }
     if(!g_folder_closing) menu_navigation_arrows();
-    fill_rect(0,594,1280,720,RGB_COLOUR(255,71,42));
-    fill_rect(640,594,1280,720,RGB_COLOUR(100,190,192));
+    g_ui_emit=menu_layout_emit;g_ui_user=menu_layout_user;
+    fill_rect(0,606,1280,720,RGB_COLOUR(255,71,42));
+    fill_rect(640,606,1280,720,RGB_COLOUR(100,190,192));
     /* Asset 394 has 18 transparent rows, then an eight-pixel divider.
      * Fallback panel colours must start BELOW that divider, not behind the
      * transparent padding (which exposed red/blue stripes above the line). */
-    menu_image(394,0,568,1280,152,0);
+    menu_image(394,0,580,1280,152,0);
     for(unsigned p=0;p<2;++p) {
         int joined=(g_browser_joined&(1u<<p))!=0;
         emit_portrait(p,0,255);
@@ -870,11 +900,11 @@ static void render_green_categories(void)
             draw_text_fit("HIT THE DRUM TO JOIN",22,288,left+144,664);
         }
     }
-    menu_shadow(412,571,456,38,19,2);
-    fill_rounded_rect(412,571,868,609,19,0xff000000);
+    menu_shadow(412,583,456,38,19,2);
+    fill_rounded_rect(412,583,868,621,19,0xff000000);
     menu_control_drums();
-    draw_text_at("Choose",21,551,590);
-    draw_text_at("Confirm",21,773,590);
+    draw_text_at("Choose",21,551,602);
+    draw_text_at("Confirm",21,773,602);
     draw_text_at("B  BANAPASSPORT LOGIN",18,640,646);
     draw_text_at(g_browser_save_status[0]?g_browser_save_status:"FREE PLAY",22,640,687);
     if(g_browser_login_phase) {

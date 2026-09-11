@@ -254,7 +254,7 @@ int main(void)
     assert(visit_host_ui(1,collect_ui,NULL,&info));
     portraits=0;
     for(unsigned i=0;i<native_count;++i) if(native_draws[i].surface_address) {
-        assert(native_draws[i].y==190);
+        assert(native_draws[i].y==202);
         assert(native_draws[i].w==620 && native_draws[i].h==620);
         assert(!native_draws[i].flip_x);
         assert(native_draws[i].x==(portraits?845:-185));
@@ -394,7 +394,7 @@ int main(void)
                 assert(native_draws[i].x==430);++edges;
             }
             if(native_draws[i].texture_id==UINT64_C(0x4800000000000003)) {
-                assert(native_draws[i].x==838);++edges;
+                assert(native_draws[i].x==830);++edges;
             }
         }
         assert(edges==2); // Both arrived, independent of their travel distance.
