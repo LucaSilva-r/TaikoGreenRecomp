@@ -72,6 +72,7 @@ typedef struct taiko_overlay_difficulty_state {
     int8_t item[2];
     uint8_t pane[2], option_row[2], values[2][6];
     uint8_t focus;
+    uint32_t navigation_serial;
 } taiko_overlay_difficulty_state;
 void taiko_overlay_set_difficulty_menu(const taiko_overlay_difficulty_state* state);
 

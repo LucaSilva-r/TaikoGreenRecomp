@@ -464,6 +464,29 @@ int main(void)
         "SEARCH RESULTS",0,0,"ONI",8,"dream",0,TAIKO_OVERLAY_BROWSER_SONGS,0,search_rows,2);
     assert(green_categories() && !g_song_search_active);
     background(0xff000000);render_green_categories();
+    // A vertical chart label emits each glyph separately. An unoutlined
+    // space has a 0x0 bitmap and must not force the GPU into CPU fallback.
+    taiko_overlay_song_row spaced_rows[2]={0};
+    spaced_rows[0].title="/ / // / /";spaced_rows[0].genre="OSU! LAZER";
+    spaced_rows[0].kind=TAIKO_OVERLAY_ROW_SONG;spaced_rows[0].selected=1;
+    spaced_rows[0].course_mask=8;
+    spaced_rows[1].title="A B C";spaced_rows[1].genre="";
+    spaced_rows[1].kind=TAIKO_OVERLAY_ROW_DIFFICULTY;
+    spaced_rows[1].difficulty=3;spaced_rows[1].stars=7;spaced_rows[1].cursors=1;
+    taiko_overlay_show_song_browser("P1","","/ / // / /","OSU! LAZER",0,
+        0,1,1,"OSU! LAZER",0,12,"ONI",8,"",0,TAIKO_OVERLAY_BROWSER_SONGS,0,spaced_rows,1);
+    taiko_preview_clock_ms+=2000;
+    const float listing_width=menu_selected_width();
+    taiko_overlay_show_song_browser("P1","","/ / // / /","OSU! LAZER",0,
+        0,1,1,"OSU! LAZER",0,12,"ONI",8,"",0,TAIKO_OVERLAY_BROWSER_SONGS,0,spaced_rows,2);
+    assert(menu_difficulty_timeline().y==104);
+    assert(menu_difficulty_timeline().h==461);
+    assert(menu_difficulty_timeline().w==listing_width);
+    assert(menu_difficulty_timeline().x==640-listing_width/2);
+    taiko_preview_clock_ms+=2000;
+    HostUiInfo spaced_info={0};
+    assert(settled_ui(1.5f,&spaced_info)); // collect_ui rejects empty textures.
+    assert(native_texts>0);
     taiko_preview_clock_ms=-1;
     for (unsigned i = 0; i < TEXT_CACHE_COUNT; ++i) release_text_bitmap(&g_text_cache[i]);
     assert(g_text_cache_bytes == 0);

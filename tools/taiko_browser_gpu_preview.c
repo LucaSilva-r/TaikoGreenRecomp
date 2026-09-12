@@ -327,6 +327,18 @@ int main(int argc, char** argv)
     SDL_Window* window = SDL_GetKeyboardFocus();
     if (!window) { int count; SDL_Window** windows=SDL_GetWindows(&count); if(count)window=windows[0]; SDL_free(windows); }
     if (window && argc > 2) SDL_SetWindowSize(window, atoi(argv[1]),atoi(argv[2]));
+    if(argc>4 && !strcmp(argv[4],"difficulty-transition")) {
+        Uint64 begin=SDL_GetTicks();int previous=-1;
+        taiko_overlay_set_browser_players(1,1,0,NULL);
+        while(SDL_GetTicks()-begin<(argc>5?strtoul(argv[5],NULL,10):10000)) {
+            unsigned elapsed=SDL_GetTicks()-begin;
+            taiko_preview_clock_ms=10000+elapsed;
+            int expanded=(elapsed%6000)>=1000 && (elapsed%6000)<4500;
+            if(expanded!=previous) {difficulty_publish(expanded);previous=expanded;}
+            if(rsx_sdl_gpu_backend_main_iterate(16))break;
+        }
+        rsx_sdl_gpu_backend_main_shutdown();ps3_host_sdl_shutdown();return 0;
+    }
     if(argc>4 && (!strcmp(argv[4],"difficulty-enter-frames") ||
                   !strcmp(argv[4],"difficulty-leave-frames"))) {
         int result=difficulty_preview(argc,argv);
@@ -363,6 +375,8 @@ int main(int argc, char** argv)
     const char* titles[]={"Before the song","Another song","太鼓の達人 / Groove","EASY","NORMAL","HARD","ONI","URA","Next song"};
     for(unsigned i=0;i<9;++i){ rows[i].title=titles[i];rows[i].genre="VOCALOID";rows[i].catalog_index=i; }
     for(unsigned i=3;i<8;++i){rows[i].kind=TAIKO_OVERLAY_ROW_DIFFICULTY;rows[i].difficulty=i-3;rows[i].stars=i+1;}
+    if(argc>4 && !strcmp(argv[4],"difficulty-spaces"))
+        rows[6].title="A B C";
     rows[2].selected=1; rows[5].cursors=2;rows[6].cursors=1;rows[6].ready=1;
     rows[5].selected=rows[6].selected=1;
     /* Choose Difficulty: the default rows already carry one course each, so a
@@ -401,12 +415,13 @@ int main(int argc, char** argv)
                 taiko_overlay_set_difficulty_menu(&state);
                 taiko_overlay_set_browser_players(1,solo?1:3,0,NULL);
             }
-            if(argc>4 && !strcmp(argv[4],"difficulty-carousel")) {
-                const unsigned chosen=(step/6)%8;
+            if(argc>4 && !strncmp(argv[4],"difficulty-carousel",19)) {
+                const unsigned tick=strstr(argv[4],"-fast")?step:step/6;
+                const unsigned chosen=tick%8;
                 const unsigned course=chosen<5?chosen:8-chosen;
                 for(unsigned d=0;d<5;++d)rows[d+3].cursors=(d==course?1:0)|(d==0?2:0);
                 taiko_overlay_difficulty_state state={{3,0}};
-                state.item[0]=course;state.focus=0;
+                state.item[0]=course;state.focus=0;state.navigation_serial=tick;
                 taiko_overlay_set_difficulty_menu(&state);
                 taiko_overlay_set_browser_players(1,3,0,NULL);
             }

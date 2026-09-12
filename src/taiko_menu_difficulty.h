@@ -148,7 +148,8 @@ static void menu_option_pane(unsigned player,unsigned pane,unsigned row,
 
 /* Panel pose and content opacity over the enter/leave timelines, taken frame
  * by frame from the reference capture at 30 Hz and all linear:
- *   enter  hold card 15f (500 ms), widen 7f (233 ms), raise 9f (300 ms), fade contents in 3f (100 ms)
+ *   enter  spines exit by 333ms, hold to 533ms, widen to 783ms,
+ *          raise to 1000ms, contents 1033..1200ms, heading 1300..1433ms
  *   leave  fade contents out 6f (200 ms), lower 7f (233 ms), narrow 8f (267 ms)
  * The panel grows out of, and shrinks back into, the selected song card, so
  * both ends of the move are the card geometry the browser itself draws. */
@@ -171,15 +172,16 @@ static menu_difficulty_pose menu_difficulty_timeline(void)
         pose.finished=e>=700;
     } else {
         const double e=now-g_difficulty_start;
-        pose.wide=menu_interval(e,500,733);
-        tall=menu_interval(e,733,1033);
-        pose.contents=menu_interval(e,1033,1133);
+        pose.wide=menu_interval(e,533,783);
+        tall=menu_interval(e,783,1000);
+        pose.contents=menu_interval(e,1033,1200);
     }
-    const float card_x=menu_card_x(0), card_w=menu_selected_width();
+    const float card_w=g_difficulty_closing?menu_selected_width():g_difficulty_card_w;
+    const float card_x=g_difficulty_closing?640-card_w/2:g_difficulty_card_x;
     pose.x=card_x+(240-card_x)*pose.wide;
     pose.w=card_w+(800-card_w)*pose.wide;
-    pose.y=132+(44-132)*tall;
-    pose.h=421+(520-421)*tall;
+    pose.y=104+(44-104)*tall;
+    pose.h=461+(520-461)*tall;
     return pose;
 }
 
@@ -284,18 +286,66 @@ static int render_green_difficulty(void)
     for(unsigned tile=0;tile<4;++tile)
         menu_image(menu_background(style),tile*640.0f-scroll,0,640,720,tile&1);
 
+    const double entering=monotonic_milliseconds()-g_difficulty_start;
+    if(!g_difficulty_closing && entering<600) {
+        HostUiEmit saved_emit=g_ui_emit;
+        void* saved_user=g_ui_user;
+        menu_layout_emit=saved_emit;menu_layout_user=saved_user;
+        if(saved_emit)g_ui_emit=menu_carousel_emit;
+        int selected=0;
+        for(unsigned i=0;i<g_difficulty_enter_count;++i)
+            if(g_difficulty_enter_rows[i].selected)selected=i;
+        g_menu_alpha=g_text_opacity=(unsigned)(255*(1-menu_interval(entering,0,133)));
+        float left=-96,right=1376;
+        const float saved_width=g_menu_width_override;
+        g_menu_width_override=g_difficulty_card_w;
+        if(g_difficulty_enter_count && g_difficulty_enter_rows[selected].carousel_group)
+            menu_shared_bounds(&g_difficulty_enter_rows[selected],0,g_difficulty_enter_ease,&left,&right);
+        menu_open_shell(style,54,573,left,right);
+        draw_text_fit(g_song_category,36,300,640,90);
+        for(unsigned i=0;i<g_difficulty_enter_count;++i) {
+            const int rel=(int)i-selected;
+            if(!rel)continue;
+            const float travel=menu_interval(entering,0,333)*640;
+            menu_song_card(&g_difficulty_enter_rows[i],menu_style(g_difficulty_enter_rows[i].genre),
+                           menu_card_x(rel)+(rel<0?-travel:travel),76,0,255);
+        }
+        g_menu_width_override=saved_width;
+        g_ui_emit=saved_emit;g_ui_user=saved_user;
+        g_menu_alpha=g_text_opacity=255;
+    }
     menu_difficulty_emblems(pose.contents);
     menu_yellow_frame(pose.x,pose.y,pose.w,pose.h);
+    if(!g_difficulty_closing && entering<133 && g_difficulty_enter_count) {
+        for(unsigned i=0;i<g_difficulty_enter_count;++i)if(g_difficulty_enter_rows[i].selected) {
+            g_menu_alpha=g_text_opacity=(unsigned)(255*(1-menu_interval(entering,0,133)));
+            HostUiEmit saved_emit=g_ui_emit;
+            void* saved_user=g_ui_user;
+            menu_layout_emit=saved_emit;menu_layout_user=saved_user;
+            if(saved_emit)g_ui_emit=menu_carousel_emit;
+            menu_song_courses(&g_difficulty_enter_rows[i],style,pose.x,pose.w);
+            g_ui_emit=saved_emit;g_ui_user=saved_user;
+        }
+        g_menu_alpha=g_text_opacity=255;
+    }
+    if(!g_difficulty_closing && entering<600) {
+        g_menu_alpha=(unsigned)(255*(1-menu_interval(entering,500,600)));
+        menu_image(244,16,12,340,77,0);
+        g_menu_alpha=255;
+    }
     /* The spine rides the panel so it lands on the card's own spine. */
-    menu_spine(g_song_title,pose.x+pose.w-61-27*pose.wide,pose.y+26,pose.h*0.85f,0);
+    menu_spine(g_song_title,pose.x+pose.w-61-27*pose.wide,pose.y+25*461.0f/421.0f,360*461.0f/421.0f,0);
     if(pose.contents<=0) { menu_bottom_bar(); return 1; }
     const unsigned fade=(unsigned)(255*pose.contents);
     g_menu_alpha=g_text_opacity=fade;
     /* The authored headline, at its own size and place. The generated text
      * is only a fallback for a tree with no Song Select archive. */
+    if(!g_difficulty_closing)
+        g_menu_alpha=g_text_opacity=(unsigned)(255*menu_interval(entering,1300,1433));
     if(!menu_image(192,6,9,352,80,0))
         menu_ringed_text("Choose Difficulty",40,340,14,46,
                          RGB_COLOUR(237,50,35),4,0xffffffu,1);
+    g_menu_alpha=g_text_opacity=fade;
 
     static const char* const tab_labels[3]={"Back","Options","Sounds"};
     static const unsigned tab_art[3]={153,150,152};
@@ -317,6 +367,7 @@ static int render_green_difficulty(void)
      * Absolute chart positions keep streamed osu windows stable. */
     static int window=0,old_window=0;
     static double scroll_start=0,screen=-1;
+    static uint32_t navigation_serial;
     unsigned positions[TAIKO_OVERLAY_SONG_ROW_COUNT],total=columns;
     int cursor[2]={-1,-1};
     for(unsigned c=0;c<columns;++c) {
@@ -326,7 +377,15 @@ static int render_green_difficulty(void)
         for(unsigned p=0;p<2;++p)if(row->cursors&(1u<<p))cursor[p]=positions[c];
     }
     const double now=monotonic_milliseconds();
-    if(screen!=g_difficulty_start) {screen=g_difficulty_start;window=old_window=0;scroll_start=now-600;}
+    if(screen!=g_difficulty_start) {
+        screen=g_difficulty_start;window=old_window=0;scroll_start=now-600;
+        navigation_serial=g_difficulty_menu.navigation_serial;
+    }
+    if(navigation_serial!=g_difficulty_menu.navigation_serial) {
+        // Complete the previous movement before handling this Ka press.
+        old_window=window;scroll_start=now-250;
+        navigation_serial=g_difficulty_menu.navigation_serial;
+    }
     int target=window;
     const unsigned focus=g_difficulty_menu.focus&1;
     if(cursor[focus]>=0 && !(g_browser_ready&(1u<<focus))) {
@@ -335,11 +394,10 @@ static int render_green_difficulty(void)
     }
     if(target<0)target=0;
     if(target>(int)total-4)target=total>4?total-4:0;
-    if(target!=window && now-scroll_start>=500) {old_window=window;window=target;scroll_start=now;}
-    float slide=menu_interval(now-scroll_start,150,350);
-    float departure=menu_interval(now-scroll_start,0,150);
-    float arrival=menu_interval(now-scroll_start,350,500);
-    /* Smooth acceleration and settling without changing the phase timing. */
+    if(target!=window) {old_window=window;window=target;scroll_start=now;}
+    float slide=menu_interval(now-scroll_start,0,250);
+    float departure=slide,arrival=slide;
+    /* Drop, slide and rise together, with smooth acceleration and settling. */
     slide=slide*slide*(3-2*slide);
     departure=departure*departure*(3-2*departure);
     arrival=arrival*arrival*(3-2*arrival);

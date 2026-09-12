@@ -157,6 +157,7 @@ unsigned g_song_category = 0;
 std::string g_custom_folder;
 std::unordered_map<std::string, std::vector<unsigned>> g_osu_groups;
 unsigned g_osu_variant = 0;
+uint32_t g_difficulty_navigation_serial=0;
 enum class SongBrowserLevel { Categories, Songs };
 SongBrowserLevel g_song_browser_level = SongBrowserLevel::Categories;
 bool g_song_global_search = false;
@@ -540,6 +541,7 @@ void show_current_song()
     std::lock_guard<std::recursive_mutex> action(g_browser_action_lock);
     taiko_overlay_difficulty_state menu{};
     menu.focus=g_browser_players.focus;
+    menu.navigation_serial=g_difficulty_navigation_serial;
     for(unsigned p=0;p<2;++p) {
         menu.item[p]=g_browser_players.item[p];menu.pane[p]=g_browser_players.pane[p];
         menu.option_row[p]=g_browser_players.option_row[p];
@@ -990,9 +992,10 @@ void change_song_difficulty(int direction, unsigned player)
     if (!song) return;
     g_browser_players.join(player);
     g_browser_players.focus=player;
+    ++g_difficulty_navigation_serial;
     int item=g_browser_players.item[player];
     if(item<0) {
-        if(direction<0 && item==-3) return;
+        if(direction<0 && item==-3) {show_current_song();return;}
         item+=direction;
         if(item==0) {while(item<5 && !(song->difficulty_mask&(1u<<item)))++item;g_osu_variant=0;}
         g_browser_players.item[player]=item;
@@ -1002,7 +1005,7 @@ void change_song_difficulty(int direction, unsigned player)
     }
     if (!song->osu_group.empty()) {
         const auto size = g_osu_groups.at(song->osu_group).size();
-        if(direction>0 && g_osu_variant+1==size)return;
+        if(direction>0 && g_osu_variant+1==size) {show_current_song();return;}
         if(direction<0 && !g_osu_variant)g_browser_players.item[player]=-1;
         else g_osu_variant = (int64_t(g_osu_variant) + direction + size) % size;
         if (player < 2) g_browser_players.join(player);
@@ -1011,7 +1014,7 @@ void change_song_difficulty(int direction, unsigned player)
         if (player > 1) player = g_browser_players.focus;
         int next=int(g_browser_players.difficulty[player])+direction;
         while(next>=0 && next<5 && !(song->difficulty_mask&(1u<<next)))next+=direction;
-        if(next>=5)return;
+        if(next>=5) {show_current_song();return;}
         if(next<0)g_browser_players.item[player]=-1;
         else {g_browser_players.change_difficulty(player,direction,song->difficulty_mask);g_browser_players.item[player]=next;}
         g_browser_players.ready&=~(1u<<player);
@@ -1020,7 +1023,7 @@ void change_song_difficulty(int direction, unsigned player)
         const unsigned current = g_song_difficulty.load(std::memory_order_relaxed);
         int next=int(current)+direction;
         while(next>=0 && next<5 && !(song->difficulty_mask&(1u<<next)))next+=direction;
-        if(next>=5)return;
+        if(next>=5) {show_current_song();return;}
         if(next<0)g_browser_players.item[player]=-1;
         else g_song_difficulty.store(next,std::memory_order_release);
     }

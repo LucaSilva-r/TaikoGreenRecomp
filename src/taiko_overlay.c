@@ -125,6 +125,10 @@ static int g_difficulty_open, g_difficulty_closing;
 static double g_difficulty_start, g_difficulty_close_start;
 static song_row_storage g_difficulty_close_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
 static unsigned g_difficulty_close_count;
+static song_row_storage g_difficulty_enter_rows[TAIKO_OVERLAY_SONG_ROW_COUNT];
+static unsigned g_difficulty_enter_count;
+static float g_difficulty_card_x=440,g_difficulty_card_w=400;
+static float g_difficulty_enter_ease=1;
 static double g_song_animation_start, g_song_last_render;
 static int g_song_animating;
 static int g_gpu_animation_pending;
@@ -670,7 +674,9 @@ static void draw_text_at(const char* text, int pixels, float centre_x, float cen
         text_cache_entry* native = get_text(text, native_pixels);
         float fade=1;
         if(native)native=async_text(native,0,0,0,&fade);
-        if (native) {
+        /* Spaces and other blank glyphs retain their layout advance, but
+         * have no drawable bitmap. Never emit a zero-sized GPU texture. */
+        if (native && native->width > 0 && native->height > 0) {
             HostUiDraw draw = {0};
             draw.x = centre_x + (native->left - native->advance / 2) * g_menu_text_scale_x / g_ui_scale;
             draw.y = centre_y + (native->top + native->baseline_shift) * g_menu_text_scale_y / g_ui_scale;
@@ -1430,8 +1436,21 @@ void taiko_overlay_show_song_browser(const char* player_name,
     int difficulty_now=0;
     for(unsigned i=0;rows && i<row_count && i<TAIKO_OVERLAY_SONG_ROW_COUNT;++i)
         if(rows[i].kind==TAIKO_OVERLAY_ROW_DIFFICULTY) difficulty_now=1;
+    const int closing_difficulty=g_difficulty_open && !difficulty_now &&
+        browser_level!=TAIKO_OVERLAY_BROWSER_CATEGORIES && !search_active;
     if(difficulty_now) {
-        if(!g_difficulty_open) g_difficulty_start=monotonic_milliseconds();
+        if(!g_difficulty_open) {
+            g_difficulty_enter_ease=song_ease();
+            g_difficulty_card_w=old_card_width;
+            g_difficulty_card_x=640-old_card_width/2;
+            if(g_song_row_count)
+                menu_card_pose(g_song_rows[old_selected].from_card_x,
+                               g_song_rows[old_selected].from_card_w,0,
+                               g_difficulty_enter_ease,&g_difficulty_card_x,&g_difficulty_card_w);
+            g_difficulty_start=monotonic_milliseconds();
+            memcpy(g_difficulty_enter_rows,g_song_rows,sizeof g_song_rows);
+            g_difficulty_enter_count=g_song_row_count;
+        }
         g_difficulty_closing=0;
     } else if(g_difficulty_open && g_visible && g_mode==5 && !search_active &&
               browser_level!=TAIKO_OVERLAY_BROWSER_CATEGORIES) {
@@ -1631,6 +1650,16 @@ void taiko_overlay_show_song_browser(const char* player_name,
             g_song_rows[row].from_group_right=previous[row].from_group_right;
             g_song_rows[row].from_y = previous[row].from_y;
             g_song_rows[row].from_x = previous[row].from_x;
+        }
+    }
+    if(closing_difficulty) {
+        // Returning from difficulty selection is not song navigation. Keep
+        // the restored listing at its open pose instead of replaying its squeeze.
+        g_song_animation_start=monotonic_milliseconds()-1000;
+        for(unsigned i=0;i<g_song_row_count;++i) {
+            int relative=(int)i-next_selected;
+            g_song_rows[i].from_card_x=menu_card_x(relative);
+            g_song_rows[i].from_card_w=menu_card_w(relative);
         }
     }
     if(closing_folder) g_song_animation_start=monotonic_milliseconds()-500;

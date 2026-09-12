@@ -714,6 +714,18 @@ if(WIN32)
         -static -static-libgcc -static-libstdc++)
 endif()
 
+# FindZLIB can select a MinGW import library even with -static on the final
+# link. Ship its runtime alongside the executable in that configuration.
+if(WIN32 AND ZLIB_LIBRARY_RELEASE MATCHES "\\.dll\\.a$")
+    get_filename_component(_taiko_zlib_libdir "${ZLIB_LIBRARY_RELEASE}" DIRECTORY)
+    find_file(TAIKO_ZLIB_RUNTIME zlib1.dll
+        HINTS "${_taiko_zlib_libdir}/../bin" REQUIRED)
+    add_custom_command(TARGET taiko_boot POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${TAIKO_ZLIB_RUNTIME}" "$<TARGET_FILE_DIR:taiko_boot>/zlib1.dll"
+        VERBATIM)
+endif()
+
 # Keep the development target name used by the existing launcher and debugging
 # tools, while providing a clearly named artifact for copying into USRDIR.
 if(TAIKO_EMBED_PPU_IMAGE)
@@ -1083,6 +1095,9 @@ if(BUILD_TESTING AND NOT WIN32)
         "${TAIKO_FREETYPE_LIB}" Threads::Threads)
     add_test(NAME taiko_host_frame_tests COMMAND taiko_host_frame_tests)
     foreach(_overlay_test taiko_overlay_cache_tests taiko_host_frame_tests)
+        if(UNIX)
+            target_link_libraries(${_overlay_test} PRIVATE m)
+        endif()
         target_sources(${_overlay_test} PRIVATE "${PS3RECOMP_DIR}/libs/video/rsx_render_batch.c"
             "src/taiko_title_render.c")
         target_include_directories(${_overlay_test} PRIVATE "${PS3RECOMP_DIR}/include")

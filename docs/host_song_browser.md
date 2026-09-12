@@ -122,8 +122,12 @@ The heading uses the original Japanese sprite (192). English course and tab
 labels replace only their baked label bands; icons, borders, rating dots and
 drums remain original artwork.
 
-The entry holds the selected card for 500 ms before widening for 233 ms,
-raising for 300 ms and revealing the difficulty controls over 100 ms. Exit
+Entry slides the neighboring spines away over 333ms while fading the song
+summary and category header. The card holds until 533ms, widens until 783ms,
+then raises its top until 1000ms. Controls fade in over 1033–1200ms and the
+heading over 1300–1433ms. The title retains its size throughout panel growth.
+`difficulty-transition` loops entry and exit for comparison with the reference.
+Exit
 retains an owned copy of the outgoing course rows so their 200 ms fade can
 finish after the frontend returns to the song list, then lowers and narrows
 the panel. The surrounding carousel transition still needs refinement.
@@ -429,9 +433,10 @@ player marker, and reveals the course name. `difficulty-confirm` in the GPU
 preview cycles P1 confirmation every eight seconds for visual review.
 
 Difficulty select displays at most four columns with a fixed 100px pitch.
-Navigating beyond the viewport lowers the outgoing column (150ms), slides
-remaining columns (200ms), and raises the incoming column (150ms). Inputs
-continue updating selections while a transition finishes. Stock player cursors
+Navigating beyond the viewport lowers the outgoing column, slides the remaining
+columns, and raises the incoming column simultaneously over 250ms. Every new
+Ka press finishes the active transition immediately before handling the next
+selection, including presses at a navigation endpoint. Stock player cursors
 retain their courses; an off-screen cursor gets a small edge marker and label.
 The last player to navigate controls the shared viewport. Osu retains its
 intentional shared chart selection and clears both confirmations when it
@@ -446,3 +451,5 @@ layouts in the preview. Carousel phases use smoothstep easing.
 
 Difficulty navigation stops at Back and the last chart instead of wrapping.
 Side-tab labels are top-aligned below their icons with a 4px outline.
+
+`difficulty-carousel-fast` exercises interruptions with 200ms navigation steps.

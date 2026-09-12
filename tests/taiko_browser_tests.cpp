@@ -252,8 +252,10 @@ int main() {
     drum(1, TAIKO_ACTION_HIT_SL); // Sounds
     drum(1, TAIKO_ACTION_HIT_SL); // Options
     drum(1, TAIKO_ACTION_HIT_SL); // Back
-    drum(1, TAIKO_ACTION_HIT_SL); // Stop at Back
+    const auto before_edge_press=difficulty_menu.navigation_serial;
+    drum(1, TAIKO_ACTION_HIT_SL); // Stop at Back, but still finish animation.
     assert(difficulty_menu.item[1] == -3);
+    assert(difficulty_menu.navigation_serial==before_edge_press+1);
     drum(0, TAIKO_ACTION_HIT_CR); // Sounds opens the drum sound pane.
     assert(difficulty_menu.pane[0] == 2);
     drum(0, TAIKO_ACTION_HIT_SR); // Its single row cycles the value.

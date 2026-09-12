@@ -108,6 +108,10 @@ typedef struct UiBatch {
 static void ui_emit(void* user, const HostUiDraw* draw)
 {
     UiBatch* batch = user;
+    /* Empty layout runs are valid no-ops, not GPU initialization failures. */
+    if (draw->w <= 0 || draw->h <= 0) return;
+    if (draw->texture_id && !draw->surface_address &&
+        (!draw->width || !draw->height)) return;
     if (batch->count == UI_DRAWS) { batch->failed = 1; return; }
     SDL_GPUTexture* tex = ui_white;
     if (draw->surface_address) {
